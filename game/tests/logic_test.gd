@@ -538,6 +538,52 @@ func _run_part2() -> void:
 	_main._unhandled_key_input(_softkey(13))
 	_check(_main.state == "playing", "unicode enter continues after winning")
 
+	# --- Пере-показ клавиатуры: чистое решение, матрица сочетаний. ---
+	# want/shown/height/elapsed: показать заново — только когда нужна,
+	# считалась показанной, а по факту высота ноль и прошло достаточно
+	# времени (клавиатура успела бы выехать).
+	var rs: Callable = _main.kb_need_reshow
+	_check(rs.call(true, true, 0.0, 2.0), "reshow when wanted, shown, flat, expired")
+	_check(not rs.call(true, true, 0.0, 0.5), "no reshow while gliding in")
+	_check(not rs.call(true, true, 120.0, 9.0), "no reshow when visible")
+	_check(not rs.call(false, true, 0.0, 9.0), "no reshow when not wanted")
+	_check(not rs.call(true, false, 0.0, 9.0), "initial show is a separate path")
+
+	# --- Раскладка уезжает вверх от клавиатуры. ---
+	# В headless вьюпорт крошечный (64×64), поэтому сначала ставим
+	# реалистичный размер окна, иначе пол эффективной высоты всё скроет.
+	root.size = Vector2i(1100, 650)
+	_main.kb_h = 0.0
+	_main._relayout()
+	var hy0: float = _main.hud_label.position.y
+	var k0: float = _main.k
+	_main.kb_h = 300.0
+	_main._relayout()
+	_check(_main.hud_label.position.y < hy0, "layout moves up over the keyboard")
+	_check(_main.k <= k0, "scale shrinks to fit the free area")
+	_check(
+		_main.card_p.position.y + _main.card_p.size.y <= _main.view_h - 300.0 + 1.0,
+		"text card stays above the keyboard"
+	)
+	_main.kb_h = 0.0
+	_main._relayout()
+
+	# --- Тач и мышь в игре: кнопка игроков открывает меню, кнопка
+	# «Дальше» на модалке начинает новый уровень. ---
+	_main.call("_input", _tap(_main._players_rect.get_center()))
+	_check(_main.menu_open, "players button opens the menu")
+	_main._close_menu()
+	_main._new_level()
+	_main._finish(true)
+	_check(_main.state == "won", "setup: level won")
+	_main._relayout()
+	_main.call("_input", _tap(_main._next_rect.get_center()))
+	_check(_main.state == "playing", "next button starts a new level")
+	_check(
+		_main.cursor_line == 0 and _main.cursor_pos == 0,
+		"new level starts at the beginning"
+	)
+
 
 ## Позиция на строке l для теста: хотела бы want, но не за концом
 ## строки (фрагмент текста случайный, длины плавают). Возвращает
@@ -565,6 +611,15 @@ func _softkey(code: int) -> InputEventKey:
 	var ev := InputEventKey.new()
 	ev.unicode = code
 	ev.pressed = true
+	return ev
+
+
+## Клик мыши с координатами.
+func _tap(pos: Vector2) -> InputEventMouseButton:
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_LEFT
+	ev.pressed = true
+	ev.position = pos
 	return ev
 
 

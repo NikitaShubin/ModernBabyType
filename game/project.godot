@@ -9,7 +9,7 @@ config_version=5
 
 config/name="ModernBabyType"
 config/description="Игра для обучения детей слепой печати: герой убегает от врага, поедая буквы."
-config/version="0.0.2"
+config/version="0.0.3"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.3", "GL Compatibility")
 config/icon="res://icon.png"
@@ -21,6 +21,11 @@ window/size/viewport_width=1100
 window/size/viewport_height=650
 window/size/resizable=true
 window/size/mode=3
+# Ориентация следует за поворотом телефона: портрет — основной режим
+# (экранная клавиатура + пальцы), альбом — для внешней клавиатуры.
+# Раскладка в обоих случаях одна: всё считается от эффективной высоты
+# (экран минус высота клавиатуры), см. _eff_h() в main.gd.
+window/handheld/orientation=6
 
 [rendering]
 

@@ -51,6 +51,7 @@ func _process(_dt: float) -> bool:
 	_part10_first_run()
 	_part11_hidden_menu()
 	_part12_soft_keyboard()
+	_part13_touch()
 	_report()
 	return true
 
@@ -500,6 +501,42 @@ func _part12_soft_keyboard() -> void:
 	S.delete_user("Юра")
 
 
+## Тач и мышь: тап по строке играет этим игроком, тап по полю включает
+## ввод, кнопки «Играть»/«Без профиля» дублируют Enter/Esc. Прямоугольники
+## считает то же меню (хелперы tap_rect), тест только тыкает в них.
+func _part13_touch() -> void:
+	for u in S.user_list():
+		S.delete_user(u)
+	S.create_user("Таня")
+	S.create_user("Федя")
+	_menu.call("_reload")
+	_menu.visible = true
+	_menu.input_active = false
+	# Прямоугольники из тех же хелперов, что рисует _draw: хит-тест честный.
+	var first := String(_menu.users[0])
+	var second := String(_menu.users[1])
+	_picked = ""
+	_menu.call("_input", _tap(_menu.call("_row_tap_rect", 1).get_center()))
+	_check(_picked == second, "tap on a row plays as that user")
+	_menu.call("_input", _tap(_menu.call("_field_tap_rect").get_center()))
+	_check(_menu.input_active, "tap on the field opens input")
+	_picked = ""
+	_menu.call("_input", _tap(_menu.call("_guest_tap_rect").get_center()))
+	_check(_picked == S.GUEST, "guest button enters as guest")
+	_menu.sel = 0
+	_picked = ""
+	_menu.call("_input", _touch(_menu.call("_play_tap_rect").get_center()))
+	_check(_picked == first, "play button enters the selected profile")
+	# Скрытое меню тычков не видит.
+	_menu.visible = false
+	_picked = ""
+	_menu.call("_input", _tap(_menu.call("_row_tap_rect", 0).get_center()))
+	_check(_picked == "", "hidden menu ignores taps")
+	_menu.visible = true
+	for u in S.user_list():
+		S.delete_user(u)
+
+
 ## Сколько разных букв на экране во взрослом режиме: все знаки
 ## уровня, включая пробел.
 func _letters_on_screen() -> int:
@@ -540,6 +577,23 @@ func _softkey_event(code: int) -> InputEventKey:
 	var ev := InputEventKey.new()
 	ev.unicode = code
 	ev.pressed = true
+	return ev
+
+
+## Клик мыши с координатами.
+func _tap(pos: Vector2) -> InputEventMouseButton:
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_LEFT
+	ev.pressed = true
+	ev.position = pos
+	return ev
+
+
+## Касание с координатами.
+func _touch(pos: Vector2) -> InputEventScreenTouch:
+	var ev := InputEventScreenTouch.new()
+	ev.pressed = true
+	ev.position = pos
 	return ev
 
 

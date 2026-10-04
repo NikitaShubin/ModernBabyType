@@ -164,6 +164,64 @@ func _eaten() -> void:
 	get_viewport().set_input_as_handled()
 
 
+## Тач и мышь: строки, поле, кнопки. Скрытое меню тычков не видит —
+## тот же урок, что с клавишами.
+func _input(event: InputEvent) -> void:
+	if not visible:
+		return
+	# Координаты тычка могут быть и отрицательными (узкое окно, край
+	# экрана), поэтому признак «тычка не было» — отдельный флаг,
+	# а не сентинел в координатах.
+	var has_pos := false
+	var pos := Vector2.ZERO
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
+			pos = mb.position
+			has_pos = true
+	elif event is InputEventScreenTouch:
+		var st := event as InputEventScreenTouch
+		if st.pressed:
+			pos = st.position
+			has_pos = true
+	if not has_pos:
+		return
+	# Прямоугольники — из тех же хелперов, что рисует _draw: единый
+	# источник геометрии, работает и без отрисовки (тесты headless).
+	for i in users.size():
+		if _row_tap_rect(i).has_point(pos):
+			chosen.emit(users[i])
+			get_viewport().set_input_as_handled()
+			return
+	if _field_tap_rect().has_point(pos):
+		if not input_active:
+			_toggle_input()
+		_kb_show()
+		get_viewport().set_input_as_handled()
+		return
+	if _play_tap_rect().has_point(pos):
+		_enter()
+		get_viewport().set_input_as_handled()
+		return
+	if _guest_tap_rect().has_point(pos):
+		_guest()
+		get_viewport().set_input_as_handled()
+		return
+	if _mkb_tap_rect().has_point(pos):
+		if not input_active:
+			_toggle_input()
+		_kb_show()
+		get_viewport().set_input_as_handled()
+		return
+
+
+## Показать системную клавиатуру прямо отсюда (тап по полю/кнопке ⌨):
+## ждать кадра игры незачем, а на десктопе это no-op.
+func _kb_show() -> void:
+	if DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
+		DisplayServer.virtual_keyboard_show("")
+
+
 ## Буква по коду клавиши: «A» без физической раскладки (в латинице на
 ## русской раскладке KeyA тоже проходит). Ручная раскладка не важна:
 ## клавиша одна и та же.
@@ -269,6 +327,72 @@ func _text(txt: String, pos: Vector2, size_px: int, col: Color) -> void:
 	)
 
 
+## Строка поля ввода как текст (рамка и хит-тест строятся от неё).
+func _field_text() -> String:
+	var field := "Имя: " + input_text + ("|" if input_active else "")
+	return ("> " if input_active else "  ") + field
+
+
+## Базовая строка меню: заголовок + строки. Дальше всё считается от неё.
+func _rows_top() -> float:
+	return 90.0 * k + 70.0 * k
+
+
+## Строка поля ввода: после заголовка, строк и отступа.
+func _field_line_y() -> float:
+	return _rows_top() + float(maxi(users.size(), 1)) * ROW_H * k + 30.0 * k
+
+
+## Строка кнопок: под полем ввода.
+func _buttons_y() -> float:
+	return _field_line_y() + 64.0 * k
+
+
+## Чипс строки: та же геометрия, что рисует _draw.
+func _row_tap_rect(i: int) -> Rect2:
+	var row_y := _rows_top() + float(i) * ROW_H * k
+	return Rect2(
+		44.0 * k, row_y - 36.0 * k,
+		_text_size(_row_caption(users[i]), FONT_ROW).x + 32.0 * k,
+		ROW_H * k - 10.0 * k
+	)
+
+
+## Рамка поля ввода (рисуется только когда активно, тыкается всегда).
+func _field_tap_rect() -> Rect2:
+	var y := _field_line_y()
+	var fw := _text_size(_field_text(), FONT_ROW).x
+	return Rect2(48.0 * k, y - 38.0 * k, maxf(fw + 48.0 * k, 420.0 * k), 54.0 * k)
+
+
+## Кнопки «Играть» и «Без профиля»: пара по центру под полем.
+func _play_tap_rect() -> Rect2:
+	var y := _buttons_y()
+	return Rect2(cx_of() - 248.0 * k, y, 230.0 * k, 52.0 * k)
+
+
+func _guest_tap_rect() -> Rect2:
+	var y := _buttons_y()
+	return Rect2(cx_of() - 248.0 * k + 246.0 * k, y, 262.0 * k, 52.0 * k)
+
+
+func cx_of() -> float:
+	return view_w * 0.5
+
+
+## Кнопка ⌨ справа вверху.
+func _mkb_tap_rect() -> Rect2:
+	return Rect2(view_w - 72.0 * k, 16.0 * k, 56.0 * k, 56.0 * k)
+
+
+## Кнопка-пилюля с подписью по центру.
+func _button(r: Rect2, label: String) -> void:
+	draw_style_box(hint_sb, r)
+	var fs := int(26.0 * k)
+	var w := _text_size(label, 26).x
+	_text(label, Vector2(r.get_center().x - w * 0.5, r.position.y + 36.0 * k), 26, INK)
+
+
 func _draw() -> void:
 	# Вуаль вместо глухой заливки: игра позади чуть видна, и понятно,
 	# что меню — пауза, а не другой экран. Строки и тексты те же, что
@@ -296,34 +420,36 @@ func _draw() -> void:
 			DIM
 		)
 	# Каждая строка — отдельным «чипсом» по ширине текста: выбранный
-	# жёлтый, остальные белые. Сплошная плита на всю ширину сливалась
-	# с выделением в один жёлтый slab.
+	# жёлтый, остальные белые. Тап по чипсу сразу играет этим игроком.
 	for i in users.size():
 		var row_y := y + float(i) * ROW_H * k
-		var cap := _row_caption(users[i])
-		var chip := Rect2(
-			44.0 * k, row_y - 36.0 * k,
-			_text_size(cap, FONT_ROW).x + 32.0 * k, ROW_H * k - 10.0 * k
-		)
+		var chip := _row_tap_rect(i)
 		draw_style_box(row_sb if i == sel else row_idle_sb, chip)
-		_text(cap, Vector2(60.0 * k, row_y), FONT_ROW, INK)
-	y += float(maxi(users.size(), 1)) * ROW_H * k + 30.0 * k
-	# Поле ввода нового имени.
-	var field := "Имя: " + input_text + ("|" if input_active else "")
-	var field_txt := ("> " if input_active else "  ") + field
+		_text(_row_caption(users[i]), Vector2(60.0 * k, row_y), FONT_ROW, INK)
+	y = _field_line_y()
+	# Поле ввода нового имени. Рамка — только когда активно, а тыкается
+	# всегда: тап включает ввод, как Tab.
+	var field_txt := _field_text()
 	if input_active:
-		var fw := _text_size(field_txt, FONT_ROW).x
-		draw_style_box(
-			box_sb,
-			Rect2(48.0 * k, y - 38.0 * k, maxf(fw + 48.0 * k, 420.0 * k), 54.0 * k)
-		)
+		draw_style_box(box_sb, _field_tap_rect())
 	_text(
 		field_txt,
 		Vector2(60.0 * k, y),
 		FONT_ROW,
 		INK if input_active else DIM
 	)
-	y += 60.0 * k
+	# Кнопки действий: та же механика, что Enter и Esc, но пальцем.
+	_button(_play_tap_rect(), "Играть")
+	_button(_guest_tap_rect(), "Без профиля")
+	# Кнопка ⌨ справа вверху: вызвать системную клавиатуру.
+	draw_style_box(hint_sb, _mkb_tap_rect())
+	for ix in 3:
+		for iy in 2:
+			draw_circle(
+				_mkb_tap_rect().position + Vector2((14.0 + 14.0 * float(ix)) * k, (17.0 + 12.0 * float(iy)) * k),
+				2.5 * k, UI_TEXT
+			)
+	y = _buttons_y() + 52.0 * k + 30.0 * k
 	# Подсказка — в пилюле по центру низа, в две строки: в одну она
 	# не влезает в окно. Делим только для показа, сама строка та же.
 	var lines := _hint_lines()
@@ -356,17 +482,21 @@ func _draw_bunny(c: Vector2) -> void:
 func _hint() -> String:
 	if users.is_empty():
 		# Поле ввода на пустом списке уже открыто (_reload его включает),
-		# поэтому совет «нажми Tab» здесь был бы неверным.
-		return "Введите имя и нажмите Enter   ·   Esc — играть без профиля"
+		# поэтому совет «нажми Tab» здесь был бы неверным. Гостя ведёт
+		# кнопка «Без профиля», Esc для неё не нужен.
+		return "Введите имя и нажмите Enter"
 	var tail := ""
 	if bool(S.load_profile(users[sel]).get("all_keys", false)):
 		tail = " (вкл.)"
 	elif not input_active:
 		tail = " (выкл.)"
+	# Сначала действия (тап/клик), потом горячие клавиши вторым рядом.
+	# Вторая строка умышленно телеграфная: подробно всё объясняют
+	# кнопки, а длинная строка не влезала в окно.
 	return (
-		"↑ ↓ — выбрать   ·   Enter — играть   ·   Tab — новое имя"
-		+ "   ·   A — все клавиши" + tail
-		+ "   ·   Delete — удалить   ·   Esc — без профиля"
+		"Тап по игроку — играть   ·   Тап по полю — новое имя"
+		+ "   ·   ↑↓ выбор   ·   Enter   ·   A — все клавиши" + tail
+		+ "   ·   Del   ·   Esc   ·   F2"
 	)
 
 

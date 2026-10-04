@@ -150,6 +150,16 @@ var menu_open := false
 ## Виртуальная клавиатура показана прямо сейчас (чтобы не дёргать
 ## DisplayServer каждый кадр, только на смене состояния).
 var _kb_shown := false
+## Высота системной клавиатуры в пикселях канваса (0 — скрыта). Только
+## раскладка: всё позиционируется от эффективной высоты _eff_h().
+var kb_h := 0.0
+## Момент последнего запроса показать клавиатуру (для пере-показа,
+## если система спрятала её сама, например кнопкой «назад»).
+var _kb_request_t := -100.0
+## Кнопки тач-интерфейса: прямоугольники из _draw для хит-теста в _input.
+var _kb_rect := Rect2()
+var _players_rect := Rect2()
+var _next_rect := Rect2()
 ## Оформление (только картинка, логику не трогает): скруглённые панели
 ## под карточкой текста, табло и подсказкой. Стили создаются раз в
 ## _ready, геометрию считает _layout_card().
@@ -336,13 +346,21 @@ func _relayout() -> void:
 		return
 	view_w = s.x
 	view_h = s.y
-	k = clampf(minf(view_w / BASE_W, view_h / BASE_H), 0.5, 2.5)
+	# Масштаб — от эффективной высоты (экран минус клавиатура): в портрете
+	# с выездом клавиатуры остаток альбомный, и вся сцена честно в него
+	# вписывается. Метрики букв при этом меняются, поэтому позицию ежа
+	# пересчитываем в тех же символах оси (см. _lin): визуально он стоит.
+	var old_margin := margin
+	var old_cw := char_w
+	k = clampf(minf(view_w / BASE_W, _eff_h() / BASE_H), 0.5, 2.5)
 	font_size = int(36.0 * k)
 	# Левое поле широкое: героям нужен воздух в начале строки,
 	# а ёж заходит слева из-за края — ему нельзя за край экрана.
 	margin = 120.0 * k
 	text_y = 80.0 * k
 	char_w = mono.get_string_size("н", HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size).x
+	if old_cw > 0.0 and char_w > 0.0 and hedge_active:
+		enemy_x = margin + (enemy_x - old_margin) / old_cw * char_w
 	# Зазор высотой в строку текста: пустая полоса для качения ежа.
 	# Текст при этом никогда не сдвигается.
 	sep_h = mono.get_height(font_size)
@@ -352,15 +370,20 @@ func _relayout() -> void:
 		tl.size = Vector2(view_w - margin * 2.0, line_h + 8.0 * k)
 		tl.add_theme_font_size_override("normal_font_size", font_size)
 	_layout_text_lines()
-	hud_label.position = Vector2(margin, view_h - 95.0 * k)
+	# Табло и подсказка якорятся к низу ЭФФЕКТИВНОЙ области: иначе
+	# клавиатура их перекрывает.
+	hud_label.position = Vector2(margin, _eff_h() - 95.0 * k)
 	hud_label.add_theme_font_size_override("font_size", int(18.0 * k))
-	hint_label.position = Vector2(margin, view_h - 165.0 * k)
+	hint_label.position = Vector2(margin, _eff_h() - 165.0 * k)
 	hint_label.size = Vector2(view_w - margin * 2.0, 55.0 * k)
 	hint_label.add_theme_font_size_override("font_size", int(30.0 * k))
 	var ow := 980.0 * k
 	overlay_label.size = Vector2(ow, 150.0 * k)
 	overlay_label.add_theme_font_size_override("font_size", int(40.0 * k))
 	hud_label.size = Vector2(view_w - margin * 2.0, 70.0 * k)
+	# Кнопки тач-интерфейса: справа вверху, друг под другом.
+	_kb_rect = Rect2(view_w - 72.0 * k, 16.0 * k, 56.0 * k, 56.0 * k)
+	_players_rect = Rect2(view_w - 72.0 * k, 84.0 * k, 56.0 * k, 48.0 * k)
 	_layout_card()
 	_layout_pills()
 	_layout_overlay_panel()
@@ -376,10 +399,11 @@ func _line_y(line_idx: int) -> float:
 
 ## Расставить построчные лэйблы (позиции статичны, текст не ездит).
 func _layout_text_lines() -> void:
-	# Блок текста — по центру свободной зоны: сверху пусто, снизу HUD
-	# и подсказка. Левый край прежний, внутри уровня блок неподвижен.
+	# Блок текста — по центру свободной зоны ЭФФЕКТИВНОЙ высоты: сверху
+	# пусто, снизу HUD и подсказка (или клавиатура). Левый край прежний,
+	# внутри уровня блок неподвижен.
 	var block_h := float(maxi(display_lines.size(), 1)) * line_h
-	text_y = maxf(40.0 * k, (view_h - 200.0 * k - block_h) * 0.5)
+	text_y = maxf(40.0 * k, (_eff_h() - 200.0 * k - block_h) * 0.5)
 	# Модалка победы/поражения — под блоком текста, а не поверх букв.
 	var ow := 980.0 * k
 	overlay_label.position = Vector2((view_w - ow) * 0.5, text_y + block_h + 24.0 * k)
@@ -428,10 +452,13 @@ func _toggle_fullscreen() -> void:
 
 
 ## Панель под модалкой победы/поражения: тот же картон, что и у текста.
+## Под ней — кнопка «Дальше» для пальца (тот же Enter).
 func _layout_overlay_panel() -> void:
 	over_p.position = overlay_label.position + Vector2(-24.0 * k, -16.0 * k)
 	over_p.size = overlay_label.size + Vector2(48.0 * k, 32.0 * k)
 	over_p.visible = overlay_label.visible
+	var nc := Vector2(view_w * 0.5, over_p.position.y + over_p.size.y + 16.0 * k)
+	_next_rect = Rect2(nc - Vector2(140.0 * k, 0), Vector2(280.0 * k, 60.0 * k))
 
 
 func _key(l: int, p: int) -> String:
@@ -784,10 +811,10 @@ func _finish(won: bool, reason := "") -> void:
 	})
 	if won:
 		overlay_label.add_theme_color_override("font_color", GREEN)
-		overlay_label.text = "Уровень пройден! %s\nEnter — дальше" % ["★".repeat(stars)]
+		overlay_label.text = "Уровень пройден! %s\nEnter — дальше (или кнопка)" % ["★".repeat(stars)]
 	else:
 		overlay_label.add_theme_color_override("font_color", DARK_RED)
-		overlay_label.text = "Ай, укололся!\nEnter — ещё раз (ёж стал медленнее)"
+		overlay_label.text = "Ай, укололся!\nEnter — ещё раз (или кнопка)"
 	overlay_label.visible = true
 	over_p.visible = true
 	_refresh()
@@ -796,6 +823,7 @@ func _finish(won: bool, reason := "") -> void:
 func _process(dt: float) -> void:
 	time += dt
 	_sync_keyboard()
+	_poll_keyboard()
 	if menu_open:
 		# Меню открыто — геймплей стоит: ёж не догоняет, таймер не идёт.
 		# Отрисовка героев продолжается, но без игровых проверок.
@@ -947,12 +975,52 @@ func _sync_keyboard() -> void:
 	_kb_shown = want
 	if not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
 		return
+	_kb_request_t = time
 	if want:
 		# existing_text — что уже введено (поле ввода своё, рисованное,
 		# поэтому отдаём пусто: клавиатуре нечего подхватывать).
 		DisplayServer.virtual_keyboard_show("")
 	else:
 		DisplayServer.virtual_keyboard_hide()
+
+
+## Эффективная высота экрана: низ, занятый клавиатурой, не наш.
+## Вся раскладка считается от неё — и в портрете с клавиатурой, и в
+## альбоме с внешней. Пол под ногами не проваливается: минимум 220 px.
+func _eff_h() -> float:
+	return maxf(view_h - kb_h, 220.0)
+
+
+## Высота системной клавиатуры в пикселях канваса: экранные пиксели
+## делим на масштаб экрана (на телефоне он 2–3). Без фичи — всегда ноль.
+func _kb_height_px() -> float:
+	if not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
+		return 0.0
+	var scr := DisplayServer.window_get_current_screen()
+	var scale := maxf(1.0, DisplayServer.screen_get_scale(scr))
+	return float(DisplayServer.virtual_keyboard_get_height()) / scale
+
+
+## Следим за клавиатурой каждый кадр: выехала/уехала — пересчитать
+## раскладку. А если система спрятала её сама (кнопка «назад»), а она
+## нужна, — просим показать снова, но не раньше чем через полторы
+## секунды после прошлого запроса (иначе спамим, пока она выезжает).
+func _poll_keyboard() -> void:
+	if not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
+		return
+	var kh := _kb_height_px()
+	if not is_equal_approx(kh, kb_h):
+		kb_h = kh
+		_relayout()
+	var want := not menu_open or (menu != null and bool(menu.get("input_active")))
+	if kb_need_reshow(want, _kb_shown, kh, time - _kb_request_t):
+		_kb_request_t = time
+		DisplayServer.virtual_keyboard_show("")
+
+
+## Чистое решение «пора ли пере-показать»: матрица в logic_test.
+static func kb_need_reshow(want: bool, shown: bool, height: float, elapsed: float) -> bool:
+	return want and shown and height <= 0.0 and elapsed > 1.5
 
 
 ## Все буквы — одно начертание и кегль. Состояние только оттенком:
@@ -1036,7 +1104,7 @@ func _refresh_hud() -> void:
 		lines[0] = "Приготовься… старт через %d · печатай чёрные буквы!" % [
 			int(ceil(grace_t))
 		]
-	lines.append("Enter — дальше · F2 — игроки · F11 — во весь экран · Esc — выход")
+	lines.append("Enter — дальше (или тап) · F2 — игроки (или кнопки справа)")
 	var txt := "\n".join(lines)
 	if show_dbg:
 		var dbg := "[dbg ex=%.0f eln=%d cur=%d:%d cw=%.1f k=%.2f ok=%d bad=%d]" % [
@@ -1162,6 +1230,7 @@ func _draw() -> void:
 	if state == "won" or state == "lost":
 		draw_rect(Rect2(Vector2.ZERO, Vector2(view_w, view_h)), Color(1, 1, 1, 0.55))
 	_draw_level_badge()
+	_draw_touch_buttons()
 	_draw_progress()
 	_draw_cursor_marker()
 	_draw_enemy()
@@ -1170,6 +1239,82 @@ func _draw() -> void:
 	_draw_hero()
 
 
+## Кнопки тач-интерфейса: ⌨ — вызвать системную клавиатуру, ≡ — игроки.
+## Рисуем всегда (и на десктопе — как подсказка), работают везде: тап
+## или клик. Прямоугольники считает _relayout, тычки разбирает _input.
+func _draw_touch_buttons() -> void:
+	# Клавиатура: пилюля + сетка точек 3×2.
+	draw_style_box(pill_sb, _kb_rect)
+	for ix in 3:
+		for iy in 2:
+			var dot := _kb_rect.position + Vector2(
+				(14.0 + 14.0 * float(ix)) * k, (17.0 + 12.0 * float(iy)) * k
+			)
+			draw_circle(dot, 2.5 * k, UI_TEXT)
+	# Игроки: три чёрточки.
+	draw_style_box(pill_sb, _players_rect)
+	for i in 3:
+		var ly := _players_rect.position.y + (14.0 + 10.0 * float(i)) * k
+		draw_line(
+			Vector2(_players_rect.position.x + 14.0 * k, ly),
+			Vector2(_players_rect.end.x - 14.0 * k, ly),
+			UI_TEXT, 3.0 * k
+		)
+	# «Дальше» на модалке победы/поражения: тот же Enter, но пальцем.
+	if over_p.visible:
+		draw_style_box(pill_sb, _next_rect)
+		var t := "Дальше"
+		var fs := int(30.0 * k)
+		var w := mono.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs)
+		draw_string(
+			mono,
+			Vector2(_next_rect.get_center().x - w.x * 0.5, _next_rect.get_center().y + w.y * 0.35),
+			t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs, INK
+		)
+
+
+## Тач и мышь: кнопки интерфейса. Клавиши идут другим путём
+## (_unhandled_key_input), здесь только тычки. Пока меню открыто,
+## тычки разбирает оно само.
+func _input(event: InputEvent) -> void:
+	if menu_open:
+		return
+	var has_pos := false
+	var pos := Vector2.ZERO
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
+			pos = mb.position
+			has_pos = true
+	elif event is InputEventScreenTouch:
+		var st := event as InputEventScreenTouch
+		if st.pressed:
+			pos = st.position
+			has_pos = true
+	if not has_pos:
+		return
+	if over_p.visible and _next_rect.has_point(pos):
+		_new_level()
+		get_viewport().set_input_as_handled()
+		return
+	if _kb_rect.has_point(pos):
+		_kb_summon()
+		get_viewport().set_input_as_handled()
+		return
+	if _players_rect.has_point(pos):
+		_open_menu()
+		get_viewport().set_input_as_handled()
+		return
+
+
+## Кнопка ⌨: показать системную клавиатуру прямо сейчас, не дожидаясь
+## смены состояния (ей и так положено быть видимой — исчезла системно).
+func _kb_summon() -> void:
+	if not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
+		return
+	_kb_request_t = time
+	_kb_shown = true
+	DisplayServer.virtual_keyboard_show("")
 ## Кружок с номером уровня в пустом левом верхнем углу: и красиво,
 ## и уровень всегда перед глазами, а не только в табло.
 func _draw_level_badge() -> void:
