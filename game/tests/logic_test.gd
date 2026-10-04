@@ -518,6 +518,26 @@ func _run_part2() -> void:
 		"retreat over a skip goes back behind the whole skipped run"
 	)
 
+	# --- Системная клавиатура Android: события без keycode, один unicode.
+	# Backspace приходит как unicode 8, Enter — как 10/13. Без фолбэков
+	# с ней нельзя ни стереть, ни продолжить после победы, а Enter прямо
+	# во время партии рисовал бы красную метку перевода строки.
+	_main._new_level()
+	_main.cursor_line = 1
+	_main.cursor_pos = _safe_pos(1, 6)
+	var pu: int = _main.cursor_pos
+	_main._type_char("ы" if _main._current().to_lower() != "ы" else "ж")
+	_check(_main.errors.has(_cell_key(1, pu)), "soft typo left a mark")
+	_main._unhandled_key_input(_softkey(8))
+	_check(_main.errors.is_empty(), "unicode backspace erases the mark")
+	_check(_main.cursor_pos == pu, "unicode backspace steps onto the cell")
+	_main._unhandled_key_input(_softkey(13))
+	_check(_main.errors.is_empty(), "unicode enter is not typed as a letter")
+	_check(_main.cursor_pos == pu, "unicode enter moves nothing while playing")
+	_main.state = "won"
+	_main._unhandled_key_input(_softkey(13))
+	_check(_main.state == "playing", "unicode enter continues after winning")
+
 
 ## Позиция на строке l для теста: хотела бы want, но не за концом
 ## строки (фрагмент текста случайный, длины плавают). Возвращает
@@ -538,6 +558,14 @@ func _behind() -> Vector2i:
 
 func _cell_key(l: int, p: int) -> String:
 	return "%d:%d" % [l, p]
+
+
+## Событие с системной клавиатуры Android: кода клавиши нет, только символ.
+func _softkey(code: int) -> InputEventKey:
+	var ev := InputEventKey.new()
+	ev.unicode = code
+	ev.pressed = true
+	return ev
 
 
 ## Первая не-пробельная буква строки 0: с неё можно запустить автопропуск

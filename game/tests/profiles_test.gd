@@ -50,6 +50,7 @@ func _process(_dt: float) -> bool:
 	_part9_main_game()
 	_part10_first_run()
 	_part11_hidden_menu()
+	_part12_soft_keyboard()
 	_report()
 	return true
 
@@ -478,6 +479,27 @@ func _part11_hidden_menu() -> void:
 	S.delete_user("Жора")
 
 
+## Системная клавиатура Android: события без keycode, один unicode.
+## Буквы печатаются как обычно, Backspace — unicode 8, Enter — unicode 10/13.
+func _part12_soft_keyboard() -> void:
+	for u in S.user_list():
+		S.delete_user(u)
+	_menu.call("_reload")
+	_check(_menu.input_active, "empty list opens the field for typing")
+	for ch in "Ю":
+		_menu.call("_unhandled_key_input", _key_event(ch))
+	_check(String(_menu.input_text) == "Ю", "soft letter typed")
+	_menu.call("_unhandled_key_input", _softkey_event(8))
+	_check(String(_menu.input_text) == "", "unicode backspace erases")
+	_picked = ""
+	for ch in "Юра":
+		_menu.call("_unhandled_key_input", _key_event(ch))
+	_menu.call("_unhandled_key_input", _softkey_event(13))
+	_check(S.user_exists("Юра"), "unicode enter creates the profile")
+	_check(_picked == "Юра", "unicode enter emits the profile")
+	S.delete_user("Юра")
+
+
 ## Сколько разных букв на экране во взрослом режиме: все знаки
 ## уровня, включая пробел.
 func _letters_on_screen() -> int:
@@ -509,6 +531,14 @@ func _typed_key(code: int, ch: String) -> InputEventKey:
 	var ev := InputEventKey.new()
 	ev.keycode = code
 	ev.unicode = ch.unicode_at(0)
+	ev.pressed = true
+	return ev
+
+
+## Событие с системной клавиатуры Android: кода клавиши нет, только unicode.
+func _softkey_event(code: int) -> InputEventKey:
+	var ev := InputEventKey.new()
+	ev.unicode = code
 	ev.pressed = true
 	return ev
 

@@ -90,6 +90,11 @@ tools/docker/build-game.sh --shot               # кадры анимации
 сначала ломаю правило руками, убеждаюсь, что `CHASE_TEST` это ловит, и только
 потом ставлю исправленное.
 
+`gdparse` из requirements-dev новее движка и НЕ ловит несоответствия API:
+`KEY_GO_BACK` и `virtual_keyboard_show()` без аргументов он проглотил,
+а Godot 4.3 на них упал с Parse Error. Новые вызовы DisplayServer и ключи
+`KEY_*` сверять с 4.3 (grep по бинарю в образе), а не с gdparse.
+
 Открыть `game/` в Godot 4.3+, запуск — F5. Релизы: `git tag v0.0.1 && git push --tags`
 (тег обязан совпадать с `config/version` в `game/project.godot`, CI это
 проверяет).

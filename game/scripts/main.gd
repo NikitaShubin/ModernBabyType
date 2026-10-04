@@ -147,6 +147,9 @@ var all_keys_override := -1
 var skip_menu := false
 var menu: Node = null
 var menu_open := false
+## Виртуальная клавиатура показана прямо сейчас (чтобы не дёргать
+## DisplayServer каждый кадр, только на смене состояния).
+var _kb_shown := false
 ## Оформление (только картинка, логику не трогает): скруглённые панели
 ## под карточкой текста, табло и подсказкой. Стили создаются раз в
 ## _ready, геометрию считает _layout_card().
@@ -602,15 +605,22 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		# Остальные клавиши обрабатывает меню.
 		return
 	if state == "won" or state == "lost":
-		if ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER:
+		# Системная клавиатура шлёт Enter без keycode, одним unicode 10/13.
+		if (
+			ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER
+			or ke.unicode == 10 or ke.unicode == 13
+		):
 			_new_level()
 		return
 	if state != "playing":
 		return
-	if ke.keycode == KEY_BACKSPACE:
+	# Backspace с системной клавиатуры — тоже без keycode (unicode 8).
+	if ke.keycode == KEY_BACKSPACE or ke.unicode == 8:
 		_backspace()
 		return
-	if ke.unicode == 0:
+	# Управляющие символы — не буквы: иначе Enter с системной прямо во
+	# время партии рисовал бы красную метку перевода строки.
+	if ke.unicode < 32:
 		return
 	_type_char(String.chr(ke.unicode))
 
@@ -785,6 +795,7 @@ func _finish(won: bool, reason := "") -> void:
 
 func _process(dt: float) -> void:
 	time += dt
+	_sync_keyboard()
 	if menu_open:
 		# Меню открыто — геймплей стоит: ёж не догоняет, таймер не идёт.
 		# Отрисовка героев продолжается, но без игровых проверок.
@@ -920,6 +931,28 @@ func _process(dt: float) -> void:
 			hop_ph = lerpf(hop_ph, roundf(hop_ph / PI) * PI, clampf(dt * 10.0, 0.0, 1.0))
 	queue_redraw()
 	_refresh_hud()
+
+
+## Системная виртуальная клавиатура (Android): ей владеет игра целиком.
+## Нужна всегда, кроме открытого меню без поля ввода: во время партии
+## ею печатают буквы, на модалке победы/поражения — Enter, в меню —
+## имя игрока. Никакой своей клавиатуры не рисуем — только просим
+## систему показать/убрать её штатную. Вызывается каждый кадр, но
+## дёргает DisplayServer только на смене состояния. На десктопе и в
+## headless-тестах no-op: там нет FEATURE_VIRTUAL_KEYBOARD.
+func _sync_keyboard() -> void:
+	var want := not menu_open or (menu != null and bool(menu.get("input_active")))
+	if want == _kb_shown:
+		return
+	_kb_shown = want
+	if not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
+		return
+	if want:
+		# existing_text — что уже введено (поле ввода своё, рисованное,
+		# поэтому отдаём пусто: клавиатуре нечего подхватывать).
+		DisplayServer.virtual_keyboard_show("")
+	else:
+		DisplayServer.virtual_keyboard_hide()
 
 
 ## Все буквы — одно начертание и кегль. Состояние только оттенком:

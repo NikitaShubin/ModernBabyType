@@ -3,8 +3,11 @@
 
 Спрайт `game/assets/hero.png` — 139×160, альфа-бокс во весь кадр
 (см. game/assets/CREDITS.md). Отсюда и иконки: кроп по альфе и ровно
-тот же заяц, что в игре, на бумажном фоне `#f7f3e8` (он же фон
-игрового экрана и меню).
+тот же заяц, что в игре, на ПРОЗРАЧНОМ фоне с мягкой тенью. Бумажный
+квадрат убран: на лаунчере Android и в доке/таскбаре иконка обязана
+быть свободной формы с альфа-каналом, а не белым квадратом. Заяц
+молочно-кремовый и на белом сливался бы — тень приподнимает его над
+фоном, а сама она полупрозрачная, так что альфа сохраняется.
 
 Что делает скрипт:
 
@@ -28,16 +31,15 @@ import io
 import sys
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageFilter
 
 ROOT = Path(__file__).resolve().parents[2]
 HERO = ROOT / "game" / "assets" / "hero.png"
 GAME = ROOT / "game"
 ANDROID = GAME / "android"
 
-# Тот же PAPER, что в scripts/main.gd и scripts/menu.gd. Иконка на
-# бумаге: белый квад на светлых панелях (вкладки, файловые менеджеры)
-# сливается, а тёмные глаза зайца читаются на любом фоне.
+# Бумага осталась только в заднем слое адаптивной иконки: фон слоя
+# по смыслу непрозрачный. Все остальные иконки — на прозрачности.
 PAPER = (0xF7, 0xF3, 0xE8, 0xFF)
 # Заяц в иконке занимает ~78% полотна: не липнет к краю, но и не
 # болтается мелким пятном. Для адаптивной иконки Android запас
@@ -82,11 +84,25 @@ def hero_scaled(size: int, pad: float) -> Image.Image:
     )
 
 
-def hero_on_paper(size: int) -> Image.Image:
-    """Заяц на бумажном фоне — так иконка выглядит в списках."""
-    hero = hero_scaled(size, PAD)
-    canvas = Image.new("RGBA", (size, size), PAPER)
-    canvas.alpha_composite(hero, ((size - hero.width) // 2, (size - hero.height) // 2))
+def hero_transparent(size: int, pad: float) -> Image.Image:
+    """Заяц на прозрачном фоне с мягкой тенью — так иконка выглядит везде.
+
+    Тень — из ядра силуэта (альфа порогом, без мягкого края спрайта):
+    иначе размытие под полупрозрачной кромкой меха даёт тёмную кайму.
+    Параметры от размера полотна, поэтому тень одинаково невесома
+    и на 512, и на 16.
+    """
+    hero = hero_scaled(size, pad)
+    core = hero.getchannel("A").point(lambda v: 255 if v > 128 else 0)
+    shade = Image.new("RGBA", hero.size, (0x30, 0x28, 0x20, 0))
+    shade.putalpha(core.point(lambda v: (v * 70) // 255))
+    shade = shade.filter(ImageFilter.GaussianBlur(max(1, size // 160)))
+    gap = (size - hero.width) // 2
+    top = (size - hero.height) // 2
+    drop = max(1, size // 64)
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    canvas.alpha_composite(shade, (gap, top + drop))
+    canvas.alpha_composite(hero, (gap, top))
     return canvas
 
 
@@ -131,7 +147,7 @@ def write_icns(path: Path) -> None:
     """
     blocks = []
     for n in ICNS_SIZES:
-        raw = png_bytes(hero_on_paper(n))
+        raw = png_bytes(hero_transparent(n, PAD))
         blocks.append(ICNS_TYPES[n] + len(raw).to_bytes(4, "big") + raw)
     body = b"".join(blocks)
     path.write_bytes(b"icns" + len(body).to_bytes(4, "big") + body)
@@ -142,14 +158,14 @@ def main() -> None:
         raise SystemExit(f"нет {HERO}: иконки собираются из зайца игры")
     ANDROID.mkdir(parents=True, exist_ok=True)
 
-    hero_on_paper(512).save(GAME / "icon.png")
+    hero_transparent(512, PAD).save(GAME / "icon.png")
     # Pillow сам собирает многослойный ICO из одного PNG нужного кегля:
     # картинки меньше ICO_MAX рисует сам, поэтому хватает базовой.
-    hero_on_paper(ICO_MAX).save(GAME / "icon.ico", format="ICO", sizes=[
+    hero_transparent(ICO_MAX, PAD).save(GAME / "icon.ico", format="ICO", sizes=[
         (n, n) for n in (16, 32, 48, 64, 128, 256)
     ])
     write_icns(GAME / "icon.icns")
-    hero_on_paper(192).save(ANDROID / "icon_192.png")
+    hero_transparent(192, PAD).save(ANDROID / "icon_192.png")
     adaptive_fg(432).save(ANDROID / "icon_fg_432.png")
     Image.new("RGBA", (432, 432), PAPER).save(ANDROID / "icon_bg_432.png")
     silhouette(432).save(ANDROID / "icon_mono_432.png")

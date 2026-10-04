@@ -12,6 +12,8 @@ extends Node2D
 ##   Delete     удалить выбранный профиль
 ##   Backspace  стереть символ в поле ввода
 ##   Esc        гость — играть без профиля, прогресс не сохраняется
+##   Системная клавиатура Android шлёт события без keycode: Enter ловим
+##   ещё и по unicode 10/13, Backspace — по unicode 8 (игру см. в main.gd).
 ##
 ## Сигналы: chosen(name) — пустое имя означает гостя.
 
@@ -115,7 +117,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		_nav(1)
 		_eaten()
 		return
-	if ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER:
+	if ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER or ke.unicode == 10 or ke.unicode == 13:
 		_enter()
 		_eaten()
 		return
@@ -131,7 +133,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		_guest()
 		_eaten()
 		return
-	if ke.keycode == KEY_BACKSPACE:
+	if ke.keycode == KEY_BACKSPACE or ke.unicode == 8:
 		if not input_active:
 			return
 		input_text = input_text.left(maxi(0, input_text.length() - 1))
