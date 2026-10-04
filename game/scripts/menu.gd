@@ -193,6 +193,10 @@ func _input(event: InputEvent) -> void:
 			chosen.emit(users[i])
 			get_viewport().set_input_as_handled()
 			return
+	if not users.is_empty() and _check_tap_rect().has_point(pos):
+		_toggle_all_keys()
+		get_viewport().set_input_as_handled()
+		return
 	if _field_tap_rect().has_point(pos):
 		if not input_active:
 			_toggle_input()
@@ -338,9 +342,20 @@ func _rows_top() -> float:
 	return 90.0 * k + 70.0 * k
 
 
-## Строка поля ввода: после заголовка, строк и отступа.
+## Строка поля ввода: после заголовка, строк и отступа. Если игроки
+## есть — ниже ещё галочка «все клавиши», поле едет под неё.
 func _field_line_y() -> float:
-	return _rows_top() + float(maxi(users.size(), 1)) * ROW_H * k + 30.0 * k
+	return (
+		_rows_top()
+		+ float(maxi(users.size(), 1)) * ROW_H * k
+		+ 30.0 * k
+		+ (54.0 * k if not users.is_empty() else 0.0)
+	)
+
+
+## Строка галочки «все клавиши»: под списком, над полем ввода.
+func _check_line_y() -> float:
+	return _rows_top() + float(maxi(users.size(), 1)) * ROW_H * k + 6.0 * k
 
 
 ## Строка кнопок: под полем ввода.
@@ -385,6 +400,22 @@ func _mkb_tap_rect() -> Rect2:
 	return Rect2(view_w - 72.0 * k, 16.0 * k, 56.0 * k, 56.0 * k)
 
 
+## Галочка «все клавиши» для выбранного профиля: тот же переключатель,
+## что клавиша A, но пальцем/мышью (на телефоне буквы A нет в нужный
+## момент). Нет игроков — нет и галочки.
+func _check_tap_rect() -> Rect2:
+	var y := _check_line_y()
+	var w := _text_size("Все клавиши", FONT_ROW).x
+	return Rect2(48.0 * k, y - 36.0 * k, w + 84.0 * k, 48.0 * k)
+
+
+## Включён ли взрослый режим у выбранного.
+func _check_on() -> bool:
+	if users.is_empty():
+		return false
+	return bool(S.load_profile(users[sel]).get("all_keys", false))
+
+
 ## Кнопка-пилюля с подписью по центру.
 func _button(r: Rect2, label: String) -> void:
 	draw_style_box(hint_sb, r)
@@ -427,6 +458,21 @@ func _draw() -> void:
 		draw_style_box(row_sb if i == sel else row_idle_sb, chip)
 		_text(_row_caption(users[i]), Vector2(60.0 * k, row_y), FONT_ROW, INK)
 	y = _field_line_y()
+	# Галочка «все клавиши» под списком: тап переключает взрослый режим
+	# выбранного (то же, что клавиша A).
+	if not users.is_empty():
+		var cy := _check_line_y()
+		draw_style_box(box_sb, Rect2(60.0 * k, cy - 32.0 * k, 32.0 * k, 32.0 * k))
+		if _check_on():
+			draw_line(
+				Vector2(66.0 * k, cy - 12.0 * k), Vector2(76.0 * k, cy - 2.0 * k),
+				INK, 4.0 * k
+			)
+			draw_line(
+				Vector2(76.0 * k, cy - 2.0 * k), Vector2(92.0 * k, cy - 26.0 * k),
+				INK, 4.0 * k
+			)
+		_text("Все клавиши", Vector2(104.0 * k, cy), FONT_ROW, INK)
 	# Поле ввода нового имени. Рамка — только когда активно, а тыкается
 	# всегда: тап включает ввод, как Tab.
 	var field_txt := _field_text()

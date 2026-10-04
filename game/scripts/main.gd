@@ -969,7 +969,7 @@ func _process(dt: float) -> void:
 ## дёргает DisplayServer только на смене состояния. На десктопе и в
 ## headless-тестах no-op: там нет FEATURE_VIRTUAL_KEYBOARD.
 func _sync_keyboard() -> void:
-	var want := not menu_open or (menu != null and bool(menu.get("input_active")))
+	var want := _kb_want()
 	if want == _kb_shown:
 		return
 	_kb_shown = want
@@ -982,6 +982,18 @@ func _sync_keyboard() -> void:
 		DisplayServer.virtual_keyboard_show("")
 	else:
 		DisplayServer.virtual_keyboard_hide()
+
+
+## Нужна ли системная клавиатура прямо сейчас. Имя вводится — в любой
+## ориентации; партия идёт — только в портрете: в альбоме в игре только
+## внешняя клавиатура (системную зовём кнопкой ⌨). Чистая функция от
+## состояния — матрица в logic_test.
+func _kb_want() -> bool:
+	if menu_open:
+		return menu != null and bool(menu.get("input_active"))
+	if view_w > view_h:
+		return false
+	return true
 
 
 ## Эффективная высота экрана: низ, занятый клавиатурой, не наш.
@@ -1012,7 +1024,7 @@ func _poll_keyboard() -> void:
 	if not is_equal_approx(kh, kb_h):
 		kb_h = kh
 		_relayout()
-	var want := not menu_open or (menu != null and bool(menu.get("input_active")))
+	var want := _kb_want()
 	if kb_need_reshow(want, _kb_shown, kh, time - _kb_request_t):
 		_kb_request_t = time
 		DisplayServer.virtual_keyboard_show("")

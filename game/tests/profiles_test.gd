@@ -527,6 +527,11 @@ func _part13_touch() -> void:
 	_picked = ""
 	_menu.call("_input", _touch(_menu.call("_play_tap_rect").get_center()))
 	_check(_picked == first, "play button enters the selected profile")
+	# Галочка «все клавиши»: тап переключает флаг выбранного.
+	_menu.call("_input", _tap(_menu.call("_check_tap_rect").get_center()))
+	_check(S.get_all_keys(first), "checkbox turns all_keys on")
+	_menu.call("_input", _tap(_menu.call("_check_tap_rect").get_center()))
+	_check(not S.get_all_keys(first), "checkbox turns all_keys off")
 	# Скрытое меню тычков не видит.
 	_menu.visible = false
 	_picked = ""

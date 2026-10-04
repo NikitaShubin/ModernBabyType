@@ -568,6 +568,18 @@ func _run_part2() -> void:
 	_main.kb_h = 0.0
 	_main._relayout()
 
+	# --- Политика клавиатуры: имя — всегда, партия — только портрет. ---
+	# В альбоме в игре только внешняя клавиатура, системную зовём
+	# кнопкой ⌨. Чистая функция от view и меню (тут меню нет).
+	_main.view_w = 2000.0
+	_main.view_h = 1000.0
+	_check(not _main._kb_want(), "no auto keyboard in landscape game")
+	_main.view_w = 1000.0
+	_main.view_h = 2000.0
+	_check(_main._kb_want(), "auto keyboard in portrait game")
+	_main.view_w = 1100.0
+	_main.view_h = 650.0
+
 	# --- Тач и мышь в игре: кнопка игроков открывает меню, кнопка
 	# «Дальше» на модалке начинает новый уровень. ---
 	_main.call("_input", _tap(_main._players_rect.get_center()))

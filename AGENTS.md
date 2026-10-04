@@ -95,7 +95,7 @@ tools/docker/build-game.sh --shot               # кадры анимации
 а Godot 4.3 на них упал с Parse Error. Новые вызовы DisplayServer и ключи
 `KEY_*` сверять с 4.3 (grep по бинарю в образе), а не с gdparse.
 
-Открыть `game/` в Godot 4.3+, запуск — F5. Релизы: `git tag v0.0.3 && git push --tags`
+Открыть `game/` в Godot 4.3+, запуск — F5. Релизы: `git tag v0.0.4 && git push --tags`
 (тег обязан совпадать с `config/version` в `game/project.godot`, CI это
 проверяет).
 
