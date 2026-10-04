@@ -1,0 +1,30 @@
+; Engine configuration file.
+; ModernBabyType — Godot 4, десктоп (Windows/Linux/macOS) и Android.
+; Игра целиком на клавиатуре, поэтому web-экспорта нет: без физической
+; клавиатуры печать не работает.
+
+config_version=5
+
+[application]
+
+config/name="ModernBabyType"
+config/description="Игра для обучения детей слепой печати: герой убегает от врага, поедая буквы."
+config/version="0.0.1"
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.3", "GL Compatibility")
+config/icon="res://icon.png"
+boot_splash/show_image=false
+
+[display]
+
+window/size/viewport_width=1100
+window/size/viewport_height=650
+window/size/resizable=true
+window/size/mode=3
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+environment/defaults/default_clear_color=Color(0.968627, 0.952941, 0.909804, 1)
+textures/vram_compression/import_etc2_astc=true

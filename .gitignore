@@ -1,0 +1,14 @@
+.venv/
+game/dist/
+game/.godot/
+__pycache__/
+progress.json
+
+# tools/: в репозитории лежат скрипты сборки (tools/docker), генератор
+# иконок (tools/icons) и хелпер визуального стенда (tools/x11test.py).
+# Всё остальное — кэши и шаблоны, которые пересоздаются: export
+# templates (1.7 ГБ) и бинарь движка.
+tools/*
+!tools/docker/
+!tools/icons/
+!tools/x11test.py

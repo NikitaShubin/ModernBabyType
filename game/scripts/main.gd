@@ -1,0 +1,1133 @@
+extends Node2D
+## ModernBabyType — Godot 4 (десктоп Windows/Linux/macOS, Android).
+## Заяц-герой убегает от ежа-колобка, поедая активные буквы.
+## Управление: печать активных букв, Backspace чинит ошибку (или
+## откатывает назад), Enter — дальше после победы/поражения,
+## F2 — меню игроков, F11 — полный экран, Esc — выход.
+## Раскладка полностью относительная: _relayout() пересчитывает
+## шрифт, метрики и позиции под текущий размер окна.
+
+const B := preload("res://scripts/balance.gd")
+const S := preload("res://scripts/save.gd")
+const MENU_SCENE := preload("res://scenes/menu.tscn")
+
+## Заяц-герой: один целый рисунок. Анимация — только трансформация
+## (выпад на букву, дыхание, дрожь), поэтому фликеру неоткуда взяться:
+## на все фазы один и тот же пиксель.
+const HERO_TEX: Texture2D = preload("res://assets/hero.png")
+## Ёж-колобок: один целый рисунок, ног нет — катится (покачивание +
+## прыжки со сплющиванием), фликеру неоткуда взяться.
+const HEDGE_TEX: Texture2D = preload("res://assets/hedge.png")
+## Качение: угловая частота покачивания и высота прыжка (пиксели до множителя k).
+## Ёж маленький: частота высокая, амплитуда скромная — походка весёлая.
+const HEDGE_WOB_W := 8.0
+const HEDGE_BOB_H := 6.0
+## Длительности анимаций (с): еда буквы, испуг.
+## Выпад ежа убран (укол — не удар); LUNGE_T оставлен для драйвера кадров.
+const CHOMP_T := 0.32
+const SHAKE_T := 0.3
+const LUNGE_T := 0.4
+
+## Лишние мили ежа на каждой строке (в символах): заход слева из-за
+## края и убег за конец. Заяц эти участки проскакивает быстро, ёж идёт
+## полностью — поэтому всегда подходит сзади. Остановок у ежа нет вообще.
+const ENEMY_PRE_CHARS := 5.0
+const ENEMY_POST_CHARS := 2.0
+## Видимая ширина шара ежа: hedge.png — альфа-бокс 145 px из 160,
+## остальное прозрачное поле (замерено в PIL, см. CREDITS.md).
+const HEDGE_BALL_FRAC := 145.0 / 160.0
+## Запас сверх контакта (в символах): на столько ёж имеет право
+## подойти вплотную, прежде чем укол засчитан. Действует только когда
+## заяц на одной строке с ежом (см. правило укола в _process). Держим
+## малым: запас — это видимая щель между шарами в момент укола, а автору
+## нужно ровно расстояние контакта.
+const CONTACT_SLACK := 0.15
+## Кап выталкивания зайца вперёд при уколе (в символах). Выталкиваем
+## только если заяц влетел в ёжа (прыжок назад через него, откат после
+## ошибки) — это один-два символа. Кап нужен на выброс большого отката,
+## чтобы бросок не унёс зайца через пол-экрана.
+const SNAP_CAP_CHARS := 2.0
+## Кап подтягивания зайца НАЗАД к касанию (в символах). Обычно заяц уже
+## стоит вплотную и подтягивать нечего (тогда срабатывает крошечный
+## CONTACT_SLACK). Разница побольше бывает, когда логика откатилась на
+## ошибке или Backspace, а картинка ещё не доехала: это откат на символ.
+## Кап держим шире отката, иначе между ним и допуском детекции остаётся
+## дырка, где заяц замирает с щелью. Дальше капа не тянем: это уже не
+## «встать в касание», а прыжок назад. Оба капа — только на одной строке;
+## через угол строк заяц встаёт ровно в касание, без капов.
+const SNAP_BACK_CHARS := 1.5
+const BASE_W := 1100.0
+const BASE_H := 650.0
+const START_DELAY := 3.0
+const TEXT_CHUNK_LINES := 3
+
+const PAPER := Color("#f7f3e8")
+const INK := Color("#1c1a16")
+const GREY_PASSED := Color("#b7b0a1")
+const GREY_IDLE := Color("#8d8778")
+const RED := Color("#c02727")
+const UI_TEXT := Color("#4a4438")
+const GREEN := Color("#1e7a34")
+const DARK_RED := Color("#b02323")
+
+var display_lines: Array[String] = []
+var active: Dictionary = {}
+var passed: Dictionary = {}
+var errors: Dictionary = {}
+var cursor_line := 0
+var cursor_pos := 0
+var state := "playing"
+# Точное сравнение с учётом регистра (взрослый режим, _all_keys).
+var exact_case := false
+
+var difficulty := 0
+var wins_in_row := 0
+var ema_cpm := 0.0
+var ema_acc := 1.0
+var enemy_cps := 2.0
+
+var enemy_x := 0.0
+var enemy_line := 0
+var hedge_active := false
+var grace_t := 0.0
+# Линейные координаты уровня: line_base[l] — номер первого символа строки.
+var line_base: Array = []
+
+# Метрики раскладки, пересчитываются в _relayout().
+var view_w := BASE_W
+var view_h := BASE_H
+var k := 1.0
+var font_size := 32
+var char_w := 20.0
+var line_h := 56.0
+var sep_h := 18.0
+var margin := 60.0
+var text_y := 80.0
+var mono: SystemFont
+
+var typed_ok := 0
+var typed_bad := 0
+var elapsed := 0.0
+var time := 0.0
+var chomp_t := 0.0
+var bounce_t := 0.0
+
+const MAX_TEXT_LABELS := 6
+var text_labels: Array[RichTextLabel] = []
+var hud_label: Label
+var overlay_label: Label
+var hint_label: Label
+var show_dbg := false
+var _last_reason := ""
+
+# Сглаженная позиция героя: логика (курсор) прыгает, картинка догоняет.
+var hero_r := Vector2.ZERO
+# Фаза прыжков зайца: идёт от пройденного картинкой расстояния.
+var hop_ph := 0.0
+var shake_t := 0.0
+var lunge_t := 0.0
+# Моргание зайца: раз в несколько секунд (веки — две чёрточки поверх глаз).
+var blink_cd := 2.0
+var blink_t := 0.0
+# Пыль из-под задней лапы: позади-ниже шара, а не под пузом —
+# под пузом она рассеивается, не выходя за спрайт.
+var puffs: Array = []
+var puff_cd := 0.0
+
+## Кто играет: пусто — гость, его прогресс никуда не пишется.
+var profile_name := S.GUEST
+## Взрослый режим профиля из меню игроков (клавиша A).
+var profile_all_keys := false
+## Ручное «все клавиши»: -1 не задано, 1 да, 0 нет. Ставится тестами и
+## аргументами запуска --all-keys / --no-all-keys. Итоговый приоритет в
+## _all_keys(): ручной флаг, потом флаг профиля, потом debug-сборка.
+## Флаг профиля выше debug: иначе прогрессию нельзя проверять из редактора.
+var all_keys_override := -1
+## Тесты стартуют сразу в игру, минуя меню игроков.
+var skip_menu := false
+var menu: Node = null
+var menu_open := false
+
+
+func _ready() -> void:
+	mono = SystemFont.new()
+	mono.font_names = PackedStringArray(
+		["DejaVu Sans Mono", "Consolas", "Courier New", "monospace"]
+	)
+
+	for i in MAX_TEXT_LABELS:
+		var tl := RichTextLabel.new()
+		tl.bbcode_enabled = true
+		tl.autowrap_mode = TextServer.AUTOWRAP_OFF
+		tl.scroll_active = false
+		tl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		# Текст — на заднем плане: герои рисуются поверх букв.
+		tl.z_index = -10
+		tl.add_theme_font_override("normal_font", mono)
+		tl.visible = false
+		add_child(tl)
+		text_labels.append(tl)
+
+	hud_label = Label.new()
+	hud_label.add_theme_color_override("font_color", UI_TEXT)
+	add_child(hud_label)
+
+	overlay_label = Label.new()
+	overlay_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	overlay_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	overlay_label.visible = false
+	add_child(overlay_label)
+
+	hint_label = Label.new()
+	hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint_label.add_theme_color_override("font_color", UI_TEXT)
+	add_child(hint_label)
+
+	get_tree().root.size_changed.connect(_relayout)
+
+	# Аргументы запуска решают режим на старте, до чтения профиля.
+	_cmdline_mode()
+	if not skip_menu:
+		S.drop_legacy_guest()
+
+	if skip_menu:
+		profile_name = S.GUEST
+		_start_game()
+	elif S.has_valid_last_user():
+		profile_name = S.get_last_user()
+		_start_game()
+	else:
+		# Профилей ещё нет — сразу показываем меню выбора.
+		profile_name = S.GUEST
+		_open_menu()
+
+
+## Все клавиши активны?
+func _all_keys() -> bool:
+	return all_keys_on(all_keys_override, profile_all_keys, OS.is_debug_build())
+
+
+## Приоритет «все клавиши»: ручной флаг важнее флага профиля, флаг
+## профиля важнее debug-сборки. Вынесено отдельно и без сайд-эффектов,
+## чтобы тест перебрал все восемь сочетаний — иначе пришлось бы гадать,
+## собрана ли тестовая копия движка как debug или как релиз.
+static func all_keys_on(override: int, profile_flag: bool, is_debug: bool) -> bool:
+	if override >= 0:
+		return override == 1
+	return profile_flag or is_debug
+
+
+func _cmdline_mode() -> void:
+	for a in OS.get_cmdline_user_args():
+		if a == "--all-keys":
+			all_keys_override = 1
+		elif a == "--no-all-keys":
+			all_keys_override = 0
+
+
+func _start_game() -> void:
+	var prof: Dictionary = S.load_profile(profile_name)
+	profile_all_keys = bool(prof.get("all_keys", false))
+	difficulty = int(prof.get("difficulty", 0))
+	wins_in_row = int(prof.get("wins_in_row", 0))
+	ema_cpm = float(prof.get("ema_cpm", 0.0))
+	ema_acc = float(prof.get("ema_acc", 1.0))
+	enemy_cps = float(prof.get("enemy_cps", B.BASE_CPS))
+	_relayout()
+	_new_level()
+
+
+func _open_menu() -> void:
+	if menu == null:
+		menu = MENU_SCENE.instantiate()
+		menu.chosen.connect(_menu_chosen)
+		add_child(menu)
+	menu.visible = true
+	menu_open = true
+	# F2 из меню возвращает в игру тем же игроком, кого открыли.
+	menu.resume_user = profile_name
+	menu.call("_reload")
+
+
+func _close_menu() -> void:
+	if menu != null:
+		menu.visible = false
+	menu_open = false
+
+
+func _menu_chosen(user_name: String) -> void:
+	profile_name = user_name
+	if user_name == S.GUEST:
+		S.set_last_user(S.GUEST)
+	else:
+		S.touch(user_name)
+	_close_menu()
+	_start_game()
+
+
+func _relayout() -> void:
+	var s := get_viewport_rect().size
+	if s.x <= 0.0 or s.y <= 0.0:
+		return
+	view_w = s.x
+	view_h = s.y
+	k = clampf(minf(view_w / BASE_W, view_h / BASE_H), 0.5, 2.5)
+	font_size = int(36.0 * k)
+	# Левое поле широкое: героям нужен воздух в начале строки,
+	# а ёж заходит слева из-за края — ему нельзя за край экрана.
+	margin = 120.0 * k
+	text_y = 80.0 * k
+	char_w = mono.get_string_size("н", HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size).x
+	# Зазор высотой в строку текста: пустая полоса для качения ежа.
+	# Текст при этом никогда не сдвигается.
+	sep_h = mono.get_height(font_size)
+	line_h = mono.get_height(font_size) + sep_h
+	for tl in text_labels:
+		tl.position = Vector2(margin, text_y)
+		tl.size = Vector2(view_w - margin * 2.0, line_h + 8.0 * k)
+		tl.add_theme_font_size_override("normal_font_size", font_size)
+	_layout_text_lines()
+	hud_label.position = Vector2(margin, view_h - 95.0 * k)
+	hud_label.add_theme_font_size_override("font_size", int(18.0 * k))
+	hint_label.position = Vector2(margin, view_h - 165.0 * k)
+	hint_label.size = Vector2(view_w - margin * 2.0, 55.0 * k)
+	hint_label.add_theme_font_size_override("font_size", int(30.0 * k))
+	var ow := 980.0 * k
+	overlay_label.size = Vector2(ow, 150.0 * k)
+	overlay_label.add_theme_font_size_override("font_size", int(40.0 * k))
+	queue_redraw()
+
+
+## Пустая полоса ежа — это межстрочный зазор высотой в строку.
+## Текст стоит неподвижно: никаких сдвигов при смене строк.
+## Экранный верх текстовой строки (всегда статичен).
+func _line_y(line_idx: int) -> float:
+	return text_y + float(line_idx) * line_h
+
+
+## Расставить построчные лэйблы (позиции статичны, текст не ездит).
+func _layout_text_lines() -> void:
+	# Блок текста — по центру свободной зоны: сверху пусто, снизу HUD
+	# и подсказка. Левый край прежний, внутри уровня блок неподвижен.
+	var block_h := float(maxi(display_lines.size(), 1)) * line_h
+	text_y = maxf(40.0 * k, (view_h - 200.0 * k - block_h) * 0.5)
+	# Модалка победы/поражения — под блоком текста, а не поверх букв.
+	var ow := 980.0 * k
+	overlay_label.position = Vector2((view_w - ow) * 0.5, text_y + block_h + 24.0 * k)
+	overlay_label.size = Vector2(ow, 150.0 * k)
+	for i in text_labels.size():
+		if i < display_lines.size():
+			text_labels[i].position = Vector2(margin, _line_y(i))
+			text_labels[i].visible = true
+		else:
+			text_labels[i].visible = false
+
+
+func _toggle_fullscreen() -> void:
+	var root := get_tree().root
+	if root.mode == Window.MODE_FULLSCREEN:
+		root.mode = Window.MODE_WINDOWED
+	else:
+		root.mode = Window.MODE_FULLSCREEN
+
+
+func _key(l: int, p: int) -> String:
+	return "%d:%d" % [l, p]
+
+
+func _load_text() -> Array[String]:
+	var lines: Array[String] = []
+	for path in _text_files():
+		var fa := FileAccess.open(path, FileAccess.READ)
+		if fa == null:
+			continue
+		while not fa.eof_reached():
+			var line := fa.get_line().strip_edges()
+			if line != "":
+				lines.append(line)
+		if not lines.is_empty():
+			break
+	if lines.is_empty():
+		lines.append("мама мыла раму.")
+		lines.append("папа читал газету!")
+		lines.append("солнце светило ярко?")
+	var start := 0
+	if lines.size() > TEXT_CHUNK_LINES:
+		start = randi() % (lines.size() - TEXT_CHUNK_LINES + 1)
+	return lines.slice(start, start + mini(TEXT_CHUNK_LINES, lines.size()))
+
+
+## Текстовые файлы в случайном порядке (как в оригинале: каждый попытка —
+## новый случайный фрагмент из банка текстов).
+func _text_files() -> Array[String]:
+	var paths: Array[String] = []
+	var dir := DirAccess.open("res://texts")
+	if dir == null:
+		return ["res://texts/demo.txt"]
+	var files: Array[String] = []
+	dir.list_dir_begin()
+	var fname := dir.get_next()
+	while fname != "":
+		if not dir.current_is_dir() and fname.ends_with(".txt"):
+			files.append("res://texts/" + fname)
+		fname = dir.get_next()
+	dir.list_dir_end()
+	while not files.is_empty():
+		var i := randi() % files.size()
+		paths.append(files[i])
+		files.remove_at(i)
+	return paths if not paths.is_empty() else ["res://texts/demo.txt"]
+
+
+func _new_level() -> void:
+	display_lines = _load_text()
+	line_base.clear()
+	var acc := 0.0
+	for line in display_lines:
+		line_base.append(acc)
+		acc += float(line.length())
+	if _all_keys():
+		# Взрослый режим: набирается всё, что видно, регистр важен.
+		exact_case = true
+		active.clear()
+		for line in display_lines:
+			for i in line.length():
+				active[line.substr(i, 1)] = true
+	else:
+		exact_case = false
+		active = B.active_chars(difficulty)
+	passed.clear()
+	errors.clear()
+	cursor_line = 0
+	cursor_pos = 0
+	typed_ok = 0
+	typed_bad = 0
+	elapsed = 0.0
+	grace_t = START_DELAY
+	# Ёж выкатывается позже: когда герой уйдёт на вторую строку,
+	# ёж появится строкой выше (enemy_line = 0) и покатится по следу.
+	hedge_active = false
+	enemy_x = margin
+	enemy_line = 0
+	state = "playing"
+	overlay_label.visible = false
+	_skip_inactive()
+	hero_r = _hero_pos()
+	shake_t = 0.0
+	lunge_t = 0.0
+	_refresh()
+
+
+func _current() -> String:
+	if cursor_line >= display_lines.size():
+		return ""
+	var line := display_lines[cursor_line]
+	if cursor_pos >= line.length():
+		return ""
+	return line.substr(cursor_pos, 1)
+
+
+func _is_active(ch: String) -> bool:
+	return ch == " " or active.has(ch if exact_case else ch.to_lower())
+
+
+## Сравнение ввода: в дебаге регистр важен, иначе — без учёта.
+func _eq(a: String, b: String) -> bool:
+	if exact_case:
+		return a == b
+	return a.to_lower() == b.to_lower()
+
+
+func _advance() -> void:
+	cursor_pos += 1
+	if cursor_line < display_lines.size():
+		if cursor_pos >= display_lines[cursor_line].length():
+			cursor_line += 1
+			cursor_pos = 0
+	if cursor_line >= display_lines.size():
+		_finish(true)
+
+
+## Серые (неактивные) буквы проходятся сами, ждать их не нужно.
+func _skip_inactive() -> void:
+	while state == "playing":
+		var ch := _current()
+		if ch == "":
+			_finish(true)
+			return
+		if _is_active(ch) or errors.has(_key(cursor_line, cursor_pos)):
+			return
+		passed[_key(cursor_line, cursor_pos)] = true
+		_advance()
+
+
+func _unhandled_key_input(event: InputEvent) -> void:
+	var ke := event as InputEventKey
+	if ke == null or not ke.pressed or ke.echo:
+		return
+	if ke.keycode == KEY_ESCAPE:
+		if menu_open:
+			# Esc в меню — гость; сюда попадаем, только если меню не
+			# забрало клавишу (страховка).
+			_menu_chosen(S.GUEST)
+			return
+		if get_tree().root.mode == Window.MODE_FULLSCREEN:
+			get_tree().root.mode = Window.MODE_WINDOWED
+		else:
+			get_tree().quit()
+		return
+	if (
+		(ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER)
+		and ke.alt_pressed
+	):
+		_toggle_fullscreen()
+		return
+	if ke.keycode == KEY_F3:
+		show_dbg = not show_dbg
+		return
+	if ke.keycode == KEY_F11:
+		_toggle_fullscreen()
+		return
+	if ke.keycode == KEY_F2:
+		# Меню игроков: сменить профиль прямо в игре. Из гостя — выбрать.
+		if menu_open:
+			_close_menu()
+			_start_game()
+		else:
+			_open_menu()
+		return
+	if menu_open:
+		# Остальные клавиши обрабатывает меню.
+		return
+	if state == "won" or state == "lost":
+		if ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER:
+			_new_level()
+		return
+	if state != "playing":
+		return
+	if ke.keycode == KEY_BACKSPACE:
+		_backspace()
+		return
+	if ke.unicode == 0:
+		return
+	_type_char(String.chr(ke.unicode))
+
+
+func _type_char(ch: String) -> void:
+	var expected := _current()
+	if expected == "":
+		return
+	# Нажата именно та буква, что написана (хоть активная, хоть серая) —
+	# это не опечатка: клетка становится пройденной (серой), идём дальше.
+	if _eq(ch, expected):
+		passed[_key(cursor_line, cursor_pos)] = true
+		typed_ok += 1
+		chomp_t = CHOMP_T
+		_advance()
+		_skip_inactive()
+	else:
+		# Опечатка: красная метка на месте курсора и шаг назад.
+		# Каждая следующая неверная клавиша отбрасывает ещё дальше.
+		errors[_key(cursor_line, cursor_pos)] = ch
+		typed_bad += 1
+		shake_t = SHAKE_T
+		_knockback()
+	_refresh()
+
+
+## Клетка на шаг назад по сквозной оси текста: конец строки = начало
+## следующей, разрывов нет. (-1, -1) — откатываться некуда, это самое
+## начало уровня. Общая точка для опечатки и для Backspace: откат у них
+## одинаковый, различается только то, что происходит с клеткой.
+func _behind() -> Vector2i:
+	if cursor_pos > 0:
+		return Vector2i(cursor_line, cursor_pos - 1)
+	if cursor_line > 0:
+		return Vector2i(cursor_line - 1, display_lines[cursor_line - 1].length() - 1)
+	return Vector2i(-1, -1)
+
+
+## Шаг назад: cumulative — каждая опечатка отбрасывает ещё на шаг,
+## через пройденные буквы и через переносы строк (упор в начало текста).
+func _knockback() -> void:
+	var b := _behind()
+	if b.x >= 0:
+		cursor_line = b.x
+		cursor_pos = b.y
+
+
+## Backspace. Три дела, строго по порядку — «лишнее» нажатие (когда
+## стирать нечего) не должно быть пустым:
+##  1) красная метка ПОД курсором — стираем её, заяц на месте (иначе
+##     красные буквы застревают позади и их уже не убрать);
+##  2) метка сразу ВПЕРЕДИ — стираем её и встаём на это место: ребёнок
+##     сразу набирает правильную букву заново, без ходьбы туда-обратно;
+##  3) а когда стирать нечего — ОТКАТ НАЗАД на одну клетку. Заяц
+##     возвращается на букву, которую уже успел набрать, и она снова
+##     становится ненабранной (появляется перед зайцем). Счётчики
+##     набора НЕ трогаем: клавиши-то были нажаты, честность и CPM
+##     показывают фактический ввод. Клетка, на которую сели, возвращается
+##     в исходное состояние целиком: с неё снимается и «пройдена», и
+##     красная метка, если она там осталась от прежней опечатки.
+##     Механика пропусков учтена: серые символы — тоже клетки, откат
+##     идёт и по ним, по одному нажатию на символ. Упор в начало текста:
+##     с самой первой клетки откатываться некуда. Автопропуск после
+##     отката НЕ делаем: заяц обязан стоять перед той буквой, на которую
+##     откатился, иначе откат тут же проскочит мимо неё.
+func _backspace() -> void:
+	var k := _key(cursor_line, cursor_pos)
+	if errors.has(k):
+		errors.erase(k)
+		_skip_inactive()
+		_refresh()
+		return
+	var fwd_l := cursor_line
+	var fwd_p := cursor_pos + 1
+	if fwd_l < display_lines.size():
+		if fwd_p >= display_lines[fwd_l].length():
+			fwd_l += 1
+			fwd_p = 0
+	var fk := _key(fwd_l, fwd_p)
+	if errors.has(fk):
+		errors.erase(fk)
+		cursor_line = fwd_l
+		cursor_pos = fwd_p
+		_skip_inactive()
+		_refresh()
+		return
+	var b := _behind()
+	if b.x < 0:
+		return  # самое начало текста
+	cursor_line = b.x
+	cursor_pos = b.y
+	var bk := _key(cursor_line, cursor_pos)
+	passed.erase(bk)
+	errors.erase(bk)
+	_refresh()
+
+
+func _live_cpm() -> float:
+	if elapsed < 3.0:
+		return 0.0
+	return float(typed_ok) / (elapsed / 60.0)
+
+
+## Статус ежа для HUD: до выхода на след он ждёт.
+func _hedge_status() -> String:
+	if not hedge_active:
+		return "ёж ждёт"
+	return "ёж %.1f симв/с" % enemy_cps
+
+
+func _finish(won: bool, reason := "") -> void:
+	if state != "playing":
+		return
+	_last_reason = "" if won else reason
+	var total := typed_ok + typed_bad
+	var acc := 1.0
+	if total > 0:
+		acc = float(typed_ok) / float(total)
+	ema_acc = ema_acc * 0.7 + acc * 0.3
+	var cpm := 0.0
+	if elapsed > 1.0:
+		cpm = float(typed_ok) / (elapsed / 60.0)
+	if ema_cpm > 0.0:
+		ema_cpm = ema_cpm * 0.6 + cpm * 0.4
+	else:
+		ema_cpm = cpm
+	if won:
+		state = "won"
+		wins_in_row += 1
+		bounce_t = 0.6
+		enemy_cps = B.adapt_cps(true, enemy_cps, acc)
+		if wins_in_row >= B.WINS_TO_LEVEL_UP:
+			difficulty += 1
+			wins_in_row = 0
+	else:
+		state = "lost"
+		wins_in_row = 0
+		# Выпада нет: ёж остаётся в точке контакта (укол — не удар).
+		enemy_cps = B.adapt_cps(false, enemy_cps, acc)
+	var stars := B.stars_for_result(won, acc, typed_bad)
+	var prof: Dictionary = S.load_profile(profile_name)
+	prof["total_games"] = int(prof.get("total_games", 0)) + 1
+	if won:
+		prof["total_wins"] = int(prof.get("total_wins", 0)) + 1
+	S.save_profile(profile_name, {
+		"difficulty": difficulty,
+		"wins_in_row": wins_in_row,
+		"ema_cpm": ema_cpm,
+		"ema_acc": ema_acc,
+		"enemy_cps": enemy_cps,
+		"all_keys": profile_all_keys,
+		"total_games": prof.get("total_games", 0),
+		"total_wins": prof.get("total_wins", 0),
+	})
+	if won:
+		overlay_label.add_theme_color_override("font_color", GREEN)
+		overlay_label.text = "Уровень пройден! %s\nEnter — дальше" % ["★".repeat(stars)]
+	else:
+		overlay_label.add_theme_color_override("font_color", DARK_RED)
+		overlay_label.text = "Ай, укололся!\nEnter — ещё раз (ёж стал медленнее)"
+	overlay_label.visible = true
+	_refresh()
+
+
+func _process(dt: float) -> void:
+	time += dt
+	if menu_open:
+		# Меню открыто — геймплей стоит: ёж не догоняет, таймер не идёт.
+		# Отрисовка героев продолжается, но без игровых проверок.
+		queue_redraw()
+		return
+	_layout_text_lines()
+	if chomp_t > 0.0:
+		chomp_t -= dt
+	if bounce_t > 0.0:
+		bounce_t -= dt
+	if shake_t > 0.0:
+		shake_t -= dt
+	if lunge_t > 0.0:
+		lunge_t -= dt
+	# Моргание зайца: раз в несколько секунд.
+	if blink_t > 0.0:
+		blink_t -= dt
+	else:
+		blink_cd -= dt
+		if blink_cd <= 0.0:
+			blink_t = 0.12
+			blink_cd = 2.0 + randf() * 2.5
+	# Пыль из-под задней лапы: позади-ниже шара.
+	if hedge_active and state == "playing" and grace_t <= 0.0:
+		puff_cd -= dt
+		if puff_cd <= 0.0:
+			puff_cd = 0.14
+			puffs.append([Vector2(enemy_x - 22.0 * k + randf_range(-5.0, 5.0) * k, _track_cy(enemy_line) + 14.0 * k), 0.0])
+			if puffs.size() > 16:
+				puffs.pop_front()
+	for i in range(puffs.size() - 1, -1, -1):
+		puffs[i][1] += dt
+		if puffs[i][1] > 0.45:
+			puffs.remove_at(i)
+	if state == "playing":
+		elapsed += dt
+		if grace_t > 0.0:
+			grace_t -= dt
+		# Ёж выкатывается на след, когда герой уходит на вторую строку,
+		# и дальше катится строго по пройденному пути — без прыжков.
+		if not hedge_active and cursor_line >= 1:
+			hedge_active = true
+			enemy_line = 0
+			enemy_x = margin
+		if hedge_active and grace_t <= 0.0:
+			# Геометрия укола. Обе координаты — на общей сквозной оси
+			# (номер символа от начала уровня), разрывов нет: конец строки
+			# = начало следующей. Ёж всегда идёт (остановок нет), заяц —
+			# шагами вперёд или прыжками назад.
+			# D = touch + CONTACT_SLACK: геометрическая дистанция
+			# контакта в символах плюс крошечный запас (видимая щель
+			# между шарами в момент укола). Короткая строка 1 (< D)
+			# дала бы укол сразу при выходе ежа — таких строк нет (мин. 9).
+			# Проверка ДО шага: укол детерминирован, без гонки со свёрткой.
+			var h_lin := _lin(cursor_line, float(cursor_pos))
+			var e_lin := _lin(enemy_line, (enemy_x - margin) / char_w)
+			var D := _touch_chars() + CONTACT_SLACK
+			# Ось склеивает строки: конец строки N и начало N+1 — одна и
+			# та же точка. Поэтому «рядом на оси» ≠ «рядом на экране», и
+			# правило домоделируется по строкам. Ровно три случая:
+			#  1) Одна строка — укол, как только заяц не правее ежа на D.
+			#     Если ёж впереди на любом расстоянии — это тоже укол: ёж
+			#     всегда идёт, так что заяц мог оказаться позади только
+			#     прыжком назад через него, и это ровно «перепрыгнул ёжа».
+			#     Плавный догон ловится на границе сам (непрерывность).
+			#  2) Строка ежа МЕНЬШЕ строки зайца — укола нет: ёж ещё в
+			#     своей строке (середина или post-туннель за её краем),
+			#     до зайца ему целая строка миль. Ровно ради этого у
+			#     каждой строки свой отступ ENEMY_PRE_CHARS: ёж входит в
+			#     новую строку слева, и заяц в её начале успевает отойти,
+			#     вход в строку сам по себе укола не даёт.
+			#  3) Строка ежа БОЛЬШЕ строки зайца — это укол сразу, без
+			#     проверки расстояния. При нормальной игре так быть не
+			#     может: строку ежа он прошёл целиком (случай 2), значит
+			#     её прошёл и заяц, а назад его отбросила только опечатка
+			#     (кумулятивный откат через угол строк). Ловим ровно
+			#     это. По оси случай часто выглядит как «заяц впереди»
+			#     (ёж стоит в pre-туннеле своей строки, d < 0), но это не
+			#     «стояние рядом», а побег: без укола заяц ушёл бы из
+			#     погони навсегда.
+			var d := e_lin - h_lin
+			var same_row := enemy_line == cursor_line
+			var contact := enemy_line > cursor_line or (same_row and d >= -D)
+			if contact:
+				# Позиции спрайтов на этом кадре ещё не обновлялись, так
+				# что переоцениваем зайца здесь — до отрисовки. Позицию
+				# ежа НЕ трогаем: он катится плавно, его координата в
+				# кадре касания и так верна.
+				if same_row:
+					# Одна строка: ровно на дистанцию контакта, с капами
+					# против прыжка через него (см. _settle_contact).
+					_settle_contact(cursor_line)
+				else:
+					# Откат через угол строк: табло укола показываем
+					# честное — заяц СТРОГО на строке ежа, координата
+					# ежа + Д, шары в касании. Капов здесь нет: прыжок
+					# между строками уже случился, это его честная цена.
+					_settle_contact(enemy_line, true)
+				_finish(false, "behind")
+			if state == "playing":
+				var llen := 1.0
+				if enemy_line < display_lines.size():
+					llen = maxf(1.0, float(display_lines[enemy_line].length()))
+				var pace := (llen + ENEMY_PRE_CHARS + ENEMY_POST_CHARS) / llen
+				enemy_x += enemy_cps * char_w * dt * pace
+				if enemy_line < display_lines.size():
+					var e_end := margin + (float(display_lines[enemy_line].length()) + ENEMY_POST_CHARS) * char_w
+					if enemy_x > e_end:
+						if enemy_line + 1 < display_lines.size():
+							enemy_line += 1
+							enemy_x = margin - ENEMY_PRE_CHARS * char_w
+						else:
+							enemy_x = e_end  # конец света: дальше идти некуда
+			# Резиновая лента: враг тянется к целевому темпу игрока, погоня
+			# остаётся напряжённой, но честной.
+			var target := B.target_cps(difficulty, _live_cpm())
+			enemy_cps = lerpf(enemy_cps, target, clampf(dt * 0.2, 0.0, 1.0))
+	# Картинка героя догоняет логический курсор бодрыми прыжками: фаза
+	# идёт от пройденного расстояния, на стоянке — мягкая посадка.
+	# ВНИМАНИЕ: блок стоит ПОСЛЕ догона и детекции укола. На уколе
+	# позиция зайца уже переоценена (_settle_contact), и общий лерп её
+	# тут же стёр бы обратно к курсору. Порядок кадра: детекция →
+	# переоценка позиций → отрисовка. На проигрыше не двигаем ничего:
+	# табло укола (заяц справа от ежа) должно держаться.
+	var hero_prev := hero_r
+	if state != "lost":
+		hero_r = hero_r.lerp(_hero_pos(), clampf(dt * 12.0, 0.0, 1.0))
+		var moved := (hero_r - hero_prev).length() / maxf(k, 0.01)
+		if moved > 0.02:
+			hop_ph += moved / 16.0 * PI
+		else:
+			hop_ph = lerpf(hop_ph, roundf(hop_ph / PI) * PI, clampf(dt * 10.0, 0.0, 1.0))
+	queue_redraw()
+	_refresh_hud()
+
+
+## Все буквы — одно начертание и кегль. Состояние только оттенком:
+## активная — чернила, будущая — средний серый, пройденная — светлый.
+func _refresh() -> void:
+	for l in display_lines.size():
+		if l >= text_labels.size():
+			break
+		var line := display_lines[l]
+		var out := ""
+		for p in line.length():
+			var ch := line.substr(p, 1)
+			var esc := ch
+			if ch == "[":
+				esc = "[lb]"
+			elif ch == "]":
+				esc = "[rb]"
+			var kk := _key(l, p)
+			if errors.has(kk):
+				# Затирание, а не вставка: красная нажатая буква ВМЕСТО
+				# буквы в клетке. Красные копятся назад по ходу отката.
+				# Нажатый по ошибке пробел невидим — показываем знак ␣.
+				var shown: String = errors[kk]
+				if shown == " ":
+					shown = "␣"
+				elif shown == "[":
+					shown = "[lb]"
+				elif shown == "]":
+					shown = "[rb]"
+				out += "[color=#c02727]" + shown + "[/color]"
+				continue
+			# Пройденное (съеденное или пропущенное) — серым.
+			var col := "#6f6a5e"
+			if passed.has(kk):
+				col = "#b3a996"
+			elif _is_active(ch):
+				col = "#1c1a16"
+			out += "[color=" + col + "]" + esc + "[/color]"
+		text_labels[l].text = out
+		text_labels[l].visible = true
+	for i in range(display_lines.size(), text_labels.size()):
+		text_labels[i].visible = false
+	_update_hint()
+
+
+## Подсказка следующей клавиши: буква (пробел — словом) или Backspace,
+## если висит неисправленная опечатка.
+func _update_hint() -> void:
+	if state != "playing":
+		hint_label.text = ""
+		return
+	if not errors.is_empty():
+		hint_label.text = "Жми: ⌫ Backspace"
+		return
+	var ch := _current()
+	if ch == " ":
+		hint_label.text = "Жми: Пробел"
+	elif ch == "":
+		hint_label.text = ""
+	else:
+		hint_label.text = "Жми: " + ch.to_upper()
+
+
+func _refresh_hud() -> void:
+	var acc := 1.0
+	var total := typed_ok + typed_bad
+	if total > 0:
+		acc = float(typed_ok) / float(total)
+	# Табло в две строки: верхняя — кто играет и как идут дела,
+	# нижняя — куда нажимать. В одну строку всё не влезает.
+	var who := profile_name if profile_name != S.GUEST else "гость"
+	var keys := " · все клавиши" if _all_keys() else ""
+	var lines := ["%s%s · Уровень %d · побед подряд %d/%d · %s · точность %d%% · CPM %.0f" % [
+		who, keys, difficulty, wins_in_row, B.WINS_TO_LEVEL_UP,
+		_hedge_status(), int(acc * 100.0), _live_cpm()
+	]]
+	if grace_t > 0.0 and state == "playing":
+		lines[0] = "Приготовься… старт через %d · печатай чёрные буквы!   |   %s" % [
+			int(ceil(grace_t)), lines[0]
+		]
+	lines.append("Enter — дальше · F2 — игроки · F11 — во весь экран · Esc — выход")
+	var txt := "\n".join(lines)
+	if show_dbg:
+		var dbg := "[dbg ex=%.0f eln=%d cur=%d:%d cw=%.1f k=%.2f ok=%d bad=%d]" % [
+			enemy_x, enemy_line, cursor_line, cursor_pos, char_w, k, typed_ok, typed_bad
+		]
+		txt = dbg + "\n" + txt
+	hud_label.text = txt
+
+
+## Герои бегут ПО строке, вместе с буквами: герой съедает букву
+## на своей клетке (клетка пустеет), при откате буква появляется снова.
+func _track_cy(line_idx: int) -> float:
+	return _line_y(line_idx) + mono.get_height(font_size) * 0.5
+
+
+## Начало строки в линейных координатах (за край — экстраполяция).
+func _line_base(l: int) -> float:
+	if line_base.is_empty():
+		return 0.0
+	if l < line_base.size():
+		return line_base[l]
+	return line_base.back() + float(display_lines.back().length())
+
+
+## Однозначная координата: символ от начала уровня. Строки склеены
+## подряд, конец строки = начало следующей — разрывов нет.
+func _lin(l: int, pos_chars: float) -> float:
+	return _line_base(l) + pos_chars
+
+
+## Видимая ширина шара зайца: шар заполняет текстуру целиком
+## (139 px из 160 высоты), поэтому это ширина спрайта.
+func _hero_ball_w() -> float:
+	return _unit_h() * k * float(HERO_TEX.get_width()) / float(HERO_TEX.get_height())
+
+
+## Видимая ширина шара ежа: спрайт квадратный, но шар уже альфа-бокса.
+func _hedge_ball_w() -> float:
+	return _unit_h() * k * float(HEDGE_TEX.get_width()) / float(HEDGE_TEX.get_height()) * HEDGE_BALL_FRAC
+
+
+## Половина видимого шара ежа — от центра до края иголок.
+func _hedge_half() -> float:
+	return _hedge_ball_w() * 0.5
+
+
+## Дистанция контакта в символах оси. На оси у зайца — ЛЕВЫЙ край
+## клетки буквы, а сам спрайт зайца центрируется на нём (см. _hero_pos),
+## то есть его правый край торчит на пол-шара в клетку. У ежа на оси —
+## ЦЕНТР шара. Шары соприкасаются, когда правый край зайца доходит до
+## левого края ежа, поэтому дистанция контакта — «пол-шара зайца +
+## полушара ежа». Ничего «на глаз»: считаем по альфа-боксам спрайтов.
+func _touch_chars() -> float:
+	return (_hero_ball_w() * 0.5 + _hedge_half()) / char_w
+
+
+## Позиция зайца в момент укола. Позицию ежа НЕ трогаем: он катится
+## плавно, его координата в кадре касания и так верна (шаг ежа в этом
+## кадре уже не делается — состояние стало «проигрыш»).
+## row — строка, на которой заяц обязан стоять: своя (на одной строке с
+## ежом) или строка ежа (откат через угол строк). Касание — это когда
+## ЛЕВЫЙ край зайца встаёт в ПРАВЫЙ край ежа, то есть заяц ровно в Д
+## от ежа.
+## exact — поставить ровно на касание, без капов: строки разные, и
+## прыжок между ними уже был, тянуть его дальше незачем.
+## Иначе (одна строка): стоял — замирает как есть; влетел в ёжа (прыжок
+## назад через него или откат после ошибки) — выталкиваем, но не дальше
+## капа; впереди точки касания (откат логики, картинка не доехала) —
+## подводим ровно до касания, тоже не дальше капа назад.
+func _settle_contact(row: int, exact := false) -> void:
+	var touch_x := enemy_x + _hedge_half()
+	if exact:
+		hero_r.x = touch_x
+	elif hero_r.x < touch_x:
+		hero_r.x = minf(touch_x, hero_r.x + SNAP_CAP_CHARS * char_w)
+	elif hero_r.x - touch_x <= SNAP_BACK_CHARS * char_w:
+		# Заяц впереди точки касания (откат логики, картинка не доехала).
+		# Подводим ровно до касания — но не дальше капа назад: рывок
+		# назад читается как телепорт, а заяц на уколе стоит насмерть.
+		hero_r.x = touch_x
+	hero_r.y = _track_cy(row)
+	hop_ph = roundf(hop_ph / PI) * PI
+
+
+## Экранный центр глифа под курсором (индексы совпадают с картинкой:
+## красные опечатки затирают букву, а не вставляются между).
+func _cursor_cx() -> float:
+	return margin + float(cursor_pos) * char_w + char_w * 0.5
+
+
+func _hero_pos() -> Vector2:
+	var bounce := 0.0
+	if bounce_t > 0.0:
+		bounce = -18.0 * k * bounce_t
+	# Заяц стоит ПЕРЕД буквой, спрайт центрируется на левом краю её
+	# клетки: буква остаётся читаемой, заяц заходит на пол-шара в клетку.
+	var half := HERO_TEX.get_width() * 0.5 * _spr_scale(HERO_TEX, _unit_h()).x
+	return Vector2(_cursor_cx() - char_w * 0.5 - half, _track_cy(cursor_line) + bounce)
+
+
+func _draw() -> void:
+	# Пока открыто меню игроков, геймплей стоит (см. _process), но
+	# картинка остаётся нарисованной: вернувшись по F2, игрок видит
+	# ту же позицию зайца и ежа, на которой свернул.
+	if state == "won" or state == "lost":
+		draw_rect(Rect2(Vector2.ZERO, Vector2(view_w, view_h)), Color(1, 1, 1, 0.55))
+	_draw_cursor_marker()
+	_draw_enemy()
+	# Героя рисуем всегда: на проигрыше у него шок на лице (укололи),
+	# съедения нет.
+	_draw_hero()
+
+
+## Маркер текущей буквы: курсор всегда видно, даже после отката через строки.
+func _draw_cursor_marker() -> void:
+	if state != "playing" or cursor_line >= display_lines.size():
+		return
+	var gx := margin + float(cursor_pos) * char_w
+	var gy := _line_y(cursor_line)
+	draw_rect(
+		Rect2(gx - 2.0 * k, gy, char_w + 4.0 * k, mono.get_height(font_size)),
+		Color(1.0, 0.82, 0.25, 0.5)
+	)
+
+
+## Заяц: один спрайт, поэтому вся анимация — трансформация. Ростом
+## с букву (_unit_h). Движение — бодрые прыжки (фаза от пройденного пути).
+## Выпад-укус на букву при съедении, наклон назад при отрыжке, моргание
+## веками, лёгкая дрожь от страха, когда ёж близко сзади.
+func _draw_hero() -> void:
+	var c := hero_r
+	var punch := 0.0
+	if chomp_t > 0.0:
+		punch = sin(PI * (1.0 - chomp_t / CHOMP_T))
+		c.x += 10.0 * k * punch
+		c.y -= 8.0 * k * punch
+	elif shake_t > 0.0:
+		var f := shake_t / SHAKE_T
+		c.x += sin(shake_t * 40.0) * 6.0 * k * f - 8.0 * k * f
+	if hedge_active and enemy_line == cursor_line and state == "playing":
+		var gap := (_cursor_cx() - char_w * 0.5) - enemy_x
+		if gap > 0.0 and gap < 130.0 * k:
+			# Ёж не хищник: дрожь на подступах еле заметна. На проигрыше
+			# (укололи) дрожи нет вовсе — только шок на лице.
+			c.x += sin(time * 55.0) * 0.8 * k
+	# Прыжок зайца: присед (гашение инерции) → парабола вверх-вниз →
+	# снова присед. Цикл быстрый, наверху не висит.
+	var ht := fmod(hop_ph, PI) / PI
+	var hop := 0.0
+	var crouch := 0.0
+	if ht < 0.3:
+		hop = sin(ht / 0.3 * PI * 0.5)
+	elif ht < 0.55:
+		hop = cos((ht - 0.3) / 0.25 * PI * 0.5)
+	else:
+		crouch = 1.0 - (ht - 0.55) / 0.45
+	c.y -= hop * 7.0 * k
+	# Дыхание, чтобы не был статуей.
+	var breathe := 1.0 + 0.02 * sin(time * 2.5)
+	var sq := Vector2((1.0 + 0.22 * punch) * breathe, (1.0 - 0.12 * punch) / breathe)
+	sq *= Vector2(1.0 + 0.07 * crouch, 1.0 - 0.06 * crouch)
+	sq *= Vector2(1.0 - 0.03 * hop, 1.0 + 0.04 * hop)
+	var s := _spr_scale(HERO_TEX, _unit_h()) * sq
+	draw_set_transform(c, 0.0, s)
+	draw_texture(HERO_TEX, -HERO_TEX.get_size() * 0.5)
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	if blink_t > 0.0 and state != "lost":
+		# Веки — две чёрточки поперёк глаз. Рамки глаз измерены по
+		# спрайту 139x160: центры (-15, 0) и (+28, 0) от его центра.
+		var e := _spr_scale(HERO_TEX, _unit_h())
+		for ex in [-15.0, 28.0]:
+			var p := c + Vector2(ex, 0.0) * e.x
+			draw_line(
+				p + Vector2(-13.0, 0.0) * e.x, p + Vector2(13.0, 0.0) * e.x,
+				Color("#3a3230"), 4.0 * e.x
+			)
+	if state == "lost":
+		# Укололи: глаза навыкате (белки + зрачки), рот раскрыт.
+		# Координаты глаз — те же рамки, что у век выше.
+		var e2 := _spr_scale(HERO_TEX, _unit_h())
+		for ex in [-15.0, 28.0]:
+			var p2 := c + Vector2(ex, 0.0) * e2.x
+			draw_circle(p2, 15.0 * e2.x, Color.WHITE)
+			draw_circle(p2, 7.0 * e2.x, Color("#1c1a16"))
+		var m := c + Vector2(6.0, 34.0) * e2.x
+		draw_set_transform(m, 0.0, Vector2(0.75, 1.1) * e2.x)
+		draw_circle(Vector2.ZERO, 10.0, Color("#5a2323"))
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	if chomp_t > 0.0:
+		for i in 4:
+			var a := time * 9.0 + float(i) * 1.6
+			# Крошки летят ИЗ БУКВЫ (её центр), а не изо рта героя: буква
+			# съедена — из неё и брызги, иначе пятна липнут на морде.
+			var from := Vector2(_cursor_cx(), _track_cy(cursor_line))
+			var crumb := from + Vector2(cos(a), sin(a)) * 8.0 * k
+			draw_circle(crumb, 2.0 * k, Color("#8a5a2b"))
+
+
+## Пыль из-под лап: серые кружки тают за 0.45 c.
+func _draw_puffs() -> void:
+	for p in puffs:
+		var age: float = p[1]
+		var a := 1.0 - age / 0.45
+		var pos: Vector2 = p[0] + Vector2(-6.0, -22.0) * age * k
+		draw_circle(pos, (6.0 - 8.0 * age) * k, Color(0.6, 0.55, 0.5, 0.35 * a))
+
+
+## Масштаб спрайта под целевую высоту (с учётом k окна).
+func _spr_scale(tex: Texture2D, target_h: float) -> Vector2:
+	var s := target_h * k / tex.get_height()
+	return Vector2(s, s)
+
+
+## Один размер на троих: герои ростом с букву (высота текстовой строки).
+func _unit_h() -> float:
+	return mono.get_height(font_size) / k
+
+
+## Ёж-колобок: шара без ног походка не нужна — катится: покачивание
+## из стороны в сторону + прыжки со сплющиванием в момент касания.
+## В точке контакта просто остаётся, без отскока (укол — не удар).
+func _draw_enemy() -> void:
+	if not hedge_active or enemy_line >= display_lines.size():
+		return
+	var running := state == "playing" and grace_t <= 0.0
+	var c := Vector2(enemy_x, _track_cy(enemy_line))
+	var sq := Vector2.ONE
+	var wob := 0.0
+	if running:
+		var ph := time * HEDGE_WOB_W
+		var air := maxf(0.0, sin(ph))
+		c.y -= air * HEDGE_BOB_H * k
+		var flat := maxf(0.0, -sin(ph))
+		sq = Vector2(1.0 + 0.06 * flat, 1.0 - 0.06 * flat)
+		wob = 0.10 * sin(ph) - 0.04 * air
+	# Выпада нет: укол — не удар. В точке контакта ёж просто остаётся.
+	var s := _spr_scale(HEDGE_TEX, _unit_h()) * sq
+	draw_set_transform(c, wob, s)
+	draw_texture(HEDGE_TEX, -HEDGE_TEX.get_size() * 0.5)
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	_draw_puffs()

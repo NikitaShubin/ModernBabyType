@@ -1,0 +1,59 @@
+# Релиз — по тегу вида v0.0.1, а обычный запуск вручную (workflow_dispatch)
+# просто собирает и складывает артефакты без публикации.
+#
+# Сборка ровно та же, что на машине автора: тот же tools/docker/Dockerfile
+# и тот же tools/docker/build-game.sh. Отдельные шаги под каждую платформу
+# здесь были бы второй копией правил, а любая из них рано или поздно
+# разошлась бы с локальной сборкой.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Тесты и экспорт в одном шаге не случайно: build-game.sh --all
+      # сначала гоняет все три теста и только потом экспортирует. Релиз
+      # нельзя собрать на сломанной механике, отдельный шаг с тестами
+      # этому не мешал бы, только заставил бы прогонять chase_test
+      # (около пяти минут) дважды.
+      - name: Тесты и экспорт
+        run: tools/docker/build-game.sh --all
+
+      # Тег и версия проекта обязаны совпадать, иначе в релизе окажется
+      # сборка с другой версией внутри, чем написано в имени файла.
+      - name: Сверить версию с тегом
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          got="$(sed -n 's/^config\/version="\(.*\)"$/\1/p' game/project.godot)"
+          if [ "$want" != "$got" ]; then
+            echo "тег $GITHUB_REF_NAME, а в game/project.godot версия «${got:-не задана}»" >&2
+            exit 1
+          fi
+          echo "версия $want совпадает"
+
+      - name: Артефакты
+        uses: actions/upload-artifact@v4
+        with:
+          name: ModernBabyType-${{ github.ref_name }}
+          path: game/dist/
+          if-no-files-found: error
+
+      - name: Релиз
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: game/dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

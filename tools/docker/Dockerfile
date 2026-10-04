@@ -1,0 +1,61 @@
+# Образ для сборки, тестов и съёмки кадров игры.
+#
+# Поверх barichello/godot-ci:4.3 добавляем софтверный OpenGL (Mesa) и
+# env-скрипт mbt-godot. Без Mesa Godot в контейнере не может открыть
+# окно даже на Xvfb: EGL не грузится, и --headless тем не помогает — в
+# нём фиктивный рендерер, из которого не взять картинку.
+#
+# В образе уже есть всё для экспорта на все четыре платформы:
+#   * export templates 4.3 (в $HOME/.local/share/godot/export_templates),
+#   * JDK 17 и Android SDK с build-tools/platform-tools/ndk (нужны
+#     только для генерации автозагрузки при включённом gradle build; у
+#     нас он выключен, но держим под рукой),
+#   * /opt/rcedit.exe + wine64 — правка иконки и версии в .exe,
+#   * zip/unzip — macOS-экспорт собирается в .zip.
+FROM barichello/godot-ci:4.3
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgl1-mesa-dri \
+        libglx-mesa0 \
+        libegl1 \
+        libgl1 \
+        libgles2 \
+        zip \
+        unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# llvmpipe: рендер на CPU, видеокарта в контейнере не нужна
+ENV LIBGL_ALWAYS_SOFTWARE=1
+ENV GALLIUM_DRIVER=llvmpipe
+
+# Пути к rcedit и wine. Godot берёт их из editor_settings при
+# --export-release и молча оставляет .exe с иконкой движка, если не
+# нашёл. Пути прописаны в настройках на старте контейнера.
+ENV GODOT_RCEDIT=/opt/rcedit.exe
+ENV GODOT_WINE=/usr/bin/wine64-stable
+
+# WINEPREFIX обязан лежать во временном каталоге контейнера, а не в
+# примонтированном tools/home: wine отказывается создавать префикс в
+# каталоге, который ему не принадлежит, а каталоги на Windows-диске,
+# примонтированные на хосте, выглядят принадлежащими root. Иначе
+# экспорт Windows молча остаётся без иконки: rcedit не запустился, а
+# ошибки никто не печатает.
+ENV WINEPREFIX=/tmp/mbt-wine
+ENV WINEDEBUG=-all
+
+# Скрипт на PATH: дописывает недостающие ключи в editor_settings
+# (идемпотентно) и генерирует debug-keystore для Android, если его
+# нет. И то и другое нужно любой сборке, поэтому происходит на слое
+# сборки образа, а не в скриптах CI. Ключ остаётся в образе и не
+# попадает ни в репозиторий, ни в артефакты релиза.
+COPY mbt-godot-env.sh /usr/local/bin/mbt-godot
+RUN chmod +x /usr/local/bin/mbt-godot \
+    # Прогреваем настройки и keystore на слое образа: первый экспорт в
+    # CI не должен тратить время на keytool, а если JDK в базовом
+    # образе не окажется, падать будет здесь, а не в рабочем потоке.
+    && mbt-godot --version \
+    && ls -l /opt/mbt/debug.keystore
+
+ENV GODOT_BIN=godot
+ENTRYPOINT ["/usr/local/bin/mbt-godot"]
+CMD ["--version"]
