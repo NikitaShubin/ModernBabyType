@@ -65,6 +65,10 @@ run_exports() {
 	if [ "$#" -gt 0 ]; then
 		PRESETS=("$@")
 	fi
+	# game/dist в git не входит (см. .gitignore): на чистом раннере его
+	# нет, а Godot не создаёт каталог под файл экспорта и падает
+	# «The given export path doesn't exist».
+	mkdir -p game/dist
 	for preset in "${PRESETS[@]}"; do
 		echo "--- экспорт: $preset"
 		case "$preset" in
