@@ -65,9 +65,40 @@ set_key() {
 	fi
 }
 
+# Шаблоны экспорта: локально лежат в примонтированном tools/home
+# (1.7 ГБ, в git не входит), а в CI этого каталога нет — checkout даёт
+# пустую папку, и движок искал бы шаблоны в пустоте. Тогда берём их из
+# образа (barichello/godot-ci везёт свои в /root/...), ссылкой, а не
+# копией: копировать 1.7 ГБ на каждый запуск CI — расточительно.
+# Локально ветка не срабатывает: каталог непуст, выходим сразу.
+ensure_templates() {
+	DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+	DEST="$DATA_HOME/godot/export_templates"
+	if [ -d "$DEST" ] && [ -n "$(ls -A "$DEST" 2>/dev/null)" ]; then
+		return 0
+	fi
+	for src in /root/.local/share/godot/export_templates /opt/mbt/export_templates; do
+		if [ -d "$src" ] && [ -n "$(ls -A "$src" 2>/dev/null)" ]; then
+			mkdir -p "$(dirname "$DEST")"
+			rm -rf "$DEST"
+			ln -s "$src" "$DEST"
+			echo "mbt-godot: шаблоны экспорта — ссылка на образ ($src)" >&2
+			return 0
+		fi
+	done
+	echo "mbt-godot: нет шаблонов экспорта ни в $DEST, ни в образе" >&2
+	return 1
+}
+
 ensure_settings() {
 	mkdir -p "$SETTINGS_DIR"
-	[ -f "$SETTINGS" ] || : >"$SETTINGS"
+	if [ ! -f "$SETTINGS" ]; then
+		# Пустого файла Godot не понимает (Parse Error: Expected '['),
+		# и тогда молча теряет пути к rcedit/wine — .exe остаётся без
+		# иконки. Минимальный валидный каркас; остальное движок допишет
+		# сам при сохранении настроек.
+		printf '[gd_resource type="EditorSettings" format=3]\n\n[resource]\n' >"$SETTINGS"
+	fi
 	set_key "export/windows/rcedit" "\"$RCEDIT\""
 	set_key "export/windows/wine" "\"$WINE\""
 	if have java; then
@@ -115,6 +146,7 @@ export_keystore_env() {
 }
 
 ensure_debug_keystore
+ensure_templates
 ensure_settings
 export_keystore_env
 

@@ -43,7 +43,14 @@ ENV GODOT_WINE=/usr/bin/wine64-stable
 ENV WINEPREFIX=/tmp/mbt-wine
 ENV WINEDEBUG=-all
 
-# Скрипт на PATH: дописывает недостающие ключи в editor_settings
+# Шаблоны экспорта из базового образа лежат под /root, а контейнер
+# работает от uid автора (см. build-game.sh --user): без прав на чтение
+# и проход резервная ветка ensure_templates() в mbt-godot-env.sh их не
+# увидит. Копировать 1.7 ГБ в /opt ради этого расточительно — достаточно
+# открыть чтение (слой весит байты, а не гигабайты).
+RUN chmod a+x /root /root/.local /root/.local/share /root/.local/share/godot \
+    && chmod -R a+rX /root/.local/share/godot/export_templates \
+    && ls /root/.local/share/godot/export_templates/
 # (идемпотентно) и генерирует debug-keystore для Android, если его
 # нет. И то и другое нужно любой сборке, поэтому происходит на слое
 # сборки образа, а не в скриптах CI. Ключ остаётся в образе и не
