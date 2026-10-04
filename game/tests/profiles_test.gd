@@ -49,6 +49,7 @@ func _process(_dt: float) -> bool:
 	_part8_all_keys_key()
 	_part9_main_game()
 	_part10_first_run()
+	_part11_hidden_menu()
 	_report()
 	return true
 
@@ -310,6 +311,11 @@ func _part9_main_game() -> void:
 	# F2 в меню не должен забывать последнего игрока в файле.
 	_check(S.get_last_user() == S.GUEST, "F2 from the menu keeps last user as guest")
 	# Enter в списке входит на выбранного профиля, а не на первого.
+	# Меню после F2-возврата закрыто, а скрытое меню клавиш не видит
+	# (проверка видимости в _unhandled_key_input) — открываем заново,
+	# как это делает игрок.
+	_main.call("_unhandled_key_input", _key(KEY_F2))
+	_check(_main.menu_open, "F2 reopens the menu for the enter test")
 	menu.call("_reload")
 	menu.input_active = false
 	menu.sel = 1
@@ -321,8 +327,9 @@ func _part9_main_game() -> void:
 		"the game switches to the selected profile"
 	)
 	_check(not _main.menu_open, "enter closes the menu")
-	# Больше MAX_NAME_LENGTH символов в имя не влезает.
-	menu.call("_unhandled_key_input", _key(KEY_F2))
+	# Больше MAX_NAME_LENGTH символов в имя не влезает. Меню Enter
+	# закрыл, открываем заново: скрытое меню набор не видит.
+	_main.call("_unhandled_key_input", _key(KEY_F2))
 	menu.call("_reload")
 	menu.call("_toggle_input")
 	for ch in "абвгдеёжзийклмнопрст":
@@ -437,6 +444,38 @@ func _part10_first_run() -> void:
 	_picked = ""
 	_menu.call("_unhandled_key_input", _key(KEY_ENTER))
 	_check(_picked == S.GUEST, "enter on an empty field and list is guest")
+
+
+## Скрытое меню глухое: пока идёт игра, клавиши разбирает она, а не
+## меню (оно добавлено позже и получает _unhandled_key_input первым).
+## Без проверки видимости F2 во время игры молча перезапускал гостя,
+## а буква Ф (тот же keycode, что и A) переключала «все клавиши».
+func _part11_hidden_menu() -> void:
+	S.create_user("Жора")
+	_menu.call("_reload")
+	_menu.sel = 0
+	# Как после возврата в игру по F2: меню скрыто, но поле ввода
+	# осталось включённым, а resume_user — от прошлого открытия.
+	_menu.input_active = true
+	_menu.resume_user = "Жора"
+	_menu.visible = false
+	_picked = ""
+	_menu.call("_unhandled_key_input", _key(KEY_F2))
+	_check(_picked == "", "hidden menu ignores F2")
+	_menu.call("_unhandled_key_input", _key_event("Ф"))
+	_check(String(_menu.input_text) == "", "hidden menu ignores typing")
+	_menu.input_active = false
+	_menu.call("_unhandled_key_input", _typed_key(KEY_A, "a"))
+	_check(
+		not S.get_all_keys("Жора"), "hidden menu does not toggle all_keys"
+	)
+	_menu.visible = true
+	# resume_user ставит игра при открытии меню (_open_menu): проверяем
+	# ту же связку — F2 возвращает того, с кем меню открыли.
+	_menu.resume_user = "Жора"
+	_menu.call("_unhandled_key_input", _key(KEY_F2))
+	_check(_picked == "Жора", "visible menu answers F2 with resume_user")
+	S.delete_user("Жора")
 
 
 ## Сколько разных букв на экране во взрослом режиме: все знаки

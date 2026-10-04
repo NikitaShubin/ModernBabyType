@@ -40,6 +40,8 @@
 - `game/` — игра целиком: Godot 4.3, десктоп Windows/Linux/macOS и Android.
   - `game/scenes/main.tscn` + `game/scripts/main.gd` — игровой экран.
   - `game/scenes/menu.tscn` + `game/scripts/menu.gd` — меню игроков.
+    Скрытое меню клавиш не видит, иначе перехватывает ввод раньше игры.
+  - `game/scripts/meadow.gd` — общий фон (небо, солнце, облака, холмы).
   - `game/scripts/balance.gd` — чистая логика сложности (без узлов сцены).
   - `game/scripts/save.gd` — профили в `user://modern_baby_type.cfg`.
   - `game/texts/*.txt` — тексты уровней (пять файлов, все со знаками).

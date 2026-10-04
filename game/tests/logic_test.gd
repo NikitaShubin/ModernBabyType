@@ -461,7 +461,10 @@ func _run_part2() -> void:
 	_main._type_char(_main._current())
 	_check(_main.cursor_pos == 1, "the restored first letter can be typed again")
 
-	# --- Откат на клетку с остатками опечатки: клетка становится целой. -
+	# --- Откат на клетку с остатками опечатки: верный набор стирает метку.
+	# Баг автора: ложный пробел пережил Backspace мимо и остался красным,
+	# хотя буква потом набралась верно. Метка — про «здесь ошиблись»,
+	# а не клеймо навсегда: верная буква её закрывает.
 	_main._new_level()
 	_main.cursor_line = 1
 	_main.cursor_pos = _safe_pos(1, 10)
@@ -475,8 +478,8 @@ func _run_part2() -> void:
 	_main._type_char(_main._current())  # и прошли её: курсор на pm+1
 	_check(_main.cursor_pos == pm + 1, "the typo was fixed and passed")
 	_check(
-		_main.errors.has(_cell_key(1, pm)) and _main.passed.has(_cell_key(1, pm)),
-		"the red mark outlives the fix and stays on the passed cell"
+		not _main.errors.has(_cell_key(1, pm)) and _main.passed.has(_cell_key(1, pm)),
+		"correct typing erases the stale mark: the cell is passed and clean"
 	)
 	_main._backspace()
 	_check(_main.cursor_pos == pm, "retreat lands on the marked cell")

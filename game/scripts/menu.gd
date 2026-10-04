@@ -29,8 +29,8 @@ const PAPER := Color("#f7f3e8")
 const INK := Color("#1c1a16")
 const UI_TEXT := Color("#4a4438")
 const DIM := Color("#8d8778")
-const SEL_BG := Color("#f0d98a")
 const ALL_KEYS_BADGE := "⌨ все клавиши"
+const HERO_TEX: Texture2D = preload("res://assets/hero.png")
 
 var users: Array[String] = []
 var sel := 0
@@ -42,6 +42,13 @@ var view_w := BASE_W
 var view_h := BASE_H
 var k := 1.0
 var mono: SystemFont
+## Оформление (только картинка): скруглённые чипсы под строками,
+## рамка поля ввода и пилюля подсказки. Строки и тексты не меняются —
+## их проверяют тесты, поэтому здесь лишь рамки вокруг тех же слов.
+var row_sb: StyleBoxFlat
+var row_idle_sb: StyleBoxFlat
+var box_sb: StyleBoxFlat
+var hint_sb: StyleBoxFlat
 
 
 func _ready() -> void:
@@ -49,6 +56,11 @@ func _ready() -> void:
 	mono.font_names = PackedStringArray(
 		["DejaVu Sans Mono", "Consolas", "Courier New", "monospace"]
 	)
+	row_sb = _panel_sb(Color("#f0d98a"), 12.0)
+	row_idle_sb = _panel_sb(Color(1, 1, 1, 0.45), 12.0)
+	box_sb = _panel_sb(Color("#ffffff"), 10.0, INK, 2.0, false)
+	hint_sb = _panel_sb(Color(1, 1, 1, 0.72), 14.0, Color("#e0d5bd"), 1.5, false)
+	add_child(Meadow.new())
 	get_tree().root.size_changed.connect(_relayout)
 	_relayout()
 	_reload()
@@ -83,38 +95,53 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	var ke := event as InputEventKey
 	if ke == null or not ke.pressed or ke.echo:
 		return
+	# Скрытое меню клавиш не видит: иначе оно перехватывает ввод раньше
+	# игры (оно добавлено позже и получает _unhandled_key_input первым).
+	# Без этого F2 во время игры не открывал меню, а молча перезапускал
+	# гостя, буква Ф на русской раскладке (тот же keycode, что и A)
+	# переключала «все клавиши», а Tab уводил буквы в невидимое поле.
+	if not visible:
+		return
 	# F2 — вернуться в игру тем же игроком, кого открыли меню.
 	if ke.keycode == KEY_F2:
 		chosen.emit(resume_user)
-		get_viewport().set_input_as_handled()
+		_eaten()
 		return
 	if ke.keycode == KEY_UP:
 		_nav(-1)
+		_eaten()
 		return
 	if ke.keycode == KEY_DOWN:
 		_nav(1)
+		_eaten()
 		return
 	if ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER:
 		_enter()
+		_eaten()
 		return
 	if ke.keycode == KEY_TAB:
 		_toggle_input()
+		_eaten()
 		return
 	if ke.keycode == KEY_DELETE:
 		_delete()
+		_eaten()
 		return
 	if ke.keycode == KEY_ESCAPE:
 		_guest()
+		_eaten()
 		return
 	if ke.keycode == KEY_BACKSPACE:
 		if not input_active:
 			return
 		input_text = input_text.left(maxi(0, input_text.length() - 1))
 		queue_redraw()
+		_eaten()
 		return
 	# Взрослый режим — только когда поле ввода неактивно, иначе это буква.
 	if not input_active and _letter(ke) == "a":
 		_toggle_all_keys()
+		_eaten()
 		return
 	if not input_active or ke.unicode == 0:
 		return
@@ -125,6 +152,14 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		return
 	input_text += ch
 	queue_redraw()
+	_eaten()
+
+
+## Клавиша обслужена меню: игре её не отдавать, иначе Backspace
+## в поле имени заодно откатывал бы зайца, а A-переключатель —
+## печатался. Остальное (F3, F11) меню не трогает — их разбирает игра.
+func _eaten() -> void:
+	get_viewport().set_input_as_handled()
 
 
 ## Буква по коду клавиши: «A» без физической раскладки (в латинице на
@@ -148,6 +183,21 @@ func _toggle_input() -> void:
 	if not input_active:
 		input_text = ""
 	queue_redraw()
+
+
+## Стиль скруглённой панели (тот же приём, что в main.gd).
+func _panel_sb(bg: Color, radius: float, border := Color(0, 0, 0, 0), bw := 0.0, shadow := false) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = bg
+	sb.set_corner_radius_all(int(radius))
+	if bw > 0.0:
+		sb.set_border_width_all(int(bw))
+		sb.border_color = border
+	if shadow:
+		sb.shadow_color = Color(0.25, 0.20, 0.12, 0.18)
+		sb.shadow_size = 6
+		sb.shadow_offset = Vector2(0, 3)
+	return sb
 
 
 func _enter() -> void:
@@ -203,8 +253,10 @@ func _row_caption(name: String) -> String:
 
 
 func _text_size(txt: String, size_px: int) -> Vector2:
+	# Тот же кегль, что в _text: иначе рамки вокруг строк (чипсы,
+	# пилюля подсказки) меряются в одном масштабе, а рисуются в другом.
 	return mono.get_string_size(
-		txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, size_px
+		txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, int(float(size_px) * k)
 	)
 
 
@@ -216,12 +268,20 @@ func _text(txt: String, pos: Vector2, size_px: int, col: Color) -> void:
 
 
 func _draw() -> void:
-	draw_rect(Rect2(Vector2.ZERO, Vector2(view_w, view_h)), PAPER)
+	# Вуаль вместо глухой заливки: игра позади чуть видна, и понятно,
+	# что меню — пауза, а не другой экран. Строки и тексты те же, что
+	# были, вокруг них лишь карточки.
+	var veil := PAPER
+	veil.a = 0.94
+	draw_rect(Rect2(Vector2.ZERO, Vector2(view_w, view_h)), veil)
 	var cx := view_w * 0.5
 	var top := 90.0 * k
+	var title := "Кто играет?"
+	var title_w := _text_size(title, FONT_TITLE).x
+	_draw_bunny(Vector2(cx - title_w * 0.5 - 78.0 * k, top - 20.0 * k))
 	_text(
-		"Кто играет?",
-		Vector2(cx - _text_size("Кто играет?", FONT_TITLE).x * 0.5, top),
+		title,
+		Vector2(cx - title_w * 0.5, top),
 		FONT_TITLE,
 		INK
 	)
@@ -233,28 +293,62 @@ func _draw() -> void:
 			FONT_ROW,
 			DIM
 		)
+	# Каждая строка — отдельным «чипсом» по ширине текста: выбранный
+	# жёлтый, остальные белые. Сплошная плита на всю ширину сливалась
+	# с выделением в один жёлтый slab.
 	for i in users.size():
 		var row_y := y + float(i) * ROW_H * k
-		if i == sel:
-			var cap := _row_caption(users[i])
-			var w := maxf(view_w - 80.0 * k, _text_size(cap, FONT_ROW).x)
-			draw_rect(
-				Rect2(40.0 * k, row_y - 34.0 * k, w, ROW_H * k), SEL_BG
-			)
-		_text(_row_caption(users[i]), Vector2(60.0 * k, row_y), FONT_ROW, INK)
+		var cap := _row_caption(users[i])
+		var chip := Rect2(
+			44.0 * k, row_y - 36.0 * k,
+			_text_size(cap, FONT_ROW).x + 32.0 * k, ROW_H * k - 10.0 * k
+		)
+		draw_style_box(row_sb if i == sel else row_idle_sb, chip)
+		_text(cap, Vector2(60.0 * k, row_y), FONT_ROW, INK)
 	y += float(maxi(users.size(), 1)) * ROW_H * k + 30.0 * k
 	# Поле ввода нового имени.
 	var field := "Имя: " + input_text + ("|" if input_active else "")
+	var field_txt := ("> " if input_active else "  ") + field
+	if input_active:
+		var fw := _text_size(field_txt, FONT_ROW).x
+		draw_style_box(
+			box_sb,
+			Rect2(48.0 * k, y - 38.0 * k, maxf(fw + 48.0 * k, 420.0 * k), 54.0 * k)
+		)
 	_text(
-		("> " if input_active else "  ") + field,
+		field_txt,
 		Vector2(60.0 * k, y),
 		FONT_ROW,
 		INK if input_active else DIM
 	)
 	y += 60.0 * k
-	_text(
-		_hint(), Vector2(60.0 * k, minf(y, view_h - 60.0 * k)), FONT_SMALL, UI_TEXT
+	# Подсказка — в пилюле по центру низа, в две строки: в одну она
+	# не влезает в окно. Делим только для показа, сама строка та же.
+	var lines := _hint_lines()
+	var hy := minf(y, view_h - 60.0 * k - 30.0 * k * float(lines.size() - 1))
+	var widest := 0.0
+	for ln in lines:
+		widest = maxf(widest, _text_size(ln, FONT_SMALL).x)
+	# Замер шрифта чуть уже отрисовки: запас, чтобы текст не торчал.
+	widest += 20.0 * k
+	draw_style_box(
+		hint_sb,
+		Rect2(
+			cx - widest * 0.5 - 24.0 * k, hy - 30.0 * k,
+			widest + 48.0 * k, 30.0 * k * float(lines.size()) + 22.0 * k
+		)
 	)
+	for li in lines.size():
+		var lw := _text_size(lines[li], FONT_SMALL).x
+		_text(lines[li], Vector2(cx - lw * 0.5, hy + 30.0 * k * float(li)), FONT_SMALL, UI_TEXT)
+
+
+## Зайчик рядом с заголовком: тот же спрайт, что в игре.
+func _draw_bunny(c: Vector2) -> void:
+	var s := 76.0 * k / HERO_TEX.get_height()
+	draw_set_transform(c, 0.0, Vector2(s, s))
+	draw_texture(HERO_TEX, -HERO_TEX.get_size() * 0.5)
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 
 func _hint() -> String:
@@ -272,3 +366,26 @@ func _hint() -> String:
 		+ "   ·   A — все клавиши" + tail
 		+ "   ·   Delete — удалить   ·   Esc — без профиля"
 	)
+
+
+## Подсказка для показа: та же строка, но разложенная в две строчки —
+## в одну она не влезает в окно. Делим жадно пополам по «·», саму
+## строку не трогаем (её проверяют тесты).
+func _hint_lines() -> Array[String]:
+	var hint := _hint()
+	var parts := hint.split(" · ")
+	if parts.size() <= 1:
+		return [hint]
+	var lines: Array[String] = []
+	var cur := ""
+	var budget := float(hint.length()) / 2.0
+	for p in parts:
+		var add := p if cur == "" else " · " + p
+		if cur != "" and lines.is_empty() and float((cur + add).length()) > budget:
+			lines.append(cur)
+			cur = p
+		else:
+			cur += add
+	if cur != "":
+		lines.append(cur)
+	return lines

@@ -147,6 +147,22 @@ var all_keys_override := -1
 var skip_menu := false
 var menu: Node = null
 var menu_open := false
+## Оформление (только картинка, логику не трогает): скруглённые панели
+## под карточкой текста, табло и подсказкой. Стили создаются раз в
+## _ready, геометрию считает _layout_card().
+var card_sb: StyleBoxFlat
+var pill_sb: StyleBoxFlat
+var over_sb: StyleBoxFlat
+var cursor_sb: StyleBoxFlat
+var bar_track_sb: StyleBoxFlat
+var bar_fill_sb: StyleBoxFlat
+var card_p: Panel
+var hud_p: Panel
+var hint_p: Panel
+var over_p: Panel
+## Сколько букв в уровне всего: знаменатель полосы прогресса.
+## Считается в _new_level, числитель — passed.size().
+var level_total := 0
 
 
 func _ready() -> void:
@@ -183,6 +199,24 @@ func _ready() -> void:
 	hint_label.add_theme_color_override("font_color", UI_TEXT)
 	add_child(hint_label)
 
+	# Оформление — отдельными узлами позади текста (z_index = -15):
+	# сами буквы живут в text_labels (z_index = -10), а _draw() рисует
+	# поверх них (z_index = 0), так что панели из _draw() текст бы
+	# перекрыли. Геометрию панелей считает _layout_card().
+	card_sb = _panel_sb(Color("#fffdf6"), 20.0, Color("#e0d5bd"), 2.0, true)
+	pill_sb = _panel_sb(Color(1, 1, 1, 0.72), 14.0, Color("#e0d5bd"), 1.5, false)
+	over_sb = _panel_sb(Color("#fffdf6"), 22.0, Color("#e0d5bd"), 2.0, true)
+	cursor_sb = _panel_sb(Color(1.0, 0.82, 0.25, 0.5), 8.0)
+	bar_track_sb = _panel_sb(Color("#e6dcc4"), 5.0)
+	bar_fill_sb = _panel_sb(Color("#7fb069"), 5.0)
+	card_p = _panel_node(card_sb)
+	hud_p = _panel_node(pill_sb)
+	hint_p = _panel_node(pill_sb)
+	over_p = _panel_node(over_sb)
+	for p in [card_p, hud_p, hint_p, over_p]:
+		add_child(p)
+	add_child(Meadow.new())
+
 	get_tree().root.size_changed.connect(_relayout)
 
 	# Аргументы запуска решают режим на старте, до чтения профиля.
@@ -200,6 +234,34 @@ func _ready() -> void:
 		# Профилей ещё нет — сразу показываем меню выбора.
 		profile_name = S.GUEST
 		_open_menu()
+
+
+## Стиль скруглённой панели. Тень — только у больших карточек: у
+## мелких пилюль она даёт грязь вместо глубины. Радиусы в пикселях, не
+## в k: на большом окне чуть менее кругло, зато без пересоздания
+## стилей при каждом ресайзе.
+func _panel_sb(bg: Color, radius: float, border := Color(0, 0, 0, 0), bw := 0.0, shadow := false) -> StyleBoxFlat:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = bg
+	sb.set_corner_radius_all(int(radius))
+	if bw > 0.0:
+		sb.set_border_width_all(int(bw))
+		sb.border_color = border
+	if shadow:
+		sb.shadow_color = Color(0.25, 0.20, 0.12, 0.18)
+		sb.shadow_size = 6
+		sb.shadow_offset = Vector2(0, 3)
+	return sb
+
+
+## Панель-подложка: видна, только когда её покажет раскладка.
+func _panel_node(sb: StyleBoxFlat) -> Panel:
+	var p := Panel.new()
+	p.add_theme_stylebox_override("panel", sb)
+	p.z_index = -15
+	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	p.visible = false
+	return p
 
 
 ## Все клавиши активны?
@@ -295,6 +357,10 @@ func _relayout() -> void:
 	var ow := 980.0 * k
 	overlay_label.size = Vector2(ow, 150.0 * k)
 	overlay_label.add_theme_font_size_override("font_size", int(40.0 * k))
+	hud_label.size = Vector2(view_w - margin * 2.0, 70.0 * k)
+	_layout_card()
+	_layout_pills()
+	_layout_overlay_panel()
 	queue_redraw()
 
 
@@ -323,12 +389,46 @@ func _layout_text_lines() -> void:
 			text_labels[i].visible = false
 
 
+## Карточка под текстом: собирает буквы в одно «поле для чтения», чтобы
+## они не выглядели разбросанными по полотну. Только картинка: позиции
+## букв, курсора и героев не трогает, геометрию берёт из тех же
+## переменных, что и текст.
+func _layout_card() -> void:
+	if display_lines.is_empty() or line_h <= 0.0:
+		card_p.visible = false
+		return
+	var pad := 24.0 * k
+	var r := Rect2(
+		margin - pad, text_y - 20.0 * k,
+		view_w - (margin - pad) * 2.0,
+		float(display_lines.size()) * line_h + 40.0 * k
+	)
+	card_p.position = r.position
+	card_p.size = r.size
+	card_p.visible = true
+
+
+## Пилюли под табло и подсказкой: тёмный текст читается и на небе.
+func _layout_pills() -> void:
+	hud_p.position = hud_label.position + Vector2(-14.0 * k, -8.0 * k)
+	hud_p.size = hud_label.size + Vector2(28.0 * k, 16.0 * k)
+	hint_p.position = hint_label.position + Vector2(-14.0 * k, -8.0 * k)
+	hint_p.size = hint_label.size + Vector2(28.0 * k, 16.0 * k)
+
+
 func _toggle_fullscreen() -> void:
 	var root := get_tree().root
 	if root.mode == Window.MODE_FULLSCREEN:
 		root.mode = Window.MODE_WINDOWED
 	else:
 		root.mode = Window.MODE_FULLSCREEN
+
+
+## Панель под модалкой победы/поражения: тот же картон, что и у текста.
+func _layout_overlay_panel() -> void:
+	over_p.position = overlay_label.position + Vector2(-24.0 * k, -16.0 * k)
+	over_p.size = overlay_label.size + Vector2(48.0 * k, 32.0 * k)
+	over_p.visible = overlay_label.visible
 
 
 func _key(l: int, p: int) -> String:
@@ -386,6 +486,7 @@ func _new_level() -> void:
 	for line in display_lines:
 		line_base.append(acc)
 		acc += float(line.length())
+	level_total = int(acc)
 	if _all_keys():
 		# Взрослый режим: набирается всё, что видно, регистр важен.
 		exact_case = true
@@ -411,6 +512,7 @@ func _new_level() -> void:
 	enemy_line = 0
 	state = "playing"
 	overlay_label.visible = false
+	over_p.visible = false
 	_skip_inactive()
 	hero_r = _hero_pos()
 	shake_t = 0.0
@@ -520,7 +622,14 @@ func _type_char(ch: String) -> void:
 	# Нажата именно та буква, что написана (хоть активная, хоть серая) —
 	# это не опечатка: клетка становится пройденной (серой), идём дальше.
 	if _eq(ch, expected):
-		passed[_key(cursor_line, cursor_pos)] = true
+		var kk := _key(cursor_line, cursor_pos)
+		# Верный набор стирает и старую красную метку: иначе опечатка,
+		# на которую заяц вернулся позже (откат, Backspace мимо соседней
+		# метки), висела бы вечно, хотя буква уже набрана. Именно так
+		# автор и застрял с «ложным пробелом»: текст набрался, а красное
+		# подчёркивание осталось.
+		errors.erase(kk)
+		passed[kk] = true
 		typed_ok += 1
 		chomp_t = CHOMP_T
 		_advance()
@@ -670,6 +779,7 @@ func _finish(won: bool, reason := "") -> void:
 		overlay_label.add_theme_color_override("font_color", DARK_RED)
 		overlay_label.text = "Ай, укололся!\nEnter — ещё раз (ёж стал медленнее)"
 	overlay_label.visible = true
+	over_p.visible = true
 	_refresh()
 
 
@@ -681,6 +791,7 @@ func _process(dt: float) -> void:
 		queue_redraw()
 		return
 	_layout_text_lines()
+	_layout_card()
 	if chomp_t > 0.0:
 		chomp_t -= dt
 	if bounce_t > 0.0:
@@ -886,8 +997,11 @@ func _refresh_hud() -> void:
 		_hedge_status(), int(acc * 100.0), _live_cpm()
 	]]
 	if grace_t > 0.0 and state == "playing":
-		lines[0] = "Приготовься… старт через %d · печатай чёрные буквы!   |   %s" % [
-			int(ceil(grace_t)), lines[0]
+		# На обратном отсчёте — только он: полная строка со статистикой
+		# в пилюлю не влезает, а цифры всё равно нулевые. Табло вернётся
+		# через три секунды.
+		lines[0] = "Приготовься… старт через %d · печатай чёрные буквы!" % [
+			int(ceil(grace_t))
 		]
 	lines.append("Enter — дальше · F2 — игроки · F11 — во весь экран · Esc — выход")
 	var txt := "\n".join(lines)
@@ -897,6 +1011,24 @@ func _refresh_hud() -> void:
 		]
 		txt = dbg + "\n" + txt
 	hud_label.text = txt
+	# Пилюли за текстом: табло видно всегда, подсказка — только пока
+	# есть что подсказывать. Высота табло зависит от отладочной строки,
+	# а ширина — от самой длинной строки: «Приготовься…» с обратным
+	# отсчётом шире обычных двух строк и вылезала за пилюлю.
+	var hud_lines := 2.0 + (1.0 if show_dbg else 0.0)
+	var need := hud_p.size.x
+	var fs := int(18.0 * k)
+	for ln in txt.split("\n"):
+		need = maxf(
+			need,
+			mono.get_string_size(ln, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x + 30.0 * k
+		)
+	hud_p.size = Vector2(
+		minf(need, view_w - margin * 2.0 + 28.0 * k),
+		(hud_lines * 23.0 + 14.0) * k
+	)
+	hud_p.visible = true
+	hint_p.visible = hint_label.text != ""
 
 
 ## Герои бегут ПО строке, вместе с буквами: герой съедает букву
@@ -996,11 +1128,47 @@ func _draw() -> void:
 	# ту же позицию зайца и ежа, на которой свернул.
 	if state == "won" or state == "lost":
 		draw_rect(Rect2(Vector2.ZERO, Vector2(view_w, view_h)), Color(1, 1, 1, 0.55))
+	_draw_level_badge()
+	_draw_progress()
 	_draw_cursor_marker()
 	_draw_enemy()
 	# Героя рисуем всегда: на проигрыше у него шок на лице (укололи),
 	# съедения нет.
 	_draw_hero()
+
+
+## Кружок с номером уровня в пустом левом верхнем углу: и красиво,
+## и уровень всегда перед глазами, а не только в табло.
+func _draw_level_badge() -> void:
+	var c := Vector2(46.0 * k, 50.0 * k)
+	var r := 26.0 * k
+	draw_circle(c, r + 3.0 * k, Color("#e0d5bd"))
+	draw_circle(c, r, Color("#7fb069"))
+	var t := str(difficulty)
+	var fs := int(30.0 * k)
+	var w := mono.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs)
+	draw_string(
+		mono, c + Vector2(-w.x * 0.5, w.y * 0.35), t,
+		HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs, Color.WHITE
+	)
+
+
+## Полоса прогресса уровня под карточкой: съедено столько-то из стольких.
+## Числитель — пройденные клетки, знаменатель — все буквы уровня.
+func _draw_progress() -> void:
+	if level_total <= 0 or not card_p.visible:
+		return
+	var frac := clampf(float(passed.size()) / float(level_total), 0.0, 1.0)
+	var r := Rect2(
+		card_p.position + Vector2(0, card_p.size.y + 10.0 * k),
+		Vector2(card_p.size.x, 10.0 * k)
+	)
+	draw_style_box(bar_track_sb, r)
+	if frac > 0.0:
+		draw_style_box(
+			bar_fill_sb,
+			Rect2(r.position, Vector2(maxf(r.size.x * frac, 10.0 * k), r.size.y))
+		)
 
 
 ## Маркер текущей буквы: курсор всегда видно, даже после отката через строки.
@@ -1009,9 +1177,9 @@ func _draw_cursor_marker() -> void:
 		return
 	var gx := margin + float(cursor_pos) * char_w
 	var gy := _line_y(cursor_line)
-	draw_rect(
-		Rect2(gx - 2.0 * k, gy, char_w + 4.0 * k, mono.get_height(font_size)),
-		Color(1.0, 0.82, 0.25, 0.5)
+	draw_style_box(
+		cursor_sb,
+		Rect2(gx - 2.0 * k, gy, char_w + 4.0 * k, mono.get_height(font_size))
 	)
 
 
