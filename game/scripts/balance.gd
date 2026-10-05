@@ -56,3 +56,35 @@ static func stars_for_result(won: bool, accuracy: float, errors: int) -> int:
 	if accuracy >= 0.94:
 		return 2
 	return 1
+
+
+## Разбить длинные строки под ширину экрана (портрет телефона): режем
+## по словам, пробел-разделитель уезжает в конец куска (пробел — тоже
+## клетка, символы не теряются). Чистая функция, матрица в logic_test.
+## Тексты с одиночными пробелами (проверено grep), двойные схлопнутся.
+static func fit_lines(raw: Array[String], max_chars: int) -> Array[String]:
+	var out: Array[String] = []
+	for line in raw:
+		if line.length() <= max_chars:
+			out.append(line)
+			continue
+		var cur := ""
+		for w0 in line.split(" ", false):
+			var w := w0
+			while w.length() > max_chars:
+				# Слово-монстр (в текстах таких нет, но без страховки
+				# было бы зависание): рубим жёстко кусками.
+				if cur != "":
+					out.append(cur + " ")
+					cur = ""
+				out.append(w.left(max_chars))
+				w = w.substr(max_chars)
+			var add := w if cur == "" else cur + " " + w
+			if add.length() > max_chars:
+				out.append(cur + " ")
+				cur = w
+			else:
+				cur = add
+		if cur != "":
+			out.append(cur)
+	return out

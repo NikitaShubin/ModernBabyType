@@ -18,6 +18,13 @@ const SECTION_LAST := "last"
 const KEY_LAST_USER := "user"
 const GUEST := ""
 const MAX_NAME_LENGTH := 15
+## Оформление устройства, не игрока: ночной режим. -1 — как у системы,
+## 0 — день, 1 — ночь. Ручной выбор запоминается, по умолчанию система.
+const SECTION_DISPLAY := "display"
+const KEY_NIGHT := "night_mode"
+const NIGHT_AUTO := -1
+const NIGHT_DAY := 0
+const NIGHT_ON := 1
 
 static var PATH := "user://modern_baby_type.cfg"
 
@@ -181,6 +188,36 @@ static func touch(user_name: String) -> void:
 	var cfg := _cfg()
 	cfg.set_value(SECTION_PROFILES, user_name, data)
 	cfg.save(PATH)
+
+
+## Ночной режим устройства: -1 система, 0 день, 1 ночь. Чужое чистим
+## клампом, не ошибкой: файл руками правят.
+static func get_night_mode() -> int:
+	var cfg := _cfg()
+	return clampi(int(cfg.get_value(SECTION_DISPLAY, KEY_NIGHT, NIGHT_AUTO)), NIGHT_AUTO, NIGHT_ON)
+
+
+static func set_night_mode(mode: int) -> void:
+	var cfg := _cfg()
+	cfg.set_value(SECTION_DISPLAY, KEY_NIGHT, clampi(mode, NIGHT_AUTO, NIGHT_ON))
+	cfg.save(PATH)
+
+
+## Ночь прямо сейчас: ручной выбор важнее системы, без поддержки —
+## всегда день. Чистая функция от трёх флагов — матрица в profiles_test.
+static func resolve_night(mode: int, supported: bool, system_dark: bool) -> bool:
+	if mode == NIGHT_ON:
+		return true
+	if mode == NIGHT_DAY:
+		return false
+	return supported and system_dark
+
+
+## Темно ли в системе: на десктопе и в headless обычно нет.
+static func system_dark() -> bool:
+	if not DisplayServer.is_dark_mode_supported():
+		return false
+	return DisplayServer.is_dark_mode()
 
 
 static func _now() -> int:

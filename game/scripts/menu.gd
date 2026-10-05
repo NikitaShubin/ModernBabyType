@@ -43,7 +43,7 @@ var resume_user := ""
 var view_w := BASE_W
 var view_h := BASE_H
 var k := 1.0
-var mono: SystemFont
+var mono: Font
 ## Оформление (только картинка): скруглённые чипсы под строками,
 ## рамка поля ввода и пилюля подсказки. Строки и тексты не меняются —
 ## их проверяют тесты, поэтому здесь лишь рамки вокруг тех же слов.
@@ -51,18 +51,25 @@ var row_sb: StyleBoxFlat
 var row_idle_sb: StyleBoxFlat
 var box_sb: StyleBoxFlat
 var hint_sb: StyleBoxFlat
+## Ночь (S.resolve_night: ручной выбор или система). Краски берутся
+## из хелперов _ink/_uitext/_dim, панели мутируют в _apply_night.
+var night := false
+var _meadow: Meadow = null
 
 
 func _ready() -> void:
-	mono = SystemFont.new()
-	mono.font_names = PackedStringArray(
-		["DejaVu Sans Mono", "Consolas", "Courier New", "monospace"]
-	)
+	mono = load("res://fonts/DejaVuSansMono.ttf")
+	if mono == null:
+		var fallback := SystemFont.new()
+		fallback.font_names = PackedStringArray(["monospace"])
+		mono = fallback
 	row_sb = _panel_sb(Color("#f0d98a"), 12.0)
 	row_idle_sb = _panel_sb(Color(1, 1, 1, 0.45), 12.0)
 	box_sb = _panel_sb(Color("#ffffff"), 10.0, INK, 2.0, false)
 	hint_sb = _panel_sb(Color(1, 1, 1, 0.72), 14.0, Color("#e0d5bd"), 1.5, false)
-	add_child(Meadow.new())
+	_meadow = Meadow.new()
+	add_child(_meadow)
+	_apply_night()
 	get_tree().root.size_changed.connect(_relayout)
 	_relayout()
 	_reload()
@@ -171,18 +178,16 @@ func _input(event: InputEvent) -> void:
 		return
 	# Координаты тычка могут быть и отрицательными (узкое окно, край
 	# экрана), поэтому признак «тычка не было» — отдельный флаг,
-	# а не сентинел в координатах.
+	# а не сентинел в координатах. Слушаем только мышь: палец на
+	# Android сам превращается в клик, а двойная обработка касания
+	# и клика давала бы двойные срабатывания (галочка вкл-выкл
+	# за один палец). На десктопе касаний нет — ничего не меняется.
 	var has_pos := false
 	var pos := Vector2.ZERO
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
 			pos = mb.position
-			has_pos = true
-	elif event is InputEventScreenTouch:
-		var st := event as InputEventScreenTouch
-		if st.pressed:
-			pos = st.position
 			has_pos = true
 	if not has_pos:
 		return
@@ -209,6 +214,10 @@ func _input(event: InputEvent) -> void:
 		return
 	if _guest_tap_rect().has_point(pos):
 		_guest()
+		get_viewport().set_input_as_handled()
+		return
+	if _night_tap_rect().has_point(pos):
+		_toggle_night()
 		get_viewport().set_input_as_handled()
 		return
 	if _mkb_tap_rect().has_point(pos):
@@ -380,15 +389,79 @@ func _field_tap_rect() -> Rect2:
 	return Rect2(48.0 * k, y - 38.0 * k, maxf(fw + 48.0 * k, 420.0 * k), 54.0 * k)
 
 
-## Кнопки «Играть» и «Без профиля»: пара по центру под полем.
+## Краски текста под режим: днём константы, ночью светлые.
+func _ink() -> Color:
+	if night:
+		return Color("#f2ede0")
+	return INK
+
+
+func _uitext() -> Color:
+	if night:
+		return Color("#cfd6e4")
+	return UI_TEXT
+
+
+func _dim() -> Color:
+	if night:
+		return Color("#8b93a8")
+	return DIM
+
+
+## Спрайт ночью темнее и холоднее (как в игре).
+func _sprite_tint() -> Color:
+	if night:
+		return Color(0.72, 0.76, 0.90)
+	return Color.WHITE
+
+
+## Ночь: ручной выбор из файла важнее системы.
+func _night_resolve() -> void:
+	night = S.resolve_night(S.get_night_mode(), true, S.system_dark())
+
+
+## Применить ночь: панели мутируют на месте, фон переключается.
+func _apply_night() -> void:
+	_night_resolve()
+	if night:
+		row_idle_sb.bg_color = Color(0.10, 0.12, 0.20, 0.60)
+		box_sb.bg_color = Color("#232c44")
+		box_sb.border_color = Color("#8b93a8")
+		hint_sb.bg_color = Color(0.10, 0.12, 0.20, 0.80)
+		hint_sb.border_color = Color("#3a4a6b")
+	else:
+		row_idle_sb.bg_color = Color(1, 1, 1, 0.45)
+		box_sb.bg_color = Color("#ffffff")
+		box_sb.border_color = INK
+		hint_sb.bg_color = Color(1, 1, 1, 0.72)
+		hint_sb.border_color = Color("#e0d5bd")
+	if _meadow != null:
+		_meadow.night = night
+		_meadow._apply_sky()
+	queue_redraw()
+
+
+## Переключатель ночи (кнопка «Ночь»/«День»): выбор запоминается.
+func _toggle_night() -> void:
+	night = not night
+	S.set_night_mode(S.NIGHT_ON if night else S.NIGHT_DAY)
+	_apply_night()
+
+
+## Кнопки «Играть», «Без профиля» и «Ночь»/«День»: тройка по центру.
 func _play_tap_rect() -> Rect2:
 	var y := _buttons_y()
-	return Rect2(cx_of() - 248.0 * k, y, 230.0 * k, 52.0 * k)
+	return Rect2(cx_of() - 337.0 * k, y, 230.0 * k, 52.0 * k)
 
 
 func _guest_tap_rect() -> Rect2:
 	var y := _buttons_y()
-	return Rect2(cx_of() - 248.0 * k + 246.0 * k, y, 262.0 * k, 52.0 * k)
+	return Rect2(cx_of() - 337.0 * k + 246.0 * k, y, 262.0 * k, 52.0 * k)
+
+
+func _night_tap_rect() -> Rect2:
+	var y := _buttons_y()
+	return Rect2(cx_of() - 337.0 * k + 524.0 * k, y, 150.0 * k, 52.0 * k)
 
 
 func cx_of() -> float:
@@ -421,7 +494,7 @@ func _button(r: Rect2, label: String) -> void:
 	draw_style_box(hint_sb, r)
 	var fs := int(26.0 * k)
 	var w := _text_size(label, 26).x
-	_text(label, Vector2(r.get_center().x - w * 0.5, r.position.y + 36.0 * k), 26, INK)
+	_text(label, Vector2(r.get_center().x - w * 0.5, r.position.y + 36.0 * k), 26, _ink())
 
 
 func _draw() -> void:
@@ -429,6 +502,8 @@ func _draw() -> void:
 	# что меню — пауза, а не другой экран. Строки и тексты те же, что
 	# были, вокруг них лишь карточки.
 	var veil := PAPER
+	if night:
+		veil = Color("#141a2c")
 	veil.a = 0.94
 	draw_rect(Rect2(Vector2.ZERO, Vector2(view_w, view_h)), veil)
 	var cx := view_w * 0.5
@@ -440,7 +515,7 @@ func _draw() -> void:
 		title,
 		Vector2(cx - title_w * 0.5, top),
 		FONT_TITLE,
-		INK
+		_ink()
 	)
 	var y := top + 70.0 * k
 	if users.is_empty():
@@ -448,7 +523,7 @@ func _draw() -> void:
 			"Пока нет сохранённых игроков",
 			Vector2(cx - _text_size("Пока нет сохранённых игроков", FONT_ROW).x * 0.5, y),
 			FONT_ROW,
-			DIM
+			_dim()
 		)
 	# Каждая строка — отдельным «чипсом» по ширине текста: выбранный
 	# жёлтый, остальные белые. Тап по чипсу сразу играет этим игроком.
@@ -456,7 +531,11 @@ func _draw() -> void:
 		var row_y := y + float(i) * ROW_H * k
 		var chip := _row_tap_rect(i)
 		draw_style_box(row_sb if i == sel else row_idle_sb, chip)
-		_text(_row_caption(users[i]), Vector2(60.0 * k, row_y), FONT_ROW, INK)
+		# Выбранная строка всегда на жёлтом — тёмным текстом.
+		_text(
+			_row_caption(users[i]), Vector2(60.0 * k, row_y), FONT_ROW,
+			INK if i == sel else _ink()
+		)
 	y = _field_line_y()
 	# Галочка «все клавиши» под списком: тап переключает взрослый режим
 	# выбранного (то же, что клавиша A).
@@ -472,7 +551,7 @@ func _draw() -> void:
 				Vector2(76.0 * k, cy - 2.0 * k), Vector2(92.0 * k, cy - 26.0 * k),
 				INK, 4.0 * k
 			)
-		_text("Все клавиши", Vector2(104.0 * k, cy), FONT_ROW, INK)
+		_text("Все клавиши", Vector2(104.0 * k, cy), FONT_ROW, _ink())
 	# Поле ввода нового имени. Рамка — только когда активно, а тыкается
 	# всегда: тап включает ввод, как Tab.
 	var field_txt := _field_text()
@@ -482,11 +561,13 @@ func _draw() -> void:
 		field_txt,
 		Vector2(60.0 * k, y),
 		FONT_ROW,
-		INK if input_active else DIM
+		_ink() if input_active else _dim()
 	)
 	# Кнопки действий: та же механика, что Enter и Esc, но пальцем.
+	# Третья — ночь: показывает, во что переключит.
 	_button(_play_tap_rect(), "Играть")
 	_button(_guest_tap_rect(), "Без профиля")
+	_button(_night_tap_rect(), "День" if night else "Ночь")
 	# Кнопка ⌨ справа вверху: вызвать системную клавиатуру.
 	draw_style_box(hint_sb, _mkb_tap_rect())
 	for ix in 3:
@@ -514,14 +595,14 @@ func _draw() -> void:
 	)
 	for li in lines.size():
 		var lw := _text_size(lines[li], FONT_SMALL).x
-		_text(lines[li], Vector2(cx - lw * 0.5, hy + 30.0 * k * float(li)), FONT_SMALL, UI_TEXT)
+		_text(lines[li], Vector2(cx - lw * 0.5, hy + 30.0 * k * float(li)), FONT_SMALL, _uitext())
 
 
 ## Зайчик рядом с заголовком: тот же спрайт, что в игре.
 func _draw_bunny(c: Vector2) -> void:
 	var s := 76.0 * k / HERO_TEX.get_height()
 	draw_set_transform(c, 0.0, Vector2(s, s))
-	draw_texture(HERO_TEX, -HERO_TEX.get_size() * 0.5)
+	draw_texture(HERO_TEX, -HERO_TEX.get_size() * 0.5, _sprite_tint())
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 

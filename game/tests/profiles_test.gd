@@ -52,6 +52,7 @@ func _process(_dt: float) -> bool:
 	_part11_hidden_menu()
 	_part12_soft_keyboard()
 	_part13_touch()
+	_part14_night()
 	_report()
 	return true
 
@@ -525,7 +526,7 @@ func _part13_touch() -> void:
 	_check(_picked == S.GUEST, "guest button enters as guest")
 	_menu.sel = 0
 	_picked = ""
-	_menu.call("_input", _touch(_menu.call("_play_tap_rect").get_center()))
+	_menu.call("_input", _tap(_menu.call("_play_tap_rect").get_center()))
 	_check(_picked == first, "play button enters the selected profile")
 	# Галочка «все клавиши»: тап переключает флаг выбранного.
 	_menu.call("_input", _tap(_menu.call("_check_tap_rect").get_center()))
@@ -540,6 +541,29 @@ func _part13_touch() -> void:
 	_menu.visible = true
 	for u in S.user_list():
 		S.delete_user(u)
+
+
+## Ночь: ручной выбор важнее системы, запоминается в файле, кнопка
+## переключает туда-обратно.
+func _part14_night() -> void:
+	var rs: Callable = S.resolve_night
+	_check(rs.call(1, false, false), "manual night wins")
+	_check(not rs.call(0, true, true), "manual day wins over system dark")
+	_check(rs.call(-1, true, true), "auto follows the system dark")
+	_check(not rs.call(-1, false, false), "no support means day")
+	_check(not rs.call(-1, true, false), "auto follows system light")
+	S.set_night_mode(5)
+	_check(S.get_night_mode() == 1, "mode clamps to night")
+	S.set_night_mode(-9)
+	_check(S.get_night_mode() == -1, "mode clamps to auto")
+	_menu.visible = true
+	_menu.night = false
+	_menu.call("_input", _tap(_menu.call("_night_tap_rect").get_center()))
+	_check(_menu.night, "night button flips the mode on")
+	_check(S.get_night_mode() == 1, "flip persists as night")
+	_menu.call("_input", _tap(_menu.call("_night_tap_rect").get_center()))
+	_check(not _menu.night, "night button flips the mode off")
+	_check(S.get_night_mode() == 0, "flip back persists as day")
 
 
 ## Сколько разных букв на экране во взрослом режиме: все знаки
@@ -585,18 +609,11 @@ func _softkey_event(code: int) -> InputEventKey:
 	return ev
 
 
-## Клик мыши с координатами.
+## Клик мыши с координатами. Палец на Android сам превращается в клик,
+## поэтому касания отдельно не тестируем: обработчик их не слушает.
 func _tap(pos: Vector2) -> InputEventMouseButton:
 	var ev := InputEventMouseButton.new()
 	ev.button_index = MOUSE_BUTTON_LEFT
-	ev.pressed = true
-	ev.position = pos
-	return ev
-
-
-## Касание с координатами.
-func _touch(pos: Vector2) -> InputEventScreenTouch:
-	var ev := InputEventScreenTouch.new()
 	ev.pressed = true
 	ev.position = pos
 	return ev

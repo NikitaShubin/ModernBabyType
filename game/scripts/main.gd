@@ -103,7 +103,11 @@ var line_h := 56.0
 var sep_h := 18.0
 var margin := 60.0
 var text_y := 80.0
-var mono: SystemFont
+## Свой шрифт из game/fonts (DejaVu Sans Mono): на всех устройствах один
+## и тот же, запасным шрифтам с другой шириной глифов неоткуда взяться.
+## Иначе подсветка текущей буквы (позиция × ширина «н») плыла к концу
+## строки — автор так и видел на телефоне.
+var mono: Font
 
 var typed_ok := 0
 var typed_bad := 0
@@ -147,6 +151,9 @@ var all_keys_override := -1
 var skip_menu := false
 var menu: Node = null
 var menu_open := false
+## Ночь прямо сейчас (из S.resolve_night: ручной выбор или система).
+var night := false
+var meadow: Meadow = null
 ## Виртуальная клавиатура показана прямо сейчас (чтобы не дёргать
 ## DisplayServer каждый кадр, только на смене состояния).
 var _kb_shown := false
@@ -160,6 +167,11 @@ var _kb_request_t := -100.0
 var _kb_rect := Rect2()
 var _players_rect := Rect2()
 var _next_rect := Rect2()
+## Кружок уровня: тап по нему включает/выключает дебаг (на телефоне
+## клавиши F3 нет, а цифры клавиатуры для настройки нужны).
+var _badge_rect := Rect2()
+## Сырая высота клавиатуры в экранных пикселях (до деления на масштаб).
+var _kb_raw := 0.0
 ## Оформление (только картинка, логику не трогает): скруглённые панели
 ## под карточкой текста, табло и подсказкой. Стили создаются раз в
 ## _ready, геометрию считает _layout_card().
@@ -179,10 +191,13 @@ var level_total := 0
 
 
 func _ready() -> void:
-	mono = SystemFont.new()
-	mono.font_names = PackedStringArray(
-		["DejaVu Sans Mono", "Consolas", "Courier New", "monospace"]
-	)
+	mono = load("res://fonts/DejaVuSansMono.ttf")
+	if mono == null:
+		# Без импорта (голый checkout) шрифта нет — системный моноширинный,
+		# чтобы не падать. В сборке импорт всегда прогнан.
+		var fallback := SystemFont.new()
+		fallback.font_names = PackedStringArray(["monospace"])
+		mono = fallback
 
 	for i in MAX_TEXT_LABELS:
 		var tl := RichTextLabel.new()
@@ -228,7 +243,10 @@ func _ready() -> void:
 	over_p = _panel_node(over_sb)
 	for p in [card_p, hud_p, hint_p, over_p]:
 		add_child(p)
-	add_child(Meadow.new())
+	meadow = Meadow.new()
+	meadow.night = night
+	add_child(meadow)
+	_apply_night()
 
 	get_tree().root.size_changed.connect(_relayout)
 
@@ -249,6 +267,52 @@ func _ready() -> void:
 		_open_menu()
 
 
+## Ночь: ручной выбор из файла важнее системы (S.resolve_night).
+func _night_resolve() -> void:
+	night = S.resolve_night(S.get_night_mode(), true, S.system_dark())
+
+
+## Применить ночь ко всем краскам: панели мутируют на месте (узлы держат
+## те же StyleBox), тексты перекрашиваются, фон переключается.
+func _apply_night() -> void:
+	_night_resolve()
+	if night:
+		card_sb.bg_color = Color("#232c44")
+		card_sb.border_color = Color("#3a4a6b")
+		card_sb.shadow_color = Color(0, 0, 0, 0.35)
+		pill_sb.bg_color = Color(0.10, 0.12, 0.20, 0.80)
+		pill_sb.border_color = Color("#3a4a6b")
+		over_sb.bg_color = Color("#232c44")
+		over_sb.border_color = Color("#3a4a6b")
+		over_sb.shadow_color = Color(0, 0, 0, 0.35)
+		bar_track_sb.bg_color = Color("#3a4a6b")
+		hud_label.add_theme_color_override("font_color", Color("#e8e4d8"))
+		hint_label.add_theme_color_override("font_color", Color("#e8e4d8"))
+	else:
+		card_sb.bg_color = Color("#fffdf6")
+		card_sb.border_color = Color("#e0d5bd")
+		card_sb.shadow_color = Color(0.25, 0.20, 0.12, 0.18)
+		pill_sb.bg_color = Color(1, 1, 1, 0.72)
+		pill_sb.border_color = Color("#e0d5bd")
+		over_sb.bg_color = Color("#fffdf6")
+		over_sb.border_color = Color("#e0d5bd")
+		over_sb.shadow_color = Color(0.25, 0.20, 0.12, 0.18)
+		bar_track_sb.bg_color = Color("#e6dcc4")
+		hud_label.add_theme_color_override("font_color", UI_TEXT)
+		hint_label.add_theme_color_override("font_color", UI_TEXT)
+	if meadow != null:
+		meadow.night = night
+		meadow._apply_sky()
+	_refresh()
+	queue_redraw()
+
+
+## Модуляция героев ночью: притемнить и охладить, чтобы светлый мех
+## не светился на тёмном фоне. Спрайты те же, перерисовки нет.
+func _hero_tint() -> Color:
+	if night:
+		return Color(0.72, 0.76, 0.90)
+	return Color.WHITE
 ## Стиль скруглённой панели. Тень — только у больших карточек: у
 ## мелких пилюль она даёт грязь вместо глубины. Радиусы в пикселях, не
 ## в k: на большом окне чуть менее кругло, зато без пересоздания
@@ -300,7 +364,26 @@ func _cmdline_mode() -> void:
 			all_keys_override = 0
 
 
+## Уместить строки уровня в ширину экрана. На широких экранах и в
+## тестах (1100) все строки короче лимита — возвращается как было.
+## Порог 36 — между телефоном (~25) и десктопом (~39): десктопную
+## вёрстку не трогаем вообще.
+func _fit_to_width(raw: Array[String]) -> Array[String]:
+	# Headless-тесты и самое начало жизни сцены: вьюпорта ещё нет
+	# (64px или нули) — считаем широким экраном и не режем. Алгоритм
+	# покрыт чистыми тестами fit_lines, интеграция тривиальна.
+	if view_w < 100.0:
+		return raw
+	var max_chars := maxi(14, int((view_w - margin * 2.0) / maxf(1.0, char_w)) - 1)
+	if max_chars >= 36:
+		return raw
+	return B.fit_lines(raw, max_chars)
+
+
 func _start_game() -> void:
+	# Метрики (k, char_w, margin) должны быть посчитаны ДО разбивки
+	# строк: _fit_to_width режет по ним.
+	_relayout()
 	var prof: Dictionary = S.load_profile(profile_name)
 	profile_all_keys = bool(prof.get("all_keys", false))
 	difficulty = int(prof.get("difficulty", 0))
@@ -321,6 +404,9 @@ func _open_menu() -> void:
 	menu_open = true
 	# F2 из меню возвращает в игру тем же игроком, кого открыли.
 	menu.resume_user = profile_name
+	# Ночь могла переключить в меню: забираем свежую.
+	menu.set("night", night)
+	menu.call("_apply_night")
 	menu.call("_reload")
 
 
@@ -337,6 +423,8 @@ func _menu_chosen(user_name: String) -> void:
 	else:
 		S.touch(user_name)
 	_close_menu()
+	# Ночь могли переключить в меню: перечитать перед стартом.
+	_apply_night()
 	_start_game()
 
 
@@ -348,15 +436,23 @@ func _relayout() -> void:
 	view_h = s.y
 	# Масштаб — от эффективной высоты (экран минус клавиатура): в портрете
 	# с выездом клавиатуры остаток альбомный, и вся сцена честно в него
-	# вписывается. Метрики букв при этом меняются, поэтому позицию ежа
-	# пересчитываем в тех же символах оси (см. _lin): визуально он стоит.
+	# вписывается. На узком экране за базу ширины берём 560, а не 1100:
+	# иначе k упирается в пол 0.5 и всё мелкое. Метрики букв при этом
+	# меняются, поэтому позицию ежа пересчитываем в тех же символах оси
+	# (см. _lin): визуально он стоит.
 	var old_margin := margin
 	var old_cw := char_w
-	k = clampf(minf(view_w / BASE_W, _eff_h() / BASE_H), 0.5, 2.5)
+	var base_w := BASE_W
+	if view_h > view_w:
+		base_w = 560.0
+	k = clampf(minf(view_w / base_w, _eff_h() / BASE_H), 0.5, 2.5)
 	font_size = int(36.0 * k)
 	# Левое поле широкое: героям нужен воздух в начале строки,
 	# а ёж заходит слева из-за края — ему нельзя за край экрана.
+	# На узком экране поля жмутся до 8%: иначе съедают пол-экрана.
 	margin = 120.0 * k
+	if view_w < 700.0:
+		margin = view_w * 0.08
 	text_y = 80.0 * k
 	char_w = mono.get_string_size("н", HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size).x
 	if old_cw > 0.0 and char_w > 0.0 and hedge_active:
@@ -377,9 +473,12 @@ func _relayout() -> void:
 	hint_label.position = Vector2(margin, _eff_h() - 165.0 * k)
 	hint_label.size = Vector2(view_w - margin * 2.0, 55.0 * k)
 	hint_label.add_theme_font_size_override("font_size", int(30.0 * k))
-	var ow := 980.0 * k
+	# Модалка — не шире экрана: на телефоне 980px не влезают.
+	# Шрифт подбираем под ширину, чтобы строки не рвались.
+	var ow := minf(980.0 * k, view_w - 32.0 * k)
+	var ofs := int(minf(40.0 * k, (view_w - 64.0 * k) / 17.0))
 	overlay_label.size = Vector2(ow, 150.0 * k)
-	overlay_label.add_theme_font_size_override("font_size", int(40.0 * k))
+	overlay_label.add_theme_font_size_override("font_size", ofs)
 	hud_label.size = Vector2(view_w - margin * 2.0, 70.0 * k)
 	# Кнопки тач-интерфейса: справа вверху, друг под другом.
 	_kb_rect = Rect2(view_w - 72.0 * k, 16.0 * k, 56.0 * k, 56.0 * k)
@@ -510,7 +609,7 @@ func _text_files() -> Array[String]:
 
 
 func _new_level() -> void:
-	display_lines = _load_text()
+	display_lines = _fit_to_width(_load_text())
 	line_base.clear()
 	var acc := 0.0
 	for line in display_lines:
@@ -810,10 +909,10 @@ func _finish(won: bool, reason := "") -> void:
 		"total_wins": prof.get("total_wins", 0),
 	})
 	if won:
-		overlay_label.add_theme_color_override("font_color", GREEN)
+		overlay_label.add_theme_color_override("font_color", GREEN if not night else Color("#8fd07f"))
 		overlay_label.text = "Уровень пройден! %s\nEnter — дальше (или кнопка)" % ["★".repeat(stars)]
 	else:
-		overlay_label.add_theme_color_override("font_color", DARK_RED)
+		overlay_label.add_theme_color_override("font_color", DARK_RED if not night else Color("#ff7a6b"))
 		overlay_label.text = "Ай, укололся!\nEnter — ещё раз (или кнопка)"
 	overlay_label.visible = true
 	over_p.visible = true
@@ -1007,10 +1106,12 @@ func _eff_h() -> float:
 ## делим на масштаб экрана (на телефоне он 2–3). Без фичи — всегда ноль.
 func _kb_height_px() -> float:
 	if not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
+		_kb_raw = 0.0
 		return 0.0
+	_kb_raw = float(DisplayServer.virtual_keyboard_get_height())
 	var scr := DisplayServer.window_get_current_screen()
 	var scale := maxf(1.0, DisplayServer.screen_get_scale(scr))
-	return float(DisplayServer.virtual_keyboard_get_height()) / scale
+	return _kb_raw / scale
 
 
 ## Следим за клавиатурой каждый кадр: выехала/уехала — пересчитать
@@ -1062,14 +1163,14 @@ func _refresh() -> void:
 					shown = "[lb]"
 				elif shown == "]":
 					shown = "[rb]"
-				out += "[color=#c02727]" + shown + "[/color]"
+				out += "[color=#ff7a6b]" + shown + "[/color]" if night else "[color=#c02727]" + shown + "[/color]"
 				continue
 			# Пройденное (съеденное или пропущенное) — серым.
-			var col := "#6f6a5e"
+			var col := "#6f6a5e" if not night else "#7a86a0"
 			if passed.has(kk):
-				col = "#b3a996"
+				col = "#b3a996" if not night else "#4a5468"
 			elif _is_active(ch):
-				col = "#1c1a16"
+				col = "#1c1a16" if not night else "#f2ede0"
 			out += "[color=" + col + "]" + esc + "[/color]"
 		text_labels[l].text = out
 		text_labels[l].visible = true
@@ -1109,6 +1210,12 @@ func _refresh_hud() -> void:
 		who, keys, difficulty, wins_in_row, B.WINS_TO_LEVEL_UP,
 		_hedge_status(), int(acc * 100.0), _live_cpm()
 	]]
+	# На узком экране — ужатая строка: полная в пилюлю не влезает.
+	if view_w < 700.0:
+		lines = ["%s · ур.%d · %d/%d · %s · %d%% · %.0f" % [
+			who, difficulty, wins_in_row, B.WINS_TO_LEVEL_UP,
+			_hedge_status(), int(acc * 100.0), _live_cpm()
+		]]
 	if grace_t > 0.0 and state == "playing":
 		# На обратном отсчёте — только он: полная строка со статистикой
 		# в пилюлю не влезает, а цифры всё равно нулевые. Табло вернётся
@@ -1119,8 +1226,15 @@ func _refresh_hud() -> void:
 	lines.append("Enter — дальше (или тап) · F2 — игроки (или кнопки справа)")
 	var txt := "\n".join(lines)
 	if show_dbg:
-		var dbg := "[dbg ex=%.0f eln=%d cur=%d:%d cw=%.1f k=%.2f ok=%d bad=%d]" % [
-			enemy_x, enemy_line, cursor_line, cursor_pos, char_w, k, typed_ok, typed_bad
+		# kb — сдвиг раскладки в пикселях канваса, kh — сырая высота
+		# клавиатуры в экранных пикселях, sc — масштаб экрана, vw/vh —
+		# вьюпорт. Нужно для настройки сдвига на живых телефонах.
+		var sc := 1.0
+		if DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
+			sc = DisplayServer.screen_get_scale(DisplayServer.window_get_current_screen())
+		var dbg := "[dbg ex=%.0f eln=%d cur=%d:%d cw=%.1f k=%.2f ok=%d bad=%d kb=%.0f kh=%.0f sc=%.2f vw=%.0f vh=%.0f]" % [
+			enemy_x, enemy_line, cursor_line, cursor_pos, char_w, k, typed_ok, typed_bad,
+			kb_h, _kb_raw, sc, view_w, view_h
 		]
 		txt = dbg + "\n" + txt
 	hud_label.text = txt
@@ -1219,10 +1333,26 @@ func _settle_contact(row: int, exact := false) -> void:
 	hop_ph = roundf(hop_ph / PI) * PI
 
 
-## Экранный центр глифа под курсором (индексы совпадают с картинкой:
-## красные опечатки затирают букву, а не вставляются между).
+## Экранный центр глифа под курсором: ширина — по реальной ширине уже
+## пройденного куска строки тем же шрифтом, а не номер × char_w. Тогда
+## маркер и заяц стоят ровно на букве даже при подменах шрифтов.
+## Со своим моноширинным шрифтом совпадает с pos × char_w в точности.
 func _cursor_cx() -> float:
-	return margin + float(cursor_pos) * char_w + char_w * 0.5
+	if cursor_line >= display_lines.size():
+		return margin
+	var line := display_lines[cursor_line]
+	var pre := mono.get_string_size(
+		line.left(cursor_pos), HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size
+	).x
+	return margin + pre + _glyph_w(line) * 0.5
+
+
+## Ширина глифа под курсором (для центра и рамки маркера).
+func _glyph_w(line: String) -> float:
+	var ch := " "
+	if cursor_pos < line.length():
+		ch = line.substr(cursor_pos, 1)
+	return mono.get_string_size(ch, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size).x
 
 
 func _hero_pos() -> Vector2:
@@ -1240,7 +1370,8 @@ func _draw() -> void:
 	# картинка остаётся нарисованной: вернувшись по F2, игрок видит
 	# ту же позицию зайца и ежа, на которой свернул.
 	if state == "won" or state == "lost":
-		draw_rect(Rect2(Vector2.ZERO, Vector2(view_w, view_h)), Color(1, 1, 1, 0.55))
+		var dim := Color(1, 1, 1, 0.55) if not night else Color(0.05, 0.07, 0.12, 0.60)
+		draw_rect(Rect2(Vector2.ZERO, Vector2(view_w, view_h)), dim)
 	_draw_level_badge()
 	_draw_touch_buttons()
 	_draw_progress()
@@ -1287,7 +1418,10 @@ func _draw_touch_buttons() -> void:
 
 ## Тач и мышь: кнопки интерфейса. Клавиши идут другим путём
 ## (_unhandled_key_input), здесь только тычки. Пока меню открыто,
-## тычки разбирает оно само.
+## тычки разбирает оно само. Слушаем ТОЛЬКО мышь: на Android тап сам
+## превращается в клик (emulate_mouse_from_touch), а двойная обработка
+## касания+клика давала бы двойные срабатывания (галочка вкл-выкл
+## за один палец). На десктопе касаний нет — ничего не меняется.
 func _input(event: InputEvent) -> void:
 	if menu_open:
 		return
@@ -1298,12 +1432,11 @@ func _input(event: InputEvent) -> void:
 		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
 			pos = mb.position
 			has_pos = true
-	elif event is InputEventScreenTouch:
-		var st := event as InputEventScreenTouch
-		if st.pressed:
-			pos = st.position
-			has_pos = true
 	if not has_pos:
+		return
+	if _badge_rect.has_point(pos):
+		show_dbg = not show_dbg
+		get_viewport().set_input_as_handled()
 		return
 	if over_p.visible and _next_rect.has_point(pos):
 		_new_level()
@@ -1332,6 +1465,7 @@ func _kb_summon() -> void:
 func _draw_level_badge() -> void:
 	var c := Vector2(46.0 * k, 50.0 * k)
 	var r := 26.0 * k
+	_badge_rect = Rect2(c - Vector2.ONE * (r + 3.0 * k), Vector2.ONE * 2.0 * (r + 3.0 * k))
 	draw_circle(c, r + 3.0 * k, Color("#e0d5bd"))
 	draw_circle(c, r, Color("#7fb069"))
 	var t := str(difficulty)
@@ -1361,15 +1495,21 @@ func _draw_progress() -> void:
 		)
 
 
-## Маркер текущей буквы: курсор всегда видно, даже после отката через строки.
+## Маркер текущей буквы: рамка ровно по глифу (та же ширина, что в
+## _cursor_cx), курсор всегда видно, даже после отката через строки.
 func _draw_cursor_marker() -> void:
 	if state != "playing" or cursor_line >= display_lines.size():
 		return
-	var gx := margin + float(cursor_pos) * char_w
+	var line := display_lines[cursor_line]
+	var pre := mono.get_string_size(
+		line.left(cursor_pos), HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size
+	).x
+	var w := _glyph_w(line)
+	var gx := margin + pre
 	var gy := _line_y(cursor_line)
 	draw_style_box(
 		cursor_sb,
-		Rect2(gx - 2.0 * k, gy, char_w + 4.0 * k, mono.get_height(font_size))
+		Rect2(gx - 2.0 * k, gy, w + 4.0 * k, mono.get_height(font_size))
 	)
 
 
@@ -1412,7 +1552,7 @@ func _draw_hero() -> void:
 	sq *= Vector2(1.0 - 0.03 * hop, 1.0 + 0.04 * hop)
 	var s := _spr_scale(HERO_TEX, _unit_h()) * sq
 	draw_set_transform(c, 0.0, s)
-	draw_texture(HERO_TEX, -HERO_TEX.get_size() * 0.5)
+	draw_texture(HERO_TEX, -HERO_TEX.get_size() * 0.5, _hero_tint())
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	if blink_t > 0.0 and state != "lost":
 		# Веки — две чёрточки поперёк глаз. Рамки глаз измерены по
@@ -1486,6 +1626,6 @@ func _draw_enemy() -> void:
 	# Выпада нет: укол — не удар. В точке контакта ёж просто остаётся.
 	var s := _spr_scale(HEDGE_TEX, _unit_h()) * sq
 	draw_set_transform(c, wob, s)
-	draw_texture(HEDGE_TEX, -HEDGE_TEX.get_size() * 0.5)
+	draw_texture(HEDGE_TEX, -HEDGE_TEX.get_size() * 0.5, _hero_tint())
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	_draw_puffs()

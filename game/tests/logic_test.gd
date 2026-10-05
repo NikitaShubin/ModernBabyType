@@ -5,6 +5,8 @@ extends SceneTree
 ## Запуск: godot --headless --path game --script res://tests/logic_test.gd
 ## Код выхода 0 — всё сошлось.
 
+const BB := preload("res://scripts/balance.gd")
+
 var _frame := 0
 var _main: Node = null
 var _failures: Array[String] = []
@@ -579,6 +581,31 @@ func _run_part2() -> void:
 	_check(_main._kb_want(), "auto keyboard in portrait game")
 	_main.view_w = 1100.0
 	_main.view_h = 650.0
+
+	# --- Разбивка строк под узкий экран: слова целы, символы не теряются.
+	# Пробел-разделитель уезжает в конец куска, поэтому склейка кусков
+	# сравнивается без пробелов. Массивы типизированные: нетипизированный
+	# литерал в Array[String]-параметр 4.3 не принимает (молча error).
+	var fl: Callable = BB.fit_lines
+	var raw1: Array[String] = ["мама мыла раму", "папа"]
+	var fit1: Array = fl.call(raw1, 10)
+	_check(fit1 == ["мама мыла ", "раму", "папа"], "long line wraps by words")
+	_check(
+		"".join(fit1).replace(" ", "") == "мамамыларамупапа",
+		"wrap loses no characters"
+	)
+	var raw2: Array[String] = ["а б в"]
+	_check(
+		fl.call(raw2, 10) == ["а б в"], "short lines untouched"
+	)
+	var raw3: Array[String] = ["раз два три"]
+	var fit2: Array = fl.call(raw3, 7)
+	_check(fit2 == ["раз два ", "три"], "wrap point is exact")
+	var raw4: Array[String] = ["супердлинноеслово", "а"]
+	_check(
+		fl.call(raw4, 5)[0].length() == 5,
+		"monster word is hard-split"
+	)
 
 	# --- Тач и мышь в игре: кнопка игроков открывает меню, кнопка
 	# «Дальше» на модалке начинает новый уровень. ---
