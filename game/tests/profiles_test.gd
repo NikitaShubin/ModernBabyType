@@ -390,6 +390,8 @@ func _part9_main_game() -> void:
 	_main.difficulty = 7
 	_main.wins_in_row = 2
 	_main._finish(true)
+	_check(not _main.fw_parts.is_empty(), "winning spawns fireworks")
+	_check("CPM" in _main.overlay_label.text, "modal shows pace stats")
 	var pety_after: Dictionary = S.load_profile("Петя")
 	_check(
 		is_equal_approx(

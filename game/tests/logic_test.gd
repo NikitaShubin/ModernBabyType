@@ -609,6 +609,30 @@ func _run_part2() -> void:
 		"monster word is hard-split"
 	)
 
+	# --- Скролл длинного текста: окно едет за курсором, уехавшие прячем.
+	# Карточка — окно, а не весь текст. Самосогласовано через _vis_lines.
+	var six: Array[String] = ["раз", "два", "три", "четыре", "пять", "шесть"]
+	_main.display_lines = six
+	_main.cursor_line = 5
+	_main.cursor_pos = 0
+	_main._layout_text_lines()
+	_main._layout_card()
+	var vis: int = _main._vis_lines()
+	_check(vis >= 2 and vis < 6, "window smaller than the text")
+	for i in 6:
+		_check(
+			_main.text_labels[i].visible == (i >= 6 - vis),
+			"visibility follows the window"
+		)
+	_check(
+		_main.scroll_y == float(6 - vis) * _main.line_h,
+		"scroll offset is exact"
+	)
+	_check(
+		_main.card_p.size.y < 6.0 * _main.line_h + 40.0 * _main.k,
+		"card is a window, not the whole text"
+	)
+
 	# --- Тач и мышь в игре: кнопка игроков открывает меню, кнопка
 	# «Дальше» на модалке начинает новый уровень. ---
 	_main.call("_input", _tap(_main._players_rect.get_center()))

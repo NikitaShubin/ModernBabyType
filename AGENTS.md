@@ -101,7 +101,7 @@ tools/docker/build-game.sh --shot               # кадры анимации
 ландшафтным. Проверяется байтом: `aapt2 dump xmltree ... AndroidManifest.xml`
 и `ProjectSettings.get_setting` в headless-прогоне.
 
-Открыть `game/` в Godot 4.3+, запуск — F5. Релизы: `git tag v0.0.6 && git push --tags`
+Открыть `game/` в Godot 4.3+, запуск — F5. Релизы: `git tag v0.0.7 && git push --tags`
 (тег обязан совпадать с `config/version` в `game/project.godot`, CI это
 проверяет).
 

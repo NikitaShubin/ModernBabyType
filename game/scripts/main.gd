@@ -160,6 +160,11 @@ var _kb_shown := false
 ## Высота системной клавиатуры в пикселях канваса (0 — скрыта). Только
 ## раскладка: всё позиционируется от эффективной высоты _eff_h().
 var kb_h := 0.0
+## Салют победы: частицы [pos, vel, age, life, color_idx]. Живут только
+## на модалке победы, Enter гасит вместе с ней.
+var fw_parts: Array = []
+var fw_cd := 0.0
+const FW_COLORS := [Color("#ffd94d"), Color("#7fb069"), Color("#6bb8e8"), Color("#ef8fb0")]
 ## Момент последнего запроса показать клавиатуру (для пере-показа,
 ## если система спрятала её сама, например кнопкой «назад»).
 var _kb_request_t := -100.0
@@ -189,6 +194,10 @@ var card_p: Panel
 var hud_p: Panel
 var hint_p: Panel
 var over_p: Panel
+## Скролл текста в пикселях: длинные уровни не влезают в карточку —
+## окно едет за курсором построчно. Логика (ось _lin) его не видит:
+## _line_y зовут только отрисовки.
+var scroll_y := 0.0
 ## Сколько букв в уровне всего: знаменатель полосы прогресса.
 ## Считается в _new_level, числитель — passed.size().
 var level_total := 0
@@ -477,12 +486,8 @@ func _relayout() -> void:
 	hint_label.position = Vector2(margin, _eff_h() - 165.0 * k)
 	hint_label.size = Vector2(view_w - margin * 2.0, 55.0 * k)
 	hint_label.add_theme_font_size_override("font_size", int(30.0 * k))
-	# Модалка — не шире экрана: на телефоне 980px не влезают.
-	# Шрифт подбираем под ширину, чтобы строки не рвались.
-	var ow := minf(980.0 * k, view_w - 32.0 * k)
-	var ofs := int(minf(40.0 * k, (view_w - 64.0 * k) / 17.0))
-	overlay_label.size = Vector2(ow, 150.0 * k)
-	overlay_label.add_theme_font_size_override("font_size", ofs)
+	# Геометрия модалки — в _layout_text_lines (каждый кадр): позиция
+	# зависит от скролла. Здесь только кнопки и панели.
 	hud_label.size = Vector2(view_w - margin * 2.0, 70.0 * k)
 	# Кнопки тач-интерфейса: справа вверху, друг под другом.
 	_kb_rect = Rect2(view_w - 72.0 * k, 16.0 * k, 56.0 * k, 56.0 * k)
@@ -497,22 +502,37 @@ func _relayout() -> void:
 ## Текст стоит неподвижно: никаких сдвигов при смене строк.
 ## Экранный верх текстовой строки (всегда статичен).
 func _line_y(line_idx: int) -> float:
-	return text_y + float(line_idx) * line_h
+	# Экранный верх текстовой строки с учётом скролла. Логика погони
+	# сюда не смотрит (у неё ось _lin) — только отрисовки.
+	return text_y + float(line_idx) * line_h - scroll_y
 
 
-## Расставить построчные лэйблы (позиции статичны, текст не ездит).
+## Сколько строк влезает в карточку: минимум две, больше текста не надо.
+func _vis_lines() -> int:
+	if line_h <= 0.0:
+		return 3
+	return maxi(2, mini(maxi(display_lines.size(), 1), int((_eff_h() - 240.0 * k) / line_h)))
+
+
+## Расставить построчные лэйблы. Окно карточки едет за курсором:
+## курсор всегда в последней видимой строке, уехавшие прячем.
 func _layout_text_lines() -> void:
 	# Блок текста — по центру свободной зоны ЭФФЕКТИВНОЙ высоты: сверху
-	# пусто, снизу HUD и подсказка (или клавиатура). Левый край прежний,
-	# внутри уровня блок неподвижен.
+	# пусто, снизу HUD и подсказка (или клавиатура). Левый край прежний.
 	var block_h := float(maxi(display_lines.size(), 1)) * line_h
 	text_y = maxf(40.0 * k, (_eff_h() - 200.0 * k - block_h) * 0.5)
-	# Модалка победы/поражения — под блоком текста, а не поверх букв.
-	var ow := 980.0 * k
-	overlay_label.position = Vector2((view_w - ow) * 0.5, text_y + block_h + 24.0 * k)
+	var vis := _vis_lines()
+	var first := clampi(cursor_line - vis + 1, 0, maxi(0, display_lines.size() - vis))
+	scroll_y = float(first) * line_h
+	# Модалка победы/поражения — под карточкой, а не поверх букв.
+	# Не шире экрана, шрифт под ширину (на телефоне 980px не влезают).
+	var ow := minf(980.0 * k, view_w - 32.0 * k)
+	var ofs := int(minf(40.0 * k, (view_w - 64.0 * k) / 17.0))
+	overlay_label.position = Vector2((view_w - ow) * 0.5, text_y + float(vis) * line_h + 24.0 * k)
 	overlay_label.size = Vector2(ow, 150.0 * k)
+	overlay_label.add_theme_font_size_override("font_size", ofs)
 	for i in text_labels.size():
-		if i < display_lines.size():
+		if i < display_lines.size() and i >= first and i < first + vis:
 			text_labels[i].position = Vector2(margin, _line_y(i))
 			text_labels[i].visible = true
 		else:
@@ -527,11 +547,13 @@ func _layout_card() -> void:
 	if display_lines.is_empty() or line_h <= 0.0:
 		card_p.visible = false
 		return
+	# Карточка — окно видимых строк, а не весь текст: длинные уровни
+	# под ней едут скроллом.
 	var pad := 24.0 * k
 	var r := Rect2(
 		margin - pad, text_y - 20.0 * k,
 		view_w - (margin - pad) * 2.0,
-		float(display_lines.size()) * line_h + 40.0 * k
+		float(_vis_lines()) * line_h + 40.0 * k
 	)
 	card_p.position = r.position
 	card_p.size = r.size
@@ -584,10 +606,14 @@ func _load_text() -> Array[String]:
 		lines.append("мама мыла раму.")
 		lines.append("папа читал газету!")
 		lines.append("солнце светило ярко?")
+	# Объём растёт со сложностью: 3 строки на старте, до 6 на высоких
+	# уровнях. Длинные уровни едут скроллом (см. scroll_y).
+	var chunk := mini(TEXT_CHUNK_LINES + difficulty / 2, 6)
+	var n := mini(chunk, lines.size())
 	var start := 0
-	if lines.size() > TEXT_CHUNK_LINES:
-		start = randi() % (lines.size() - TEXT_CHUNK_LINES + 1)
-	return lines.slice(start, start + mini(TEXT_CHUNK_LINES, lines.size()))
+	if lines.size() > n:
+		start = randi() % (lines.size() - n + 1)
+	return lines.slice(start, start + n)
 
 
 ## Текстовые файлы в случайном порядке (как в оригинале: каждый попытка —
@@ -646,6 +672,9 @@ func _new_level() -> void:
 	state = "playing"
 	overlay_label.visible = false
 	over_p.visible = false
+	fw_parts.clear()
+	fw_cd = 0.0
+	scroll_y = 0.0
 	_skip_inactive()
 	hero_r = _hero_pos()
 	shake_t = 0.0
@@ -718,7 +747,10 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		_toggle_fullscreen()
 		return
 	if ke.keycode == KEY_F3:
-		show_dbg = not show_dbg
+		# Отладка — только из редактора/дебажной сборки: в релизе игроку
+		# нечего делать с кучей переменных, а тап по бейджу там молчит.
+		if OS.is_debug_build():
+			show_dbg = not show_dbg
 		return
 	if ke.keycode == KEY_F11:
 		_toggle_fullscreen()
@@ -914,10 +946,15 @@ func _finish(won: bool, reason := "") -> void:
 	})
 	if won:
 		overlay_label.add_theme_color_override("font_color", GREEN if not night else Color("#8fd07f"))
-		overlay_label.text = "Уровень пройден! %s\nEnter — дальше (или кнопка)" % ["★".repeat(stars)]
+		overlay_label.text = "Уровень пройден! %s\nТемп %d CPM · ошибок %d\nEnter — дальше (или кнопка)" % [
+			"★".repeat(stars), int(round(cpm)), typed_bad
+		]
+		_fw_burst(true)
 	else:
 		overlay_label.add_theme_color_override("font_color", DARK_RED if not night else Color("#ff7a6b"))
-		overlay_label.text = "Ай, укололся!\nEnter — ещё раз (или кнопка)"
+		overlay_label.text = "Ай, укололся!\nТемп %d CPM · ошибок %d\nEnter — ещё раз (или кнопка)" % [
+			int(round(cpm)), typed_bad
+		]
 	overlay_label.visible = true
 	over_p.visible = true
 	_refresh()
@@ -934,6 +971,7 @@ func _process(dt: float) -> void:
 		return
 	_layout_text_lines()
 	_layout_card()
+	_fw_process(dt)
 	if chomp_t > 0.0:
 		chomp_t -= dt
 	if bounce_t > 0.0:
@@ -1386,6 +1424,7 @@ func _draw() -> void:
 		draw_rect(Rect2(Vector2.ZERO, Vector2(view_w, view_h)), dim)
 	_draw_level_badge()
 	_draw_touch_buttons()
+	_draw_fireworks()
 	_draw_progress()
 	_draw_cursor_marker()
 	_draw_enemy()
@@ -1447,7 +1486,9 @@ func _input(event: InputEvent) -> void:
 	if not has_pos:
 		return
 	if _badge_rect.has_point(pos):
-		show_dbg = not show_dbg
+		# Тап по бейджу — дебаг, но только в дебажной сборке (см. F3).
+		if OS.is_debug_build():
+			show_dbg = not show_dbg
 		get_viewport().set_input_as_handled()
 		return
 	if over_p.visible and _next_rect.has_point(pos):
@@ -1480,6 +1521,55 @@ func _kb_summon() -> void:
 	_kb_reshown = false
 	_kb_shown = true
 	DisplayServer.virtual_keyboard_show("")
+## Залп салюта: разлёт искр из точки. Позиции — верхняя половина экрана.
+func _fw_burst(first := false) -> void:
+	var cx := randf_range(view_w * 0.2, view_w * 0.8)
+	var cy := randf_range(_eff_h() * 0.1, _eff_h() * 0.35)
+	if first:
+		fw_parts.clear()
+		for b in 3:
+			_fw_one(Vector2(view_w * (0.25 + 0.25 * float(b)), _eff_h() * 0.22))
+		return
+	_fw_one(Vector2(cx, cy))
+
+
+func _fw_one(center: Vector2) -> void:
+	for i in 14:
+		var a := randf() * TAU
+		var sp := randf_range(60.0, 220.0) * k
+		fw_parts.append([center, Vector2(cos(a), sin(a)) * sp, 0.0, randf_range(0.7, 1.3), randi() % FW_COLORS.size()])
+		if fw_parts.size() > 90:
+			fw_parts.pop_front()
+
+
+## Искры живут только на модалке победы: падение с гравитацией и
+## периодические новые залпы, пока игрок любуется.
+func _fw_process(dt: float) -> void:
+	if state != "won":
+		return
+	fw_cd -= dt
+	if fw_cd <= 0.0:
+		fw_cd = 0.9
+		_fw_burst()
+	for i in range(fw_parts.size() - 1, -1, -1):
+		var p: Array = fw_parts[i]
+		p[1] = (p[1] as Vector2) + Vector2(0, 300.0 * k * dt)
+		p[0] = (p[0] as Vector2) + (p[1] as Vector2) * dt
+		p[2] = float(p[2]) + dt
+		if float(p[2]) > float(p[3]):
+			fw_parts.remove_at(i)
+
+
+func _draw_fireworks() -> void:
+	if state != "won":
+		return
+	for p in fw_parts:
+		var age: float = p[2]
+		var life: float = p[3]
+		var col: Color = FW_COLORS[int(p[4]) % FW_COLORS.size()]
+		col.a = clampf(1.0 - age / life, 0.0, 1.0)
+		var pos: Vector2 = p[0]
+		draw_circle(pos, (1.0 + 3.0 * (1.0 - age / life)) * k, col)
 ## Кружок с номером уровня в пустом левом верхнем углу: и красиво,
 ## и уровень всегда перед глазами, а не только в табло.
 func _draw_level_badge() -> void:
@@ -1644,6 +1734,9 @@ func _draw_enemy() -> void:
 		sq = Vector2(1.0 + 0.06 * flat, 1.0 - 0.06 * flat)
 		wob = 0.10 * sin(ph) - 0.04 * air
 	# Выпада нет: укол — не удар. В точке контакта ёж просто остаётся.
+	# А на проигрыше — прыгает от радости: поймал всё-таки.
+	if state == "lost":
+		c.y -= absf(sin(time * 5.0)) * 12.0 * k
 	var s := _spr_scale(HEDGE_TEX, _unit_h()) * sq
 	draw_set_transform(c, wob, s)
 	draw_texture(HEDGE_TEX, -HEDGE_TEX.get_size() * 0.5, _hero_tint())
