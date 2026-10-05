@@ -7,7 +7,10 @@ extends RefCounted
 const KEY_PROGRESSION := " аовлыдфжпреимтнгрушщзхъёйчясмитьбю,.!?-:;\"'()1234567890"
 const INITIAL_ACTIVE_COUNT := 3
 const WINS_TO_LEVEL_UP := 3
-const BASE_CPS := 2.0
+## База slow: даже ребёнок, который только сел за клавиатуру и ищет
+## три кнопки (пробел, а, о), успевает убежать. Было 2.0 — ёж ловил
+## новичка раньше, чем тот находил буквы.
+const BASE_CPS := 1.1
 const MIN_CPS := 0.6
 const MAX_CPS := 10.0
 
@@ -25,13 +28,14 @@ static func active_chars(difficulty_level: int) -> Dictionary:
 	return result
 
 
-## Целевая скорость врага: растёт с уровнем и подстраивается под
-## скользящее среднее темпа игрока (EMA CPM). Игрок ~120 CPM => skill 1.0.
+## Целевая скорость врага: растёт с уровнем (мягко, +8% за уровень)
+## и подстраивается под скользящее среднее темпа игрока (EMA CPM).
+## Игрок ~120 CPM => skill 1.0.
 static func target_cps(difficulty_level: int, ema_cpm: float) -> float:
 	var skill := 1.0
 	if ema_cpm > 0.0:
 		skill = clampf(ema_cpm / 120.0, 0.5, 1.6)
-	var cps := BASE_CPS * (1.0 + 0.12 * float(difficulty_level)) * skill
+	var cps := BASE_CPS * (1.0 + 0.08 * float(difficulty_level)) * skill
 	return clampf(cps, MIN_CPS, MAX_CPS)
 
 

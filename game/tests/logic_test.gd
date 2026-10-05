@@ -541,15 +541,17 @@ func _run_part2() -> void:
 	_check(_main.state == "playing", "unicode enter continues after winning")
 
 	# --- Пере-показ клавиатуры: чистое решение, матрица сочетаний. ---
-	# want/shown/height/elapsed: показать заново — только когда нужна,
-	# считалась показанной, а по факту высота ноль и прошло достаточно
-	# времени (клавиатура успела бы выехать).
+	# want/shown/height/elapsed/seen/reshown: показать заново — один раз
+	# и только если клавиатура так и не выехала. Смахнутую пользователем
+	# (была видна) не трогаем никогда.
 	var rs: Callable = _main.kb_need_reshow
-	_check(rs.call(true, true, 0.0, 2.0), "reshow when wanted, shown, flat, expired")
-	_check(not rs.call(true, true, 0.0, 0.5), "no reshow while gliding in")
-	_check(not rs.call(true, true, 120.0, 9.0), "no reshow when visible")
-	_check(not rs.call(false, true, 0.0, 9.0), "no reshow when not wanted")
-	_check(not rs.call(true, false, 0.0, 9.0), "initial show is a separate path")
+	_check(rs.call(true, true, 0.0, 4.0, false, false), "reshow when wanted, shown, flat, expired")
+	_check(not rs.call(true, true, 0.0, 0.5, false, false), "no reshow while gliding in")
+	_check(not rs.call(true, true, 120.0, 9.0, true, false), "no reshow when visible")
+	_check(not rs.call(false, true, 0.0, 9.0, false, false), "no reshow when not wanted")
+	_check(not rs.call(true, false, 0.0, 9.0, false, false), "initial show is a separate path")
+	_check(not rs.call(true, true, 0.0, 9.0, true, false), "no reshow after user dismissed")
+	_check(not rs.call(true, true, 0.0, 9.0, false, true), "reshow is one-shot")
 
 	# --- Раскладка уезжает вверх от клавиатуры. ---
 	# В headless вьюпорт крошечный (64×64), поэтому сначала ставим

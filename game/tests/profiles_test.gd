@@ -420,6 +420,18 @@ func _part10_first_run() -> void:
 	_menu.call("_reload")
 	_check(_menu.input_active, "name field is open on an empty list")
 	_check(String(_menu.input_text) == "", "name field starts empty")
+	# Галочка на пустом списке относится к вводимому имени: включаем,
+	# набираем, создаём — флаг переезжает в профиль.
+	_menu.call("_input", _tap(_menu.call("_check_tap_rect").get_center()))
+	_check(_menu.input_all_keys, "checkbox arms the typed name")
+	for ch in "Гри":
+		_menu.call("_unhandled_key_input", _key_event(ch))
+	_menu.call("_unhandled_key_input", _key(KEY_ENTER))
+	_check(S.user_exists("Гри"), "profile created with checkbox on")
+	_check(S.get_all_keys("Гри"), "pending flag moved into the profile")
+	_check(not _menu.input_all_keys, "pending flag resets after creating")
+	S.delete_user("Гри")
+	_menu.call("_reload")
 	# Буквы печатаются сразу, без Tab.
 	for ch in "Маша":
 		_menu.call("_unhandled_key_input", _key_event(ch))

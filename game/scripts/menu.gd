@@ -38,6 +38,10 @@ var users: Array[String] = []
 var sel := 0
 var input_active := false
 var input_text := ""
+## Флаг «все клавиши» для имени, которое прямо сейчас вводится (списка
+## ещё нет — применять не к кому). При создании профиля переносится
+## в него, затем сбрасывается.
+var input_all_keys := false
 ## Игрок, ради которого меню открыли: F2 возвращает в игру с ним.
 var resume_user := ""
 var view_w := BASE_W
@@ -198,7 +202,7 @@ func _input(event: InputEvent) -> void:
 			chosen.emit(users[i])
 			get_viewport().set_input_as_handled()
 			return
-	if not users.is_empty() and _check_tap_rect().has_point(pos):
+	if _check_tap_rect().has_point(pos):
 		_toggle_all_keys()
 		get_viewport().set_input_as_handled()
 		return
@@ -276,13 +280,16 @@ func _panel_sb(bg: Color, radius: float, border := Color(0, 0, 0, 0), bw := 0.0,
 func _enter() -> void:
 	if input_active and not input_text.strip_edges().is_empty():
 		var name := S.clean_name(input_text)
-		# Новое имя — создать, существующее — просто войти.
+		# Новое имя — создать, существующее — просто войти. Флаг
+		# вводимого имени переезжает в созданный профиль.
 		if not S.user_exists(name):
 			S.create_user(name)
+			S.set_all_keys(name, input_all_keys)
 		else:
 			S.touch(name)
 		input_text = ""
 		input_active = false
+		input_all_keys = false
 		chosen.emit(name)
 		return
 	if not users.is_empty():
@@ -301,6 +308,10 @@ func _delete() -> void:
 
 func _toggle_all_keys() -> void:
 	if users.is_empty():
+		# Пустой список (первый запуск): переключаем флаг для вводимого
+		# имени — при создании он переедет в профиль (см. _enter).
+		input_all_keys = not input_all_keys
+		queue_redraw()
 		return
 	var name := users[sel]
 	S.set_all_keys(name, not S.get_all_keys(name))
@@ -482,10 +493,11 @@ func _check_tap_rect() -> Rect2:
 	return Rect2(48.0 * k, y - 36.0 * k, w + 84.0 * k, 48.0 * k)
 
 
-## Включён ли взрослый режим у выбранного.
+## Включён ли взрослый режим: у выбранного — его флаг, на пустом
+## списке — флаг вводимого имени.
 func _check_on() -> bool:
 	if users.is_empty():
-		return false
+		return input_all_keys
 	return bool(S.load_profile(users[sel]).get("all_keys", false))
 
 
@@ -495,6 +507,26 @@ func _button(r: Rect2, label: String) -> void:
 	var fs := int(26.0 * k)
 	var w := _text_size(label, 26).x
 	_text(label, Vector2(r.get_center().x - w * 0.5, r.position.y + 36.0 * k), 26, _ink())
+
+
+## Кнопка день/ночь: солнце (круг + лучи) или луна (диск с кратерами).
+## Иконка показывает, ВО ЧТО переключит: днём — луну, ночью — солнце.
+func _draw_daynight(r: Rect2) -> void:
+	draw_style_box(hint_sb, r)
+	var c := r.get_center()
+	if night:
+		var sr := 13.0 * k
+		draw_line(c + Vector2(-sr, 0), c + Vector2(sr, 0), _ink(), 3.0 * k)
+		draw_line(c + Vector2(0, -sr), c + Vector2(0, sr), _ink(), 3.0 * k)
+		var d := Vector2(sr * 0.7, sr * 0.7)
+		draw_line(c - d, c + d, _ink(), 3.0 * k)
+		draw_line(c + Vector2(-d.x, d.y), c + Vector2(d.x, -d.y), _ink(), 3.0 * k)
+		draw_circle(c, 7.0 * k, Color("#e8a13a"))
+	else:
+		# Луна на светлой дневной пилюле — тёмная, иначе не видно.
+		var mr := 11.0 * k
+		draw_circle(c, mr, Color("#5a6a8a"))
+		draw_circle(c + Vector2(-mr * 0.25, -mr * 0.15), mr * 0.45, Color("#3a4a6b"))
 
 
 func _draw() -> void:
@@ -537,21 +569,20 @@ func _draw() -> void:
 			INK if i == sel else _ink()
 		)
 	y = _field_line_y()
-	# Галочка «все клавиши» под списком: тап переключает взрослый режим
-	# выбранного (то же, что клавиша A).
-	if not users.is_empty():
-		var cy := _check_line_y()
-		draw_style_box(box_sb, Rect2(60.0 * k, cy - 32.0 * k, 32.0 * k, 32.0 * k))
-		if _check_on():
-			draw_line(
-				Vector2(66.0 * k, cy - 12.0 * k), Vector2(76.0 * k, cy - 2.0 * k),
-				INK, 4.0 * k
-			)
-			draw_line(
-				Vector2(76.0 * k, cy - 2.0 * k), Vector2(92.0 * k, cy - 26.0 * k),
-				INK, 4.0 * k
-			)
-		_text("Все клавиши", Vector2(104.0 * k, cy), FONT_ROW, _ink())
+	# Галочка «все клавиши»: на пустом списке относится к вводимому
+	# имени, иначе — к выбранному профилю.
+	var cy := _check_line_y()
+	draw_style_box(box_sb, Rect2(60.0 * k, cy - 32.0 * k, 32.0 * k, 32.0 * k))
+	if _check_on():
+		draw_line(
+			Vector2(66.0 * k, cy - 12.0 * k), Vector2(76.0 * k, cy - 2.0 * k),
+			_ink(), 4.0 * k
+		)
+		draw_line(
+			Vector2(76.0 * k, cy - 2.0 * k), Vector2(92.0 * k, cy - 26.0 * k),
+			_ink(), 4.0 * k
+		)
+	_text("Все клавиши", Vector2(104.0 * k, cy), FONT_ROW, _ink())
 	# Поле ввода нового имени. Рамка — только когда активно, а тыкается
 	# всегда: тап включает ввод, как Tab.
 	var field_txt := _field_text()
@@ -564,10 +595,10 @@ func _draw() -> void:
 		_ink() if input_active else _dim()
 	)
 	# Кнопки действий: та же механика, что Enter и Esc, но пальцем.
-	# Третья — ночь: показывает, во что переключит.
+	# Третья — ночь: иконка показывает, во что переключит.
 	_button(_play_tap_rect(), "Играть")
 	_button(_guest_tap_rect(), "Без профиля")
-	_button(_night_tap_rect(), "День" if night else "Ночь")
+	_draw_daynight(_night_tap_rect())
 	# Кнопка ⌨ справа вверху: вызвать системную клавиатуру.
 	draw_style_box(hint_sb, _mkb_tap_rect())
 	for ix in 3:

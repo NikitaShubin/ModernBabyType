@@ -163,6 +163,10 @@ var kb_h := 0.0
 ## Момент последнего запроса показать клавиатуру (для пере-показа,
 ## если система спрятала её сама, например кнопкой «назад»).
 var _kb_request_t := -100.0
+## Клавиатура была видна после последнего запроса (высота > 0).
+var _kb_seen := false
+## Разовый добровольный пере-показ уже использован.
+var _kb_reshown := false
 ## Кнопки тач-интерфейса: прямоугольники из _draw для хит-теста в _input.
 var _kb_rect := Rect2()
 var _players_rect := Rect2()
@@ -1075,6 +1079,8 @@ func _sync_keyboard() -> void:
 	if not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
 		return
 	_kb_request_t = time
+	_kb_seen = false
+	_kb_reshown = false
 	if want:
 		# existing_text — что уже введено (поле ввода своё, рисованное,
 		# поэтому отдаём пусто: клавиатуре нечего подхватывать).
@@ -1125,15 +1131,21 @@ func _poll_keyboard() -> void:
 	if not is_equal_approx(kh, kb_h):
 		kb_h = kh
 		_relayout()
+	if kh > 0.0:
+		_kb_seen = true
 	var want := _kb_want()
-	if kb_need_reshow(want, _kb_shown, kh, time - _kb_request_t):
+	if kb_need_reshow(want, _kb_shown, kh, time - _kb_request_t, _kb_seen, _kb_reshown):
 		_kb_request_t = time
+		_kb_reshown = true
 		DisplayServer.virtual_keyboard_show("")
 
 
-## Чистое решение «пора ли пере-показать»: матрица в logic_test.
-static func kb_need_reshow(want: bool, shown: bool, height: float, elapsed: float) -> bool:
-	return want and shown and height <= 0.0 and elapsed > 1.5
+## Чистое решение «пора ли пере-показать»: пере-показ разовый и только
+## если клавиатура так и не выехала (надёжность появления). Смахнутую
+## пользователем (была видна — стала 0) не трогаем: её вернут тап по
+## тексту, кнопка ⌨ или новый контекст. Матрица в logic_test.
+static func kb_need_reshow(want: bool, shown: bool, height: float, elapsed: float, seen: bool, reshown: bool) -> bool:
+	return want and shown and height <= 0.0 and elapsed > 3.0 and not seen and not reshown
 
 
 ## Все буквы — одно начертание и кегль. Состояние только оттенком:
@@ -1450,6 +1462,12 @@ func _input(event: InputEvent) -> void:
 		_open_menu()
 		get_viewport().set_input_as_handled()
 		return
+	# Рабочая область (текст, заяц, ёж): тап возвращает спрятанную
+	# клавиатуру. Карточка последняя — кнопки не перекрывает.
+	if card_p.visible and Rect2(card_p.position, card_p.size).has_point(pos):
+		_kb_summon()
+		get_viewport().set_input_as_handled()
+		return
 
 
 ## Кнопка ⌨: показать системную клавиатуру прямо сейчас, не дожидаясь
@@ -1458,6 +1476,8 @@ func _kb_summon() -> void:
 	if not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
 		return
 	_kb_request_t = time
+	_kb_seen = false
+	_kb_reshown = false
 	_kb_shown = true
 	DisplayServer.virtual_keyboard_show("")
 ## Кружок с номером уровня в пустом левом верхнем углу: и красиво,
