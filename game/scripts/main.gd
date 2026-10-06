@@ -226,11 +226,8 @@ func _ready() -> void:
 		tl.autowrap_mode = TextServer.AUTOWRAP_OFF
 		tl.scroll_active = false
 		tl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		# Буквы — ПОВЕРХ героев: заяц и ёж шире клетки, стоят перед
-		# текущей буквой и накрывают предыдущую. Раньше текст был под
-		# ними (z = -10), и на эмуляторе это читалось как «заяц сел на
-		# букву». Теперь герой стоит за строкой, а буквы всегда целы.
-		tl.z_index = 1
+		# Текст — на заднем плане: герои рисуются поверх букв.
+		tl.z_index = -10
 		tl.add_theme_font_override("normal_font", mono)
 		tl.visible = false
 		add_child(tl)
@@ -862,19 +859,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	# время партии рисовал бы красную метку перевода строки.
 	if ke.unicode < 32:
 		return
-	_type_char(_key_char(ke))
-
-
-## Символ из клавиши: обычно unicode как есть, но с включённой
-## RU-клавиатурой железные латинские коды идут позиционно в ЙЦУКЕН
-## (стенд, хромбуки). Софтовые клавиатуры шлют KEY_UNKNOWN/0 и правилом
-## не задеваются — у них unicode уже верный.
-func _key_char(ke: InputEventKey) -> String:
-	if S.get_ru_kb():
-		var mapped := B.latin_to_ru(ke.keycode, ke.shift_pressed)
-		if mapped != "":
-			return mapped
-	return String.chr(ke.unicode)
+	_type_char(String.chr(ke.unicode))
 
 
 func _type_char(ch: String) -> void:
@@ -1380,8 +1365,6 @@ func _refresh_hud() -> void:
 	var avail := _hud_avail()
 	var who := profile_name if profile_name != S.GUEST else "гость"
 	var keys := " · все клавиши" if _all_keys() else ""
-	if S.get_ru_kb():
-		keys += " · RU"
 	var lines := [_first_fit([
 		# Полная строка — для альбомной вкладки.
 		"%s%s · Уровень %d · побед подряд %d/%d · %s · точность %d%% · CPM %.0f" % [
@@ -1557,9 +1540,7 @@ func _hero_pos() -> Vector2:
 	if bounce_t > 0.0:
 		bounce = -18.0 * k * bounce_t
 	# Заяц стоит ПЕРЕД буквой, спрайт центрируется на левом краю её
-	# клетки. Он шире клетки и накрывает предыдущую букву — это не страшно:
-	# буквы рисуются ПОВЕРХ героя (text_labels z_index = 1), так что текст
-	# всегда читается, а заяц стоит как будто за строкой.
+	# клетки: буква остаётся читаемой, заяц заходит на пол-шара в клетку.
 	var half := HERO_TEX.get_width() * 0.5 * _spr_scale(HERO_TEX, _unit_h()).x
 	return Vector2(_cursor_cx() - char_w * 0.5 - half, _track_cy(cursor_line) + bounce)
 

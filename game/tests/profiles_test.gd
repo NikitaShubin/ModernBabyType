@@ -53,7 +53,6 @@ func _process(_dt: float) -> bool:
 	_part12_soft_keyboard()
 	_part13_touch()
 	_part14_night()
-	_part15_ru_keyboard()
 	_report()
 	return true
 
@@ -648,52 +647,6 @@ func _part14_night() -> void:
 
 ## RU-клавиатура: печатать русское с латинской (стенд, хромбуки).
 ## Глобально, как ночь. Тап по галочке и клавиша R при неактивном поле.
-func _part15_ru_keyboard() -> void:
-	S.set_ru_kb(false)
-	_check(not S.get_ru_kb(), "ru keyboard off by default")
-	_menu.call("_reload")
-	_menu.input_active = false
-	# Прямоугольник второй галочки — под первой, над полем ввода.
-	var r1 := Rect2(_menu.call("_check_tap_rect"))
-	var r2 := Rect2(_menu.call("_ru_tap_rect"))
-	_check(
-		r2.position.y >= r1.position.y + r1.size.y - 1.0,
-		"ru checkbox sits below the all-keys checkbox"
-	)
-	var fld := Rect2(_menu.call("_field_tap_rect"))
-	_check(
-		fld.position.y >= r2.position.y + r2.size.y - 1.0,
-		"field frame clears the ru checkbox"
-	)
-	_menu.call("_input", _tap(r2.get_center()))
-	_check(S.get_ru_kb(), "tap turns ru keyboard on")
-	_menu.call("_input", _tap(r2.get_center()))
-	_check(not S.get_ru_kb(), "tap turns ru keyboard off")
-	_menu.call("_unhandled_key_input", _key(KEY_R))
-	_check(S.get_ru_kb(), "R turns ru keyboard on in the menu")
-	_menu.call("_unhandled_key_input", _key(KEY_R))
-	_check(not S.get_ru_kb(), "R turns ru keyboard off in the menu")
-	# При активном поле R — буква, а не переключатель.
-	_menu.call("_toggle_input")
-	_menu.input_text = ""
-	S.set_ru_kb(false)
-	_menu.call("_unhandled_key_input", _typed_key(KEY_R, "r"))
-	_check(_menu.input_text == "r", "R types a letter while the field is active")
-	# С включённой RU-клавиатурой железная латиница идёт в ЙЦУКЕН,
-	# а софтовая (без keycode) — как есть.
-	S.set_ru_kb(true)
-	_menu.input_text = ""
-	_menu.call("_unhandled_key_input", _typed_key(KEY_A, "a"))
-	_check(_menu.input_text == "ф", "hardware A types ef with ru on")
-	_menu.input_text = ""
-	_menu.call("_unhandled_key_input", _key_event("a"))
-	_check(_menu.input_text == "a", "soft A passes through with ru on")
-	S.set_ru_kb(false)
-	_menu.input_active = false
-
-
-## Сколько разных букв на экране во взрослом режиме: все знаки
-## уровня, включая пробел.
 func _letters_on_screen() -> int:
 	var letters := {}
 	for line in _main.display_lines:

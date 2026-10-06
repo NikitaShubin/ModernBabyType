@@ -18,7 +18,6 @@ extends Node2D
 ## Сигналы: chosen(name) — пустое имя означает гостя.
 
 const S := preload("res://scripts/save.gd")
-const B := preload("res://scripts/balance.gd")
 
 signal chosen(user_name: String)
 
@@ -166,15 +165,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		_toggle_all_keys()
 		_eaten()
 		return
-	# RU-клавиатура — той же механикой, что A для «всех клавиш»:
-	# клавиша R при неактивном поле, иначе — вторая галочка мышью.
-	if not input_active and ke.keycode == KEY_R:
-		_toggle_ru()
-		_eaten()
-		return
 	if not input_active or ke.unicode == 0:
 		return
-	var ch := _menu_char(ke)
+	var ch := String.chr(ke.unicode)
 	# Пропускаем управляющие символы (меньше пробела) и пробелы: в имени
 	# их быть не должно, а имя всё равно обрежется по краям.
 	if ke.unicode < 32 or ch == " " or input_text.length() >= S.MAX_NAME_LENGTH:
@@ -220,10 +213,6 @@ func _input(event: InputEvent) -> void:
 			return
 	if _check_tap_rect().has_point(pos):
 		_toggle_all_keys()
-		get_viewport().set_input_as_handled()
-		return
-	if _ru_tap_rect().has_point(pos):
-		_toggle_ru()
 		get_viewport().set_input_as_handled()
 		return
 	if _field_tap_rect().has_point(pos):
@@ -338,22 +327,6 @@ func _toggle_all_keys() -> void:
 	_reload()
 
 
-## RU-клавиатура: печатать русское с латинской (глобально, как ночь —
-## это про устройство, а не про игрока).
-func _toggle_ru() -> void:
-	S.set_ru_kb(not S.get_ru_kb())
-	queue_redraw()
-
-
-## Символ из клавиши (та же механика, что _key_char в main.gd).
-func _menu_char(ke: InputEventKey) -> String:
-	if S.get_ru_kb():
-		var mapped := B.latin_to_ru(ke.keycode, ke.shift_pressed)
-		if mapped != "":
-			return mapped
-	return String.chr(ke.unicode)
-
-
 func _guest() -> void:
 	S.set_last_user(S.GUEST)
 	chosen.emit(S.GUEST)
@@ -425,20 +398,13 @@ func _rows_top() -> float:
 ## относится к вводимому имени), поэтому запас под неё не зависит от
 ## наличия игроков. Раньше на пустом списке запаса не было, и рамка
 ## поля накрывала подпись галочки (видел на эмуляторе).
-## Под галочкой — вторая, «RU-клавиатура»: поле едет ещё ниже.
 func _field_line_y() -> float:
 	return (
 		_rows_top()
 		+ float(maxi(users.size(), 1)) * ROW_H * k
 		+ 30.0 * k
 		+ 78.0 * k
-		+ 48.0 * k
 	)
-
-
-## Строка галочки «RU-клавиатура»: под первой галочкой.
-func _ru_line_y() -> float:
-	return _check_line_y() + 48.0 * k
 
 
 ## Строка галочки «все клавиши»: под списком, над полем ввода.
@@ -561,28 +527,6 @@ func _check_tap_rect() -> Rect2:
 	return Rect2(48.0 * k, y - 36.0 * k, w + 84.0 * k, 48.0 * k)
 
 
-## Галочка «RU-клавиатура»: печатать русское с латинской (тот же
-## переключатель, что клавиша R, но пальцем/мышью).
-func _ru_tap_rect() -> Rect2:
-	var y := _ru_line_y()
-	var w := _text_size("RU-клавиатура", FONT_ROW).x
-	return Rect2(48.0 * k, y - 36.0 * k, w + 84.0 * k, 48.0 * k)
-
-
-## Квадратик галочки с птичкой (один хелпер на обе галочки).
-func _draw_checkbox(cy: float, on: bool) -> void:
-	draw_style_box(box_sb, Rect2(60.0 * k, cy - 32.0 * k, 32.0 * k, 32.0 * k))
-	if on:
-		draw_line(
-			Vector2(66.0 * k, cy - 12.0 * k), Vector2(76.0 * k, cy - 2.0 * k),
-			_ink(), 4.0 * k
-		)
-		draw_line(
-			Vector2(76.0 * k, cy - 2.0 * k), Vector2(92.0 * k, cy - 26.0 * k),
-			_ink(), 4.0 * k
-		)
-
-
 ## Включён ли взрослый режим: у выбранного — его флаг, на пустом
 ## списке — флаг вводимого имени.
 func _check_on() -> bool:
@@ -662,12 +606,17 @@ func _draw() -> void:
 	# Галочка «все клавиши»: на пустом списке относится к вводимому
 	# имени, иначе — к выбранному профилю.
 	var cy := _check_line_y()
-	_draw_checkbox(cy, _check_on())
+	draw_style_box(box_sb, Rect2(60.0 * k, cy - 32.0 * k, 32.0 * k, 32.0 * k))
+	if _check_on():
+		draw_line(
+			Vector2(66.0 * k, cy - 12.0 * k), Vector2(76.0 * k, cy - 2.0 * k),
+			_ink(), 4.0 * k
+		)
+		draw_line(
+			Vector2(76.0 * k, cy - 2.0 * k), Vector2(92.0 * k, cy - 26.0 * k),
+			_ink(), 4.0 * k
+		)
 	_text("Все клавиши", Vector2(104.0 * k, cy), FONT_ROW, _ink())
-	# Галочка «RU-клавиатура»: глобально, как ночь.
-	var ry := _ru_line_y()
-	_draw_checkbox(ry, S.get_ru_kb())
-	_text("RU-клавиатура", Vector2(104.0 * k, ry), FONT_ROW, _ink())
 	# Поле ввода нового имени. Рамка — только когда активно, а тыкается
 	# всегда: тап включает ввод, как Tab.
 	var field_txt := _field_text()

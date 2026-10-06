@@ -25,10 +25,6 @@ const KEY_NIGHT := "night_mode"
 const NIGHT_AUTO := -1
 const NIGHT_DAY := 0
 const NIGHT_ON := 1
-## Печатать русское с латинской клавиатуры (позиционно, ЙЦУКЕН):
-## для стенда эмулятора (русских KCM в образах нет) и хромбуков.
-## Глобально, не на профиль: это про устройство, как ночь.
-const KEY_RU_KB := "ru_kb"
 
 static var PATH := "user://modern_baby_type.cfg"
 
@@ -204,19 +200,6 @@ static func get_night_mode() -> int:
 static func set_night_mode(mode: int) -> void:
 	var cfg := _cfg()
 	cfg.set_value(SECTION_DISPLAY, KEY_NIGHT, clampi(mode, NIGHT_AUTO, NIGHT_ON))
-	cfg.save(PATH)
-
-
-## Русское с латинской клавиатуры: выкл по умолчанию (на телефоне
-## с русской раскладкой он не нужен и только мешал бы).
-static func get_ru_kb() -> bool:
-	var cfg := _cfg()
-	return bool(cfg.get_value(SECTION_DISPLAY, KEY_RU_KB, false))
-
-
-static func set_ru_kb(on: bool) -> void:
-	var cfg := _cfg()
-	cfg.set_value(SECTION_DISPLAY, KEY_RU_KB, on)
 	cfg.save(PATH)
 
 
