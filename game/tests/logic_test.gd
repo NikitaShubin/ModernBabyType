@@ -319,10 +319,15 @@ func _kb_target(l: int, p: int) -> Array:
 
 func _expected_hint(ch: String) -> String:
 	if ch == " ":
-		return "Жми: Пробел"
+		return "Жми: [Пробел]"
 	if ch == "":
 		return ""
-	return "Жми: " + ch.to_upper()
+	if _main.exact_case and ch == ch.to_upper() and ch != ch.to_lower():
+		# Заглавная в строгом режиме: парой Shift + буква.
+		return "Жми: [Shift] + [" + ch + "]"
+	# В строгом режиме показываем букву как есть (регистр важен),
+	# в обычном — для удобства заглавную.
+	return "Жми: [" + (ch if _main.exact_case else ch.to_upper()) + "]"
 
 
 func _run_part1() -> void:
@@ -330,7 +335,7 @@ func _run_part1() -> void:
 	# Старт: курсор на активной букве (фрагмент случайный — вычисляем).
 	var ch0: String = _main._current()
 	_check(ch0 != "" and _main._is_active(ch0), "cursor starts on active")
-	_check(_main.hint_label.text == _expected_hint(ch0), "hint matches cursor")
+	_check(_main._hint_text() == _expected_hint(ch0), "hint matches cursor")
 	_check(_main.enemy_line == 0, "hedgehog starts on line 0")
 	_check(not _main.hedge_active, "hedgehog waits until hero leaves line 0")
 	# Верный ввод символа под курсором: клетка пройдена, курсор ушёл вперёд.
@@ -345,7 +350,7 @@ func _run_part1() -> void:
 	_main._type_char(wrong1)
 	_check(_main.errors.size() == 1, "one error overlay")
 	_check(_main.shake_t > 0.0, "shake on typo")
-	_check(_main.hint_label.text == "Жми: ⌫ Backspace", "hint shows Backspace")
+	_check(_main._hint_text() == "Жми: [⌫] Стереть", "hint shows how to erase")
 	var t1 := _kb_target(b1[0], b1[1])
 	_check(_main.cursor_line == t1[0] and _main.cursor_pos == t1[1], "knockback one step")
 	# Опечатка 2 подряд: откат ЕЩЁ дальше, вторая метка.
@@ -607,6 +612,15 @@ func _run_part2() -> void:
 	_main.view_w = 1000.0
 	_main.view_h = 2000.0
 	_check(_main._kb_want(), "auto keyboard in portrait game")
+	# Ручной вызов кнопкой ⌨ держит клавиатуру и в альбоме: без флага
+	# _sync_keyboard прятал её на следующем кадре (кнопка молчала).
+	_main.view_w = 2000.0
+	_main.view_h = 1000.0
+	_main._kb_manual = true
+	_check(_main._kb_want(), "manual summon keeps keyboard in landscape")
+	_main._new_level()
+	_check(not _main._kb_manual, "new level clears the manual flag")
+	_check(not _main._kb_want(), "landscape is quiet again after new level")
 	_main.view_w = 1100.0
 	_main.view_h = 650.0
 
@@ -675,6 +689,89 @@ func _run_part2() -> void:
 		"new level starts at the beginning"
 	)
 
+	# --- CapsLock и подсказка-«кнопка» (п.6): строгий режим. ---
+	_main.grace_t = 0.0
+	_main.cursor_line = 0
+	_main.cursor_pos = 0
+	_main.errors.clear()
+	_main._caps_warn = false
+	# Детектор чистой функцией: есть регистр — судим, нет — молчим.
+	_main._caps_check(_hardkey(KEY_A, "А".unicode_at(0), false))
+	_check(_main._caps_warn, "uppercase without shift arms the caps warning")
+	_main._caps_warn = false
+	_main._caps_check(_hardkey(KEY_A, "а".unicode_at(0), false))
+	_check(not _main._caps_warn, "lowercase without shift is fine")
+	_main._caps_warn = false
+	_main._caps_check(_hardkey(KEY_A, "А".unicode_at(0), true))
+	_check(not _main._caps_warn, "uppercase with shift is fine")
+	_main._caps_warn = false
+	_main._caps_check(_hardkey(KEY_5, "5".unicode_at(0), false))
+	_check(not _main._caps_warn, "digits have no case to police")
+	# Тот же путь, что у игрока: буква пришла через ввод, не напрямую.
+	var exp_c: String = _main._current()
+	var wrong_up := "Ы" if exp_c != "Ы" else "Ж"
+	_main._unhandled_key_input(_hardkey(KEY_A, wrong_up.unicode_at(0), false))
+	_check(_main._caps_warn, "game input path arms the caps warning")
+	_check(
+		_main._hint_text() == "Выключи CapsLock!",
+		"caps warning beats the erase hint"
+	)
+	# Верная буква гасит предупреждение: регистр сошёлся.
+	_main._type_char(_main._current())
+	_check(not _main._caps_warn, "correct letter clears the caps warning")
+	# Новый уровень сбрасывает всё прошлое.
+	_main._caps_warn = true
+	_main._new_level()
+	_check(not _main._caps_warn, "new level clears the caps warning")
+	# Заглавная под курсором: подсказка парой «Shift + буква», обе — кнопками.
+	var up_l := -1
+	var up_p := -1
+	for li in _main.display_lines.size():
+		var ln: String = _main.display_lines[li]
+		for pi in ln.length():
+			var cc: String = ln.substr(pi, 1)
+			if cc == cc.to_upper() and cc.to_lower() != cc.to_upper():
+				up_l = li
+				up_p = pi
+				break
+		if up_l >= 0:
+			break
+	_check(up_l >= 0, "level has an uppercase letter to hint")
+	if up_l >= 0:
+		_main.errors.clear()
+		_main._caps_warn = false
+		_main.cursor_line = up_l
+		_main.cursor_pos = up_p
+		_check(
+			_main._hint_text() == "Жми: [Shift] + [" + _main._current() + "]",
+			"uppercase hint is shift plus the letter"
+		)
+	# Строчная под курсором: одна кнопка, и строгий режим показывает
+	# букву как есть (регистр важен), не зеркалит в верхний.
+	_main.errors.clear()
+	_main._caps_warn = false
+	_main._new_level()
+	var low_l := -1
+	var low_p := -1
+	for li2 in _main.display_lines.size():
+		var ln2: String = _main.display_lines[li2]
+		for pi2 in ln2.length():
+			var cc2: String = ln2.substr(pi2, 1)
+			if cc2 == cc2.to_lower() and cc2.to_upper() != cc2.to_lower():
+				low_l = li2
+				low_p = pi2
+				break
+		if low_l >= 0:
+			break
+	_check(low_l >= 0, "level has a lowercase letter to hint")
+	if low_l >= 0:
+		_main.cursor_line = low_l
+		_main.cursor_pos = low_p
+		_check(
+			_main._hint_text() == "Жми: [" + _main._current() + "]",
+			"lowercase hint keeps its case in strict mode"
+		)
+
 
 ## Позиция на строке l для теста: хотела бы want, но не за концом
 ## строки (фрагмент текста случайный, длины плавают). Возвращает
@@ -701,6 +798,16 @@ func _cell_key(l: int, p: int) -> String:
 func _softkey(code: int) -> InputEventKey:
 	var ev := InputEventKey.new()
 	ev.unicode = code
+	ev.pressed = true
+	return ev
+
+
+## Событие с физической клавиатуры: код клавиши, готовый символ и шифт.
+func _hardkey(code: int, uni: int, shift := false) -> InputEventKey:
+	var ev := InputEventKey.new()
+	ev.keycode = code
+	ev.unicode = uni
+	ev.shift_pressed = shift
 	ev.pressed = true
 	return ev
 

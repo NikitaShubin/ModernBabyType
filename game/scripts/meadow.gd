@@ -96,16 +96,23 @@ func _draw_birds() -> void:
 	for b in _birds:
 		var p: Vector2 = b[0]
 		var r: float = float(b[2])
-		var flap: float = sin(float(b[1]) + float(b[4]) * 7.0) * 0.5
-		var lift := -0.4 - flap * 0.5
+		# Взмах: фаза от возраста, период ~0.9 с. Размах концов дуг
+		# почти в радиан и вертикальное подпрыгивание: прежние 0.05–0.2
+		# рад глаз не ловил, и птица «висела» (п.1). Базовые углы те же —
+		# дуги смотрят вверх, птица не кверху пузом.
+		var ph: float = float(b[1]) + float(b[4]) * 7.0
+		var flap := sin(ph) * 0.5
+		var lift := -0.4 - flap * 0.9
+		var bob := sin(ph) * 3.0 * sc
 		var lo := PI * 1.15
 		var hi := PI * 1.85
+		var pc := p + Vector2(0.0, bob)
 		draw_arc(
-			p + Vector2(-r * 0.9, 0), r, lo, hi - lift * 0.3, 8,
+			pc + Vector2(-r * 0.9, 0), r, lo, hi - lift * 0.9, 8,
 			col, 2.5 * sc
 		)
 		draw_arc(
-			p + Vector2(r * 0.9, 0), r, lo + lift * 0.3, hi, 8,
+			pc + Vector2(r * 0.9, 0), r, lo + lift * 0.9, hi, 8,
 			col, 2.5 * sc
 		)
 
@@ -156,10 +163,13 @@ func _draw_sun(s: Vector2) -> void:
 
 
 ## Луна вместо солнца: бледный диск и пара кратеров потемнее.
+## Ореол двухслойный, как у солнца: один слабый круг на тёмном небе
+## терялся, и луна читалась «чёрной дырой».
 func _draw_moon(s: Vector2) -> void:
 	var c := Vector2(s.x * 0.87, s.y * 0.13)
 	var r := minf(s.x, s.y) * 0.045
-	draw_circle(c, r * 2.0, Color(0.85, 0.88, 1.0, 0.10))
+	draw_circle(c, r * 2.4, Color(0.90, 0.93, 1.0, 0.14))
+	draw_circle(c, r * 1.7, Color(0.92, 0.94, 1.0, 0.20))
 	draw_circle(c, r, Color("#f4f1de"))
 	draw_circle(c + Vector2(-r * 0.3, -r * 0.2), r * 0.22, Color("#d9d4bd"))
 	draw_circle(c + Vector2(r * 0.25, r * 0.3), r * 0.15, Color("#d9d4bd"))
