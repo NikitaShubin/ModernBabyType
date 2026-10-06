@@ -31,6 +31,9 @@ func _on_chosen(user_name: String) -> void:
 
 
 func _initialize() -> void:
+	# Тот же фиксированный сид, что в logic_test: тексты уровней
+	# выбираются случайно, сценарии — нет.
+	seed(20261006)
 	S.PATH = TEST_PATH
 	S.wipe()
 	var scene: PackedScene = load("res://scenes/menu.tscn")

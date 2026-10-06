@@ -24,6 +24,11 @@ func _check(cond: bool, what: String) -> void:
 
 
 func _initialize() -> void:
+	# Фиксированный сид: _load_text берёт случайный кусок уровня, и без
+	# сида абсолютные позиции сценариев (строка 1, символ 15) то влезают
+	# в строку, то нет — тест валился в CI, дома проходил. Как seed
+	# у chase_test, только глобальный (таблицы в _load_text на нём).
+	seed(20261006)
 	var scene: PackedScene = load("res://scenes/main.tscn")
 	_main = scene.instantiate()
 	# Тест гоняет механику, а не интерфейс: сразу в игру, гостем, без
@@ -76,7 +81,15 @@ func _process(_dt: float) -> bool:
 		_main.cursor_pos = 3
 		_d0 = _main.hero_r.distance_to(_main._hero_pos())
 	elif _frame == 60:
-		var d1: float = _main.hero_r.distance_to(_main._hero_pos())
+		# Догон картинки — детерминированно: крутим _process фиксированным
+		# шагом, а не ждём стену. На быстрой машине 48 кадров пролетают
+		# быстрее, чем lerp сходится (падало в CI, дома проходило).
+		var d1 := _d0
+		for i in 120:
+			if d1 < _d0 * 0.5:
+				break
+			_main._process(1.0 / 60.0)
+			d1 = _main.hero_r.distance_to(_main._hero_pos())
 		_check(d1 < _d0 * 0.5, "hero render chases cursor")
 	elif _frame == 62:
 		# Ёж впереди: по правилу это уже конец — игра прерывается сразу.
