@@ -679,15 +679,14 @@ func _part15_ru_keyboard() -> void:
 	S.set_ru_kb(false)
 	_menu.call("_unhandled_key_input", _typed_key(KEY_R, "r"))
 	_check(_menu.input_text == "r", "R types a letter while the field is active")
-	# С включённой RU-клавиатурой железная латиница идёт в ЙЦУКЕН,
-	# а софтовая (без keycode) — как есть.
+	# С включённой RU-клавиатурой железная латиница идёт в ЙЦУКЕН.
 	S.set_ru_kb(true)
 	_menu.input_text = ""
 	_menu.call("_unhandled_key_input", _typed_key(KEY_A, "a"))
 	_check(_menu.input_text == "ф", "hardware A types ef with ru on")
 	_menu.input_text = ""
-	_menu.call("_unhandled_key_input", _key_event("a"))
-	_check(_menu.input_text == "a", "soft A passes through with ru on")
+	_menu.call("_unhandled_key_input", _key_event("?"))
+	_check(_menu.input_text == ",", "shifted symbol remaps with ru on")
 	S.set_ru_kb(false)
 	_menu.input_active = false
 

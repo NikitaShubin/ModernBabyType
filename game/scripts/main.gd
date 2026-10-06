@@ -226,11 +226,8 @@ func _ready() -> void:
 		tl.autowrap_mode = TextServer.AUTOWRAP_OFF
 		tl.scroll_active = false
 		tl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		# Буквы — ПОВЕРХ героев: заяц и ёж шире клетки, стоят перед
-		# текущей буквой и накрывают предыдущую. Раньше текст был под
-		# ними (z = -10), и на эмуляторе это читалось как «заяц сел на
-		# букву». Теперь герой стоит за строкой, а буквы всегда целы.
-		tl.z_index = 1
+		# Текст — на заднем плане: герои рисуются поверх букв.
+		tl.z_index = -10
 		tl.add_theme_font_override("normal_font", mono)
 		tl.visible = false
 		add_child(tl)
@@ -866,15 +863,14 @@ func _unhandled_key_input(event: InputEvent) -> void:
 
 
 ## Символ из клавиши: обычно unicode как есть, но с включённой
-## RU-клавиатурой железные латинские коды идут позиционно в ЙЦУКЕН
-## (стенд, хромбуки). Софтовые клавиатуры шлют KEY_UNKNOWN/0 и правилом
-## не задеваются — у них unicode уже верный.
+## RU-клавиатурой латинский ввод идёт позиционно в ЙЦУКЕН (стенд,
+## хромбуки). Кириллица с настоящих русских клавиатур таблицей не
+## задевается и идёт как есть.
 func _key_char(ke: InputEventKey) -> String:
+	var ch := String.chr(ke.unicode)
 	if S.get_ru_kb():
-		var mapped := B.latin_to_ru(ke.keycode, ke.shift_pressed)
-		if mapped != "":
-			return mapped
-	return String.chr(ke.unicode)
+		return B.ru_char(ch)
+	return ch
 
 
 func _type_char(ch: String) -> void:

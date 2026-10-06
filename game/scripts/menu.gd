@@ -347,11 +347,10 @@ func _toggle_ru() -> void:
 
 ## Символ из клавиши (та же механика, что _key_char в main.gd).
 func _menu_char(ke: InputEventKey) -> String:
+	var ch := String.chr(ke.unicode)
 	if S.get_ru_kb():
-		var mapped := B.latin_to_ru(ke.keycode, ke.shift_pressed)
-		if mapped != "":
-			return mapped
-	return String.chr(ke.unicode)
+		return B.ru_char(ch)
+	return ch
 
 
 func _guest() -> void:

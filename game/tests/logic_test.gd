@@ -610,22 +610,21 @@ func _run_part2() -> void:
 		"monster word is hard-split"
 	)
 
-	# --- Позиционная RU-раскладка для латинской клавиатуры (стенд). ---
-	# Чистая таблица: keycode → ЙЦУКЕН. Софт-клавиатуры (KEY_UNKNOWN)
-	# идут мимо — у них unicode уже верный.
-	var tr: Callable = BB.latin_to_ru
-	_check(tr.call(KEY_A, false) == "ф", "A position types ef")
-	_check(tr.call(KEY_A, true) == "Ф", "shift keeps case")
-	_check(tr.call(KEY_S, false) == "ы", "S position types yeru")
-	_check(tr.call(KEY_Q, false) == "й", "Q position types short-i")
-	_check(tr.call(KEY_QUOTELEFT, false) == "ё", "grave types io")
-	_check(tr.call(KEY_2, true) == "\"", "shift-2 types quote")
-	_check(tr.call(KEY_3, true) == "№", "shift-3 types numero")
-	_check(tr.call(KEY_SLASH, false) == ".", "slash types dot")
-	_check(tr.call(KEY_SLASH, true) == ",", "shift-slash types comma")
-	_check(tr.call(KEY_SPACE, false) == " ", "space passes through")
-	_check(tr.call(KEY_F1, false) == "", "function keys unmapped")
-	_check(tr.call(KEY_UNKNOWN, false) == "", "soft keyboards bypass")
+	# --- Позиционная RU-раскладка для латинского ввода (стенд). ---
+	# Чистая таблица: символ US-клавиши → ЙЦУКЕН. Кириллица и цифры
+	# идут мимо как есть. Именно символами, а не keycode: эмулятор
+	# шифтованные клавиши присылает готовым unicode без keycode.
+	var tr: Callable = BB.ru_char
+	_check(tr.call("a") == "ф", "a types ef")
+	_check(tr.call("A") == "Ф", "case survives")
+	_check(tr.call("s") == "ы", "s types yeru")
+	_check(tr.call("q") == "й", "q types short-i")
+	_check(tr.call("`") == "ё", "grave types io")
+	_check(tr.call("?") == ",", "shift-slash types comma")
+	_check(tr.call("3") == "3", "digits pass through")
+	_check(tr.call("#") == "№", "shift-3 types numero")
+	_check(tr.call("ф") == "ф", "cyrillic passes through")
+	_check(tr.call(" ") == " ", "space passes through")
 
 	# Маршрут символа в игре: железная латиница идёт в ЙЦУКЕН при
 	# включённой RU-клавиатуре, софтовая (без keycode) — как есть.
