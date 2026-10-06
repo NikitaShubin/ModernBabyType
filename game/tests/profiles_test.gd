@@ -190,19 +190,101 @@ func _part6_navigation() -> void:
 	_check(
 		_menu.users.has(first), "delete ignored while the name field is active"
 	)
-	_menu.input_active = false
-	_menu.call("_delete")
-	_check(not _menu.users.has(first), "delete removes the selected user")
 	_check(
-		not S.user_exists(first), "delete removed the user from disk too"
+		String(_menu.confirm_name) == "", "no confirm while the field is active"
 	)
-	_check(S.user_list().size() == n - 1, "delete shrinks the list by one")
+	_menu.input_active = false
+	# Удаление теперь двухшаговое: Delete только спрашивает, список
+	# и диск целы, пока не сказали «Да».
+	_menu.call("_delete")
+	_check(
+		String(_menu.confirm_name) == first, "delete arms the confirm modal"
+	)
+	_check(
+		_menu.users.has(first), "armed delete keeps the user in the list"
+	)
+	_check(
+		S.user_exists(first), "armed delete keeps the user on disk"
+	)
+	# «Нет» — профиль цел, модалка гаснет.
+	_menu.call("_cancel_confirm")
+	_check(
+		String(_menu.confirm_name) == "", "cancel closes the confirm modal"
+	)
+	_check(
+		_menu.users.has(first), "cancel keeps the user in the list"
+	)
+	# Разрушительные пути — на одноразовых профилях, чтобы дальше
+	# по тесту список остался тем же: среди живых относительный
+	# порядок не меняется (сортировка по last_played).
+	S.create_user("Снос1")
+	S.create_user("Снос2")
+	S.create_user("Снос3")
+	_menu.call("_reload")
+	_menu.input_active = false
+	# Прямой вызов: «Да» сносит из списка и с диска.
+	_menu.sel = _menu.users.find("Снос1")
+	_menu.call("_delete")
+	_menu.call("_confirm_delete")
+	_check(not _menu.users.has("Снос1"), "confirm removes the selected user")
+	_check(
+		not S.user_exists("Снос1"), "confirm removed the user from disk too"
+	)
+	_check(
+		S.user_list().size() == n + 2, "confirm shrinks the list by one"
+	)
+	# Клавиатурный путь: Delete спрашивает, Enter подтверждает.
+	_menu.sel = _menu.users.find("Снос2")
+	_menu.call("_unhandled_key_input", _key(KEY_DELETE))
+	_check(
+		String(_menu.confirm_name) == "Снос2", "Delete key arms the confirm"
+	)
+	_menu.call("_unhandled_key_input", _key(KEY_ENTER))
+	_check(
+		not _menu.users.has("Снос2"), "Enter confirms the delete"
+	)
+	# Отмена с клавиатуры — на живом: Delete спрашивает, Esc отпускает.
+	_menu.sel = 0
+	var third := String(_menu.users[0])
+	_menu.call("_unhandled_key_input", _key(KEY_DELETE))
+	_menu.call("_unhandled_key_input", _key(KEY_ESCAPE))
+	_check(
+		String(_menu.confirm_name) == "", "Escape cancels the confirm"
+	)
+	_check(_menu.users.has(third), "Escape keeps the user")
+	# Тач-путь: крестик спрашивает, «Нет» отпускает, «Да» сносит.
+	# Тап по строке при открытой модалке глотается и никого не играет.
+	if not _menu.chosen.is_connected(_on_chosen):
+		_menu.chosen.connect(_on_chosen)
+	var ti: int = _menu.users.find("Снос3")
+	_menu.sel = ti
+	_menu.call("_input", _tap(_menu.call("_del_tap_rect", ti).get_center()))
+	_check(
+		String(_menu.confirm_name) == "Снос3", "cross tap arms the confirm"
+	)
+	_picked = ""
+	_menu.call("_input", _tap(_menu.call("_row_tap_rect", ti).get_center()))
+	_check(
+		_picked == "", "row tap is swallowed while confirming"
+	)
+	_check(
+		_menu.users.has("Снос3"), "row tap while confirming deletes nothing"
+	)
+	_menu.call("_input", _tap(_menu.call("_confirm_no_rect").get_center()))
+	_check(_menu.users.has("Снос3"), "No button keeps the user")
+	_menu.call("_input", _tap(_menu.call("_del_tap_rect", ti).get_center()))
+	_menu.call("_input", _tap(_menu.call("_confirm_yes_rect").get_center()))
+	_check(not _menu.users.has("Снос3"), "Yes button removes the user")
+	_check(
+		_menu.users.size() == n, "temp profiles are gone, list is intact"
+	)
 
 
 ## Поле ввода: Tab, набор, Backspace, Enter создаёт, Enter с готовым
 ## именем просто входит.
 func _part7_edit_name() -> void:
 	_menu.call("_reload")
+	var users_before: int = S.count_users()
 	_menu.call("_toggle_input")
 	_check(_menu.input_active, "tab opens the name field")
 	for ch in "Петя":
@@ -213,7 +295,8 @@ func _part7_edit_name() -> void:
 	_menu.call("_unhandled_key_input", _key_event("я"))
 	_check(_menu.input_text == "Петя", "typing continues after backspace")
 	_picked = ""
-	_menu.chosen.connect(_on_chosen)
+	if not _menu.chosen.is_connected(_on_chosen):
+		_menu.chosen.connect(_on_chosen)
 	_menu.call("_unhandled_key_input", _key(KEY_ENTER))
 	_check(S.user_exists("Петя"), "enter creates the typed profile")
 	_check(_picked == "Петя", "menu emits the chosen profile")
@@ -226,7 +309,10 @@ func _part7_edit_name() -> void:
 	for ch in "Петя":
 		_menu.call("_unhandled_key_input", _key_event(ch))
 	_menu.call("_unhandled_key_input", _key(KEY_ENTER))
-	_check(S.count_users() == 2, "re-entering an existing name makes no duplicate")
+	_check(
+		S.count_users() == users_before + 1,
+		"re-entering an existing name makes no duplicate"
+	)
 	_check(_picked == "Петя", "an existing name is entered, not created again")
 
 
@@ -262,6 +348,7 @@ func _part8_all_keys_key() -> void:
 ## в игру с тем же игроком.
 func _part9_main_game() -> void:
 	S.set_last_user("Петя")
+	var users_before: int = S.user_list().size()
 	var scene: PackedScene = load("res://scenes/main.tscn")
 	_main = scene.instantiate()
 	root.add_child(_main)
@@ -410,7 +497,9 @@ func _part9_main_game() -> void:
 		int(pety_after["wins_in_row"]) == int(pety_before["wins_in_row"]),
 		"guest result does not change the last profile win streak"
 	)
-	_check(S.user_list().size() == 2, "guest result creates no profile")
+	_check(
+		S.user_list().size() == users_before, "guest result creates no profile"
+	)
 	_main.queue_free()
 	_main = null
 
@@ -441,11 +530,7 @@ func _part10_first_run() -> void:
 	for ch in "Маша":
 		_menu.call("_unhandled_key_input", _key_event(ch))
 	_check(String(_menu.input_text) == "Маша", "typing works without Tab")
-	# Подсказка не врёт про Tab: поле уже открыто.
-	_check(
-		String(_menu.call("_hint")).find("Tab") < 0,
-		"empty-list hint does not mention Tab"
-	)
+	# Подсказки внизу больше нет (избыточна): кнопки и таблица говорят сами.
 	# Enter с набранным именем создаёт профиль из автооткрытого поля.
 	# Приёмник chosen подключён ещё в седьмой части, второй раз не надо:
 	# в Godot 4 повторный connect того же вызова — ошибка.
@@ -530,6 +615,12 @@ func _part13_touch() -> void:
 	_menu.call("_reload")
 	_menu.visible = true
 	_menu.input_active = false
+	# Явные размеры: в headless-прогоне вьюпорт мусорный (64x64),
+	# _relayout подхватывает его — как и остальные проверки ниже,
+	# работаем от заданных величин, а не от окна.
+	_menu.view_w = 1100.0
+	_menu.view_h = 650.0
+	_menu.k = 1.0
 	# Прямоугольники из тех же хелперов, что рисует _draw: хит-тест честный.
 	var first := String(_menu.users[0])
 	var second := String(_menu.users[1])
@@ -545,13 +636,37 @@ func _part13_touch() -> void:
 	_picked = ""
 	_menu.call("_input", _tap(_menu.call("_play_tap_rect").get_center()))
 	_check(_picked == first, "play button enters the selected profile")
-	# Галочка «все клавиши»: тап переключает флаг выбранного.
-	_menu.call("_input", _tap(_menu.call("_check_tap_rect").get_center()))
-	_check(S.get_all_keys(first), "checkbox turns all_keys on")
-	_menu.call("_input", _tap(_menu.call("_check_tap_rect").get_center()))
-	_check(not S.get_all_keys(first), "checkbox turns all_keys off")
-	# Узкий экран: ужатая подпись влезает, строки подсказки влезают,
-	# блок опущен ниже альбомного.
+	# Галочка «Про» в строке: тап переключает флаг ЭТОГО профиля
+	# и не играет им (picked пуст).
+	_picked = ""
+	_menu.call("_input", _tap(_menu.call("_pro_tap_rect", 0).get_center()))
+	_check(S.get_all_keys(first), "pro checkbox turns all_keys on")
+	_check(_picked == "", "pro tap does not play the profile")
+	_menu.call("_input", _tap(_menu.call("_pro_tap_rect", 0).get_center()))
+	_check(not S.get_all_keys(first), "pro checkbox turns all_keys off")
+	# Тап по второй строке играет вторым (галочки не мешают).
+	_picked = ""
+	_menu.call("_input", _tap(_menu.call("_row_tap_rect", 1).get_center()))
+	_check(_picked == second, "tap on a row plays as that user")
+	# Колонки таблицы: галочки обоих строк на одной вертикали.
+	var p0 := Rect2(_menu.call("_pro_tap_rect", 0))
+	var p1 := Rect2(_menu.call("_pro_tap_rect", 1))
+	_check(
+		absf(p0.get_center().x - p1.get_center().x) < 1.0,
+		"pro column is aligned"
+	)
+	# Строки не налезают друг на друга и влезают в экран.
+	var r0 := Rect2(_menu.call("_row_tap_rect", 0))
+	var r1 := Rect2(_menu.call("_row_tap_rect", 1))
+	_check(
+		r1.position.y >= r0.position.y + r0.size.y - 1.0,
+		"rows do not overlap"
+	)
+	_check(
+		r1.position.y + r1.size.y <= _menu.view_h,
+		"rows fit on screen"
+	)
+	# Узкий экран: блок опущен ниже альбомного, шапка на месте.
 	_menu.view_w = 1100.0
 	_menu.view_h = 650.0
 	_menu.k = 1.0
@@ -560,33 +675,27 @@ func _part13_touch() -> void:
 	_menu.view_h = 915.0
 	_menu.k = 0.736
 	_check(_menu.call("_rows_top") > y_land, "portrait block sits lower")
-	var cap := String(_menu.call("_row_caption", first))
-	_check(not ("побед" in cap), "narrow caption drops the long words")
+	# Длинное имя режется многоточием в ширину колонки, таблица цела.
+	# Чистая функция текста и геометрии — профиль создавать не надо.
+	var cut := String(_menu.call("_short_name", "Оченьдлинноеимя12"))
+	_check(cut.ends_with("…"), "long name truncates with ellipsis")
 	_check(
-		_menu.call("_text_size", cap, 30).x <= 412.0,
-		"narrow caption fits the screen"
+		_menu.call("_text_size", cut, 30).x <= 412.0,
+		"truncated name fits the narrow screen"
 	)
-	for ln in _menu.call("_hint_lines"):
-		_check(
-			_menu.call("_text_size", String(ln), 20).x <= 412.0,
-			"hint lines fit the narrow screen"
-		)
-	# Галочка «все клавиши» и рамка поля ввода не наезжают друг на друга
-	# НИ НА ПУСТОМ СПИСКЕ ИГРОКОВ: галочка есть и там (относится к
-	# вводимому имени), а поле раньше получало запас под неё только
-	# при непустом списке — и рамка накрывала подпись (видел на
-	# эмуляторе, строка читалась как «Расскажи»).
+	_check(
+		String(_menu.call("_short_name", first)) == first,
+		"short name passes through"
+	)
+	# Геометрия блока: строки не налезают, кнопки под полем и на экране.
+	# Отдельной галочки между строками и полем больше нет: «Про» живёт
+	# в колонке таблицы, на пустом списке — компактной галочкой под полем.
 	for case_vw in [1100.0, 412.0]:
 		_menu.view_w = case_vw
 		_menu.view_h = 915.0 if case_vw < 700.0 else 650.0
 		_menu.k = 0.736 if case_vw < 700.0 else 1.0
-		var chk := Rect2(_menu.call("_check_tap_rect"))
-		var fld := Rect2(_menu.call("_field_tap_rect"))
-		_check(
-			fld.position.y >= chk.position.y + chk.size.y - 1.0,
-			"field frame clears the all-keys checkbox (vw=%.0f)" % case_vw
-		)
 		# Кнопки под полем не наезжают на поле и остаются на экране.
+		var fld := Rect2(_menu.call("_field_tap_rect"))
 		var btn := Rect2(_menu.call("_play_tap_rect"))
 		_check(
 			btn.position.y >= fld.position.y + fld.size.y - 1.0,
@@ -597,7 +706,7 @@ func _part13_touch() -> void:
 			"buttons fit on screen (vw=%.0f)" % case_vw
 		)
 		# С открытой клавиатурой (kb_h) низ меню — не низ экрана: кнопки
-		# и подсказка обязаны влезть ВЫШЕ неё, иначе на телефоне поле ввода
+		# обязаны влезть ВЫШЕ неё, иначе на телефоне поле ввода
 		# и кнопки уезжают под Gboard. Было: меню про kb_h не знало вообще.
 		_menu.set("kb_h", _menu.view_h * 0.42)
 		# k — как в _relayout (от эффективной высоты): иначе проверка
@@ -608,11 +717,6 @@ func _part13_touch() -> void:
 		_check(
 			btn2.position.y + btn2.size.y <= eff + 1.0,
 			"buttons clear the keyboard (vw=%.0f)" % case_vw
-		)
-		var hpill := Rect2(_menu.call("_hint_rect"))
-		_check(
-			hpill.position.y + hpill.size.y <= eff + 1.0,
-			"hint pill clears the keyboard (vw=%.0f)" % case_vw
 		)
 		_menu.set("kb_h", 0.0)
 	# Скрытое меню тычков не видит.

@@ -105,6 +105,10 @@ func _reload() -> void:
 	users = S.user_list()
 	if sel >= users.size():
 		sel = maxi(0, users.size() - 1)
+	# Модалка список не переживает: ушли из меню через F2 посреди
+	# подтверждения — при следующем открытии чистый список, а не
+	# вчерашний вопрос.
+	confirm_name = ""
 	# Пустой список — это первый запуск: курсор сразу в поле имени.
 	# Иначе буквы уходят в никуда, и кажется, что игра не реагирует.
 	# Набирать имя при пустом списке больше нечем, так что неактивное
@@ -125,6 +129,20 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	# гостя, буква Ф на русской раскладке (тот же keycode, что и A)
 	# переключала «все клавиши», а Tab уводил буквы в невидимое поле.
 	if not visible:
+		return
+	# Модалка подтверждения — только свои клавиши, остальное мимо:
+	# Enter/Д — «Да», Esc/N — «Нет». Д — та же физическая клавиша,
+	# что L (раскладка не важна, смотрим keycode), N — KEY_N.
+	if confirm_name != "":
+		if (
+			ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER
+			or ke.unicode == 10 or ke.unicode == 13
+			or ke.keycode == KEY_L
+		):
+			_confirm_delete()
+		elif ke.keycode == KEY_ESCAPE or ke.keycode == KEY_N:
+			_cancel_confirm()
+		_eaten()
 		return
 	# F2 — вернуться в игру тем же игроком, кого открыли меню.
 	if ke.keycode == KEY_F2:
@@ -151,6 +169,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		_delete()
 		_eaten()
 		return
+	if ke.keycode == KEY_ESCAPE:
 		_guest()
 		_eaten()
 		return
@@ -380,19 +399,20 @@ func _guest() -> void:
 
 ## Ячейки строки таблицы: уровень и счёт «побед из игр». Шапка
 ## объясняет колонки, поэтому в ячейках только цифры.
-func _cell_texts(name: String) -> Array:
+func _cell_texts(name: String) -> Array[String]:
 	var p := S.load_profile(name)
-	return [
+	var res: Array[String] = [
 		"ур.%d" % int(p.get("difficulty", 0)),
 		"%d/%d" % [int(p.get("total_wins", 0)), int(p.get("total_games", 0))],
 	]
+	return res
 
 
 ## Колонки таблицы [имя, уровень, счёт, Про, ✕]: левые края и правый край.
 ## Имя занимает остаток (длинные режем с многоточием), остальные —
 ## по самой широкой ячейке. Та же геометрия у отрисовки, хит-теста
 ## и тестов: мимо не бьёт.
-func _table_cols() -> Array:
+func _table_cols() -> Array[float]:
 	var left := 48.0 * k
 	var right := view_w - 48.0 * k
 	var gap := 12.0 * k
@@ -411,7 +431,8 @@ func _table_cols() -> Array:
 	var rec_x := lvl_x + lvl_w + gap
 	var pro_x := rec_x + rec_w + gap
 	var del_x := pro_x + pro_w + gap
-	return [name_x, lvl_x, rec_x, pro_x, del_x, right]
+	var cols: Array[float] = [name_x, lvl_x, rec_x, pro_x, del_x, right]
+	return cols
 
 
 ## Имя в ширину колонки: длинное режем с многоточием, иначе таблица
@@ -461,7 +482,7 @@ func _rows_top() -> float:
 	var y := 90.0 * k + 70.0 * k
 	if view_h > view_w:
 		var eff := _menu_eff_h()
-		var need := 170.0 * k + float(maxi(users.size(), 1)) * ROW_H * k + 320.0 * k
+		var need := 170.0 * k + float(maxi(users.size(), 1)) * ROW_H * k + 220.0 * k
 		y += maxf(0.0, (eff - need) * 0.22)
 	return y
 
@@ -709,32 +730,68 @@ func _draw() -> void:
 			FONT_ROW,
 			_dim()
 		)
-	# Каждая строка — отдельным «чипсом» по ширине текста: выбранный
-	# жёлтый, остальные белые. Тап по чипсу сразу играет этим игроком.
+	# Таблица игроков: шапка + строки во всю ширину. Тап по строке
+	# сразу играет этим игроком, тап по галочке — только флаг «Про»,
+	# тап по крестику — удаление с подтверждением.
+	if not users.is_empty():
+		var hcols := _table_cols()
+		_text("Имя", Vector2(hcols[0], y - 44.0 * k), FONT_SMALL, _dim())
+		_text("Ур", Vector2(hcols[1], y - 44.0 * k), FONT_SMALL, _dim())
+		_text("Победы", Vector2(hcols[2], y - 44.0 * k), FONT_SMALL, _dim())
+		var pro_hw := _text_size("Про", FONT_SMALL).x
+		_text(
+			"Про",
+			Vector2((hcols[3] + hcols[4]) * 0.5 - pro_hw * 0.5, y - 44.0 * k),
+			FONT_SMALL, _dim()
+		)
 	for i in users.size():
 		var row_y := y + float(i) * ROW_H * k
+		var cols := _table_cols()
 		var chip := _row_tap_rect(i)
 		draw_style_box(row_sb if i == sel else row_idle_sb, chip)
 		# Выбранная строка всегда на жёлтом — тёмным текстом.
+		var tcol := INK if i == sel else _ink()
 		_text(
-			_row_caption(users[i]), Vector2(60.0 * k, row_y), FONT_ROW,
-			INK if i == sel else _ink()
+			_short_name(users[i]), Vector2(cols[0], row_y), FONT_ROW, tcol
 		)
+		var cells := _cell_texts(users[i])
+		_text(cells[0], Vector2(cols[1], row_y), FONT_ROW, tcol)
+		_text(cells[1], Vector2(cols[2], row_y), FONT_ROW, tcol)
+		# Галочка «Про» по центру своей колонки.
+		var pcx := (cols[3] + cols[4]) * 0.5
+		draw_style_box(box_sb, Rect2(pcx - 16.0 * k, row_y - 32.0 * k, 32.0 * k, 32.0 * k))
+		if bool(S.load_profile(users[i]).get("all_keys", false)):
+			draw_line(
+				Vector2(pcx - 10.0 * k, row_y - 12.0 * k),
+				Vector2(pcx, row_y - 2.0 * k),
+				tcol, 4.0 * k
+			)
+			draw_line(
+				Vector2(pcx, row_y - 2.0 * k),
+				Vector2(pcx + 16.0 * k, row_y - 26.0 * k),
+				tcol, 4.0 * k
+			)
+		# Крестик удаления по центру своей колонки.
+		var dcx := (cols[4] + cols[5]) * 0.5
+		var dtxt := "✕"
+		var dw := _text_size(dtxt, FONT_ROW)
+		_text(dtxt, Vector2(dcx - dw.x * 0.5, row_y), FONT_ROW, _danger())
 	y = _field_line_y()
-	# Галочка «все клавиши»: на пустом списке относится к вводимому
-	# имени, иначе — к выбранному профилю.
-	var cy := _check_line_y()
-	draw_style_box(box_sb, Rect2(60.0 * k, cy - 32.0 * k, 32.0 * k, 32.0 * k))
-	if _check_on():
-		draw_line(
-			Vector2(66.0 * k, cy - 12.0 * k), Vector2(76.0 * k, cy - 2.0 * k),
-			_ink(), 4.0 * k
-		)
-		draw_line(
-			Vector2(76.0 * k, cy - 2.0 * k), Vector2(92.0 * k, cy - 26.0 * k),
-			_ink(), 4.0 * k
-		)
-	_text("Все клавиши", Vector2(104.0 * k, cy), FONT_ROW, _ink())
+	# Компактная галочка «Про» для вводимого имени — только когда
+	# список пуст (иначе «Про» живёт в колонке таблицы).
+	if users.is_empty():
+		var cy := _check_line_y()
+		draw_style_box(box_sb, Rect2(60.0 * k, cy - 32.0 * k, 32.0 * k, 32.0 * k))
+		if _check_on():
+			draw_line(
+				Vector2(66.0 * k, cy - 12.0 * k), Vector2(76.0 * k, cy - 2.0 * k),
+				_ink(), 4.0 * k
+			)
+			draw_line(
+				Vector2(76.0 * k, cy - 2.0 * k), Vector2(92.0 * k, cy - 26.0 * k),
+				_ink(), 4.0 * k
+			)
+		_text("Про", Vector2(104.0 * k, cy), FONT_ROW, _ink())
 	# Поле ввода нового имени. Рамка — только когда активно, а тыкается
 	# всегда: тап включает ввод, как Tab.
 	var field_txt := _field_text()
@@ -757,33 +814,23 @@ func _draw() -> void:
 		for iy in 2:
 			draw_circle(
 				_mkb_tap_rect().position + Vector2((14.0 + 14.0 * float(ix)) * k, (17.0 + 12.0 * float(iy)) * k),
-				2.5 * k, UI_TEXT
+				2.5 * k, _uitext()
 			)
-		# Подсказка — в пилюле по центру низа (геометрия в _hint_rect()).
-		draw_style_box(hint_sb, _hint_rect())
-	var lines := _hint_lines()
-	var hy := _hint_rect().position.y + 30.0 * k
-	for li in lines.size():
-		var lw := _text_size(lines[li], FONT_SMALL).x
-		_text(lines[li], Vector2(cx - lw * 0.5, hy + 30.0 * k * float(li)), FONT_SMALL, _uitext())
-
-
-## Пилюля подсказки: та же геометрия, что рисует _draw. Низ пилюли —
-## якорь от эффективной высоты, чтобы с клавиатурой не уехать под неё.
-func _hint_rect() -> Rect2:
-	var cx := view_w * 0.5
-	var y := _buttons_y() + 52.0 * k + 30.0 * k
-	var lines := _hint_lines()
-	var hy := minf(y, _menu_eff_h() - 60.0 * k - 30.0 * k * float(lines.size() - 1))
-	var widest := 0.0
-	for ln in lines:
-		widest = maxf(widest, _text_size(ln, FONT_SMALL).x)
-	# Замер шрифта чуть уже отрисовки: запас, чтобы текст не торчал.
-	widest += 20.0 * k
-	return Rect2(
-		cx - widest * 0.5 - 24.0 * k, hy - 30.0 * k,
-		widest + 48.0 * k, 30.0 * k * float(lines.size()) + 22.0 * k
-	)
+	# Модалка подтверждения удаления — поверх всего.
+	if confirm_name != "":
+		var dimmer := Color(0.05, 0.05, 0.08, 0.55)
+		draw_rect(Rect2(Vector2.ZERO, Vector2(view_w, view_h)), dimmer)
+		var card := _confirm_card_rect()
+		draw_style_box(box_sb, card)
+		var qt := "Удалить «%s»?" % confirm_name
+		var qw := _text_size(qt, FONT_ROW).x
+		_text(
+			qt,
+			Vector2(card.get_center().x - qw * 0.5, card.position.y + 62.0 * k),
+			FONT_ROW, _ink()
+		)
+		_button(_confirm_yes_rect(), "Да")
+		_button(_confirm_no_rect(), "Нет")
 
 
 ## Зайчик рядом с заголовком: тот же спрайт, что в игре.
@@ -792,49 +839,3 @@ func _draw_bunny(c: Vector2) -> void:
 	draw_set_transform(c, 0.0, Vector2(s, s))
 	draw_texture(HERO_TEX, -HERO_TEX.get_size() * 0.5, _sprite_tint())
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-
-
-func _hint() -> String:
-	if users.is_empty():
-		# Поле ввода на пустом списке уже открыто (_reload его включает),
-		# поэтому совет «нажми Tab» здесь был бы неверным. Гостя ведёт
-		# кнопка «Без профиля», Esc для неё не нужен.
-		return "Введите имя и нажмите Enter"
-	var tail := ""
-	if bool(S.load_profile(users[sel]).get("all_keys", false)):
-		tail = " (вкл.)"
-	elif not input_active:
-		tail = " (выкл.)"
-	# Сначала действия (тап/клик), потом горячие клавиши вторым рядом.
-	# Вторая строка умышленно телеграфная: подробно всё объясняют
-	# кнопки, а длинная строка не влезала в окно.
-	return (
-		"Тап по игроку — играть   ·   Тап по полю — новое имя"
-		+ "   ·   ↑↓ выбор   ·   Enter   ·   A — все клавиши" + tail
-		+ "   ·   Del   ·   Esc   ·   F2"
-	)
-
-
-## Подсказка для показа: та же строка, но разложенная в столько строчек,
-## чтобы каждая влезла в окно (меряем, а не гадаем по символам). На
-## десктопе выходят те же две строки, на телефоне — три. Саму строку
-## не трогаем (её проверяют тесты).
-func _hint_lines() -> Array[String]:
-	var hint := _hint()
-	var parts := hint.split(" · ")
-	if parts.size() <= 1:
-		return [hint]
-	var max_w := view_w - 144.0 * k
-	var lines: Array[String] = []
-	var cur := ""
-	for p in parts:
-		var add := p if cur == "" else " · " + p
-		var w := _text_size(cur + add, FONT_SMALL).x
-		if cur != "" and w > max_w:
-			lines.append(cur)
-			cur = p
-		else:
-			cur += add
-	if cur != "":
-		lines.append(cur)
-	return lines
