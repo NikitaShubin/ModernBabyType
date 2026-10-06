@@ -553,6 +553,19 @@ func _run_part2() -> void:
 	_main._unhandled_key_input(_softkey(13))
 	_check(_main.state == "playing", "unicode enter continues after winning")
 
+	# --- Софтовая кириллица (commitText без keycode, как шлёт Gboard):
+	# буква обязана дойти до игры, а не потеряться. Регресс живого
+	# телефона: там меню кириллицу ест, а игра молчала.
+	_main._new_level()
+	_main.cursor_line = 1
+	_main.cursor_pos = _safe_pos(1, 6)
+	var pw: int = _main.cursor_pos
+	var wc := "ф"
+	if _main._current().to_lower() == "ф":
+		wc = "ж"
+	_main._unhandled_key_input(_softkey(wc.unicode_at(0)))
+	_check(_main.errors.has(_cell_key(1, pw)), "soft cyrillic letter leaves a mark")
+
 	# --- Пере-показ клавиатуры: чистое решение, матрица сочетаний. ---
 	# want/shown/height/elapsed/seen/reshown: показать заново — один раз
 	# и только если клавиатура так и не выехала. Смахнутую пользователем

@@ -31,7 +31,6 @@ const PAPER := Color("#f7f3e8")
 const INK := Color("#1c1a16")
 const UI_TEXT := Color("#4a4438")
 const DIM := Color("#8d8778")
-const ALL_KEYS_BADGE := "⌨ все клавиши"
 const HERO_TEX: Texture2D = preload("res://assets/hero.png")
 
 var users: Array[String] = []
@@ -44,6 +43,9 @@ var input_text := ""
 var input_all_keys := false
 ## Игрок, ради которого меню открыли: F2 возвращает в игру с ним.
 var resume_user := ""
+## Удаление на подтверждении: имя профиля, ждущего «Да». Пусто — модалки
+## нет, меню живёт как обычно. Пока висит — весь остальной ввод глушим.
+var confirm_name := ""
 var view_w := BASE_W
 var view_h := BASE_H
 var k := 1.0
@@ -149,7 +151,6 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		_delete()
 		_eaten()
 		return
-	if ke.keycode == KEY_ESCAPE:
 		_guest()
 		_eaten()
 		return
@@ -204,14 +205,35 @@ func _input(event: InputEvent) -> void:
 			has_pos = true
 	if not has_pos:
 		return
+	# Модалка — только свои две кнопки, остальное мимо.
+	if confirm_name != "":
+		if _confirm_yes_rect().has_point(pos):
+			_confirm_delete()
+			get_viewport().set_input_as_handled()
+		elif _confirm_no_rect().has_point(pos):
+			_cancel_confirm()
+			get_viewport().set_input_as_handled()
+		return
 	# Прямоугольники — из тех же хелперов, что рисует _draw: единый
 	# источник геометрии, работает и без отрисовки (тесты headless).
+	# Внутри строки сначала точечные цели (галочка, крестик), потом
+	# сама строка: иначе тап по галочке играл бы этим профилем.
+	for i in users.size():
+		if _pro_tap_rect(i).has_point(pos):
+			_toggle_pro(i)
+			get_viewport().set_input_as_handled()
+			return
+		if _del_tap_rect(i).has_point(pos):
+			confirm_name = users[i]
+			queue_redraw()
+			get_viewport().set_input_as_handled()
+			return
 	for i in users.size():
 		if _row_tap_rect(i).has_point(pos):
 			chosen.emit(users[i])
 			get_viewport().set_input_as_handled()
 			return
-	if _check_tap_rect().has_point(pos):
+	if users.is_empty() and _check_tap_rect().has_point(pos):
 		_toggle_all_keys()
 		get_viewport().set_input_as_handled()
 		return
@@ -311,8 +333,23 @@ func _enter() -> void:
 func _delete() -> void:
 	if input_active or users.is_empty():
 		return
-	S.delete_user(users[sel])
+	# Удаление непоправимо — только через подтверждение.
+	confirm_name = users[sel]
+	queue_redraw()
+
+
+## Подтверждено: снести и вернуться в список.
+func _confirm_delete() -> void:
+	if confirm_name != "":
+		S.delete_user(confirm_name)
+	confirm_name = ""
 	_reload()
+
+
+## Отмена: профиль цел, модалка гаснет.
+func _cancel_confirm() -> void:
+	confirm_name = ""
+	queue_redraw()
 
 
 func _toggle_all_keys() -> void:
@@ -327,31 +364,67 @@ func _toggle_all_keys() -> void:
 	_reload()
 
 
+## Про-режим строке: все клавиши сразу именно этому игроку.
+func _toggle_pro(i: int) -> void:
+	if i < 0 or i >= users.size():
+		return
+	var name := users[i]
+	S.set_all_keys(name, not S.get_all_keys(name))
+	_reload()
+
+
 func _guest() -> void:
 	S.set_last_user(S.GUEST)
 	chosen.emit(S.GUEST)
 
 
-## Подпись строки профиля: кто, сколько играл, все ли клавиши открыты.
-func _row_caption(name: String) -> String:
+## Ячейки строки таблицы: уровень и счёт «побед из игр». Шапка
+## объясняет колонки, поэтому в ячейках только цифры.
+func _cell_texts(name: String) -> Array:
 	var p := S.load_profile(name)
-	var games := int(p.get("total_games", 0))
-	var wins := int(p.get("total_wins", 0))
-	# На узком экране — ужатая подпись: полная в чипс не влезает.
-	# Победы/игры пакуются как «побед из игр».
-	if view_w < 700.0:
-		var short := "%s · ур.%d · %d/%d" % [
-			name, int(p.get("difficulty", 0)), wins, games
-		]
-		if bool(p.get("all_keys", false)):
-			short += "   " + ALL_KEYS_BADGE
-		return short
-	var line := "%s   уровень %d · игр %d · побед %d" % [
-		name, int(p.get("difficulty", 0)), games, wins
+	return [
+		"ур.%d" % int(p.get("difficulty", 0)),
+		"%d/%d" % [int(p.get("total_wins", 0)), int(p.get("total_games", 0))],
 	]
-	if bool(p.get("all_keys", false)):
-		line += "   " + ALL_KEYS_BADGE
-	return line
+
+
+## Колонки таблицы [имя, уровень, счёт, Про, ✕]: левые края и правый край.
+## Имя занимает остаток (длинные режем с многоточием), остальные —
+## по самой широкой ячейке. Та же геометрия у отрисовки, хит-теста
+## и тестов: мимо не бьёт.
+func _table_cols() -> Array:
+	var left := 48.0 * k
+	var right := view_w - 48.0 * k
+	var gap := 12.0 * k
+	var del_w := 44.0 * k
+	var pro_w := _text_size("Про", FONT_SMALL).x + 44.0 * k
+	var lvl_w := _text_size("Ур", FONT_SMALL).x + 16.0 * k
+	var rec_w := _text_size("Победы", FONT_SMALL).x + 16.0 * k
+	for u in users:
+		var cells := _cell_texts(u)
+		lvl_w = maxf(lvl_w, _text_size(cells[0], FONT_ROW).x + 16.0 * k)
+		rec_w = maxf(rec_w, _text_size(cells[1], FONT_ROW).x + 16.0 * k)
+	var fixed := lvl_w + rec_w + pro_w + del_w + gap * 4.0
+	var name_w := maxf(80.0 * k, right - left - fixed)
+	var name_x := left
+	var lvl_x := left + name_w + gap
+	var rec_x := lvl_x + lvl_w + gap
+	var pro_x := rec_x + rec_w + gap
+	var del_x := pro_x + pro_w + gap
+	return [name_x, lvl_x, rec_x, pro_x, del_x, right]
+
+
+## Имя в ширину колонки: длинное режем с многоточием, иначе таблица
+## разъезжается (имена до 15 знаков).
+func _short_name(name: String) -> String:
+	var cols := _table_cols()
+	var cap := cols[1] - cols[0] - 8.0 * k
+	if _text_size(name, FONT_ROW).x <= cap:
+		return name
+	var out := name
+	while out.length() > 1 and _text_size(out + "…", FONT_ROW).x > cap:
+		out = out.left(out.length() - 1)
+	return out + "…"
 
 
 func _text_size(txt: String, size_px: int) -> Vector2:
@@ -393,38 +466,62 @@ func _rows_top() -> float:
 	return y
 
 
-## Строка поля ввода: после заголовка, строк и отступа. Ниже ещё
-## галочка «все клавиши» — она есть ВСЕГДА (на пустом списке
-## относится к вводимому имени), поэтому запас под неё не зависит от
-## наличия игроков. Раньше на пустом списке запаса не было, и рамка
-## поля накрывала подпись галочки (видел на эмуляторе).
+## Строка поля ввода: после заголовка, строк и отступа. Отдельной
+## галочки между строками и полем больше нет: «Про» живёт в колонке
+## таблицы, на пустом списке — компактной галочкой под полем.
 func _field_line_y() -> float:
 	return (
 		_rows_top()
 		+ float(maxi(users.size(), 1)) * ROW_H * k
-		+ 30.0 * k
-		+ 78.0 * k
+		+ 34.0 * k
 	)
 
 
-## Строка галочки «все клавиши»: под списком, над полем ввода.
+## Строка галочки «Про» для вводимого имени (только пустой список):
+## под полем ввода.
 func _check_line_y() -> float:
-	return _rows_top() + float(maxi(users.size(), 1)) * ROW_H * k + 6.0 * k
+	return _field_line_y() + 56.0 * k
 
 
-## Строка кнопок: под полем ввода.
+## Галочка «Про» для вводимого имени: тот же флаг, что у профилей,
+## но до создания — переедет в профиль (см. _enter).
+func _check_tap_rect() -> Rect2:
+	var y := _check_line_y()
+	var w := _text_size("Про", FONT_ROW).x
+	return Rect2(48.0 * k, y - 36.0 * k, w + 84.0 * k, 48.0 * k)
+
+
+## Строка кнопок: под полем ввода, на пустом списке — под галочкой
+## «Про» для вводимого имени.
 func _buttons_y() -> float:
-	return _field_line_y() + 64.0 * k
+	return _field_line_y() + 64.0 * k + (56.0 * k if users.is_empty() else 0.0)
 
 
-## Чипс строки: та же геометрия, что рисует _draw.
+## Чипс строки: во всю ширину таблицы. Та же геометрия, что _draw.
 func _row_tap_rect(i: int) -> Rect2:
+	var cols := _table_cols()
 	var row_y := _rows_top() + float(i) * ROW_H * k
 	return Rect2(
-		44.0 * k, row_y - 36.0 * k,
-		_text_size(_row_caption(users[i]), FONT_ROW).x + 32.0 * k,
-		ROW_H * k - 10.0 * k
+		cols[0] - 16.0 * k, row_y - 38.0 * k,
+		cols[5] - cols[0] + 32.0 * k, ROW_H * k - 6.0 * k
 	)
+
+
+## Галочка «Про» в строке: тот же переключатель, что клавиша A,
+## но пальцем/мышью. Тап по ней не играет профилем, только флагом.
+func _pro_tap_rect(i: int) -> Rect2:
+	var cols := _table_cols()
+	var row_y := _rows_top() + float(i) * ROW_H * k
+	var cx := (cols[3] + cols[4]) * 0.5
+	return Rect2(cx - 26.0 * k, row_y - 26.0 * k, 52.0 * k, 52.0 * k)
+
+
+## Крестик удаления в строке: открывает модалку подтверждения.
+func _del_tap_rect(i: int) -> Rect2:
+	var cols := _table_cols()
+	var row_y := _rows_top() + float(i) * ROW_H * k
+	var cx := (cols[4] + cols[5]) * 0.5
+	return Rect2(cx - 24.0 * k, row_y - 24.0 * k, 48.0 * k, 48.0 * k)
 
 
 ## Рамка поля ввода (рисуется только когда активно, тыкается всегда).
@@ -518,13 +615,30 @@ func _mkb_tap_rect() -> Rect2:
 	return Rect2(view_w - 72.0 * k, 16.0 * k, 56.0 * k, 56.0 * k)
 
 
-## Галочка «все клавиши» для выбранного профиля: тот же переключатель,
-## что клавиша A, но пальцем/мышью (на телефоне буквы A нет в нужный
-## момент). Нет игроков — нет и галочки.
-func _check_tap_rect() -> Rect2:
-	var y := _check_line_y()
-	var w := _text_size("Все клавиши", FONT_ROW).x
-	return Rect2(48.0 * k, y - 36.0 * k, w + 84.0 * k, 48.0 * k)
+## Кнопки модалки подтверждения: «Да» и «Нет» по центру карточки.
+func _confirm_yes_rect() -> Rect2:
+	var c := _confirm_card_rect().get_center()
+	return Rect2(c + Vector2(-190.0 * k, 24.0 * k), Vector2(170.0 * k, 56.0 * k))
+
+
+func _confirm_no_rect() -> Rect2:
+	var c := _confirm_card_rect().get_center()
+	return Rect2(c + Vector2(20.0 * k, 24.0 * k), Vector2(170.0 * k, 56.0 * k))
+
+
+## Карточка модалки: по центру экрана, по ширине текста вопроса.
+func _confirm_card_rect() -> Rect2:
+	var t := "Удалить «%s»?" % confirm_name
+	var w := maxf(_text_size(t, FONT_ROW).x + 96.0 * k, 420.0 * k)
+	var h := 210.0 * k
+	return Rect2((view_w - w) * 0.5, (view_h - h) * 0.5, w, h)
+
+
+## Опасное действие (крестик удаления): красный в обеих темах.
+func _danger() -> Color:
+	if night:
+		return Color("#ff7a6b")
+	return Color("#b02323")
 
 
 ## Включён ли взрослый режим: у выбранного — его флаг, на пустом
@@ -543,8 +657,8 @@ func _button(r: Rect2, label: String) -> void:
 	_text(label, Vector2(r.get_center().x - w * 0.5, r.position.y + 36.0 * k), 26, _ink())
 
 
-## Кнопка день/ночь: солнце (круг + лучи) или луна (диск с кратерами).
-## Иконка показывает, ВО ЧТО переключит: днём — луну, ночью — солнце.
+## Кнопка день/ночь: солнце (круг + лучи) или светящийся месяц.
+## Иконка показывает, ВО ЧТО переключит: днём — месяц, ночью — солнце.
 func _draw_daynight(r: Rect2) -> void:
 	draw_style_box(hint_sb, r)
 	var c := r.get_center()
@@ -557,10 +671,14 @@ func _draw_daynight(r: Rect2) -> void:
 		draw_line(c + Vector2(-d.x, d.y), c + Vector2(d.x, -d.y), _ink(), 3.0 * k)
 		draw_circle(c, 7.0 * k, Color("#e8a13a"))
 	else:
-		# Луна на светлой дневной пилюле — тёмная, иначе не видно.
-		var mr := 11.0 * k
-		draw_circle(c, mr, Color("#5a6a8a"))
-		draw_circle(c + Vector2(-mr * 0.25, -mr * 0.15), mr * 0.45, Color("#3a4a6b"))
+		# Светящийся месяц: бледный диск с тёплым ореолом и кратерами.
+		# Виден и на светлой, и на тёмной пилюле — не «чёрная дыра».
+		var mr := 10.0 * k
+		draw_circle(c, mr * 2.1, Color(1.0, 0.95, 0.75, 0.18))
+		draw_circle(c, mr * 1.5, Color(1.0, 0.96, 0.80, 0.25))
+		draw_circle(c, mr, Color("#f4f1de"))
+		draw_circle(c + Vector2(-mr * 0.3, -mr * 0.2), mr * 0.22, Color("#d9d4bd"))
+		draw_circle(c + Vector2(mr * 0.25, mr * 0.3), mr * 0.15, Color("#d9d4bd"))
 
 
 func _draw() -> void:
