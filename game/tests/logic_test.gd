@@ -6,6 +6,7 @@ extends SceneTree
 ## Код выхода 0 — всё сошлось.
 
 const BB := preload("res://scripts/balance.gd")
+const SS := preload("res://scripts/save.gd")
 
 var _frame := 0
 var _main: Node = null
@@ -608,6 +609,39 @@ func _run_part2() -> void:
 		fl.call(raw4, 5)[0].length() == 5,
 		"monster word is hard-split"
 	)
+
+	# --- Позиционная RU-раскладка для латинской клавиатуры (стенд). ---
+	# Чистая таблица: keycode → ЙЦУКЕН. Софт-клавиатуры (KEY_UNKNOWN)
+	# идут мимо — у них unicode уже верный.
+	var tr: Callable = BB.latin_to_ru
+	_check(tr.call(KEY_A, false) == "ф", "A position types ef")
+	_check(tr.call(KEY_A, true) == "Ф", "shift keeps case")
+	_check(tr.call(KEY_S, false) == "ы", "S position types yeru")
+	_check(tr.call(KEY_Q, false) == "й", "Q position types short-i")
+	_check(tr.call(KEY_QUOTELEFT, false) == "ё", "grave types io")
+	_check(tr.call(KEY_2, true) == "\"", "shift-2 types quote")
+	_check(tr.call(KEY_3, true) == "№", "shift-3 types numero")
+	_check(tr.call(KEY_SLASH, false) == ".", "slash types dot")
+	_check(tr.call(KEY_SLASH, true) == ",", "shift-slash types comma")
+	_check(tr.call(KEY_SPACE, false) == " ", "space passes through")
+	_check(tr.call(KEY_F1, false) == "", "function keys unmapped")
+	_check(tr.call(KEY_UNKNOWN, false) == "", "soft keyboards bypass")
+
+	# Маршрут символа в игре: железная латиница идёт в ЙЦУКЕН при
+	# включённой RU-клавиатуре, софтовая (без keycode) — как есть.
+	# Флаг глобальный — возвращаем как было, чтобы не пачкать соседей.
+	var ru_was: bool = SS.get_ru_kb()
+	SS.set_ru_kb(true)
+	var hw := InputEventKey.new()
+	hw.keycode = KEY_A
+	hw.unicode = 97
+	hw.pressed = true
+	_check(_main._key_char(hw) == "ф", "game routes hardware A to ef")
+	var sw := InputEventKey.new()
+	sw.unicode = 1086
+	sw.pressed = true
+	_check(_main._key_char(sw) == "о", "game passes soft keys through")
+	SS.set_ru_kb(ru_was)
 
 	# --- Скролл длинного текста: окно едет за курсором, уехавшие прячем.
 	# Карточка — окно, а не весь текст. Самосогласовано через _vis_lines.

@@ -76,6 +76,7 @@ run_exports() {
 		Linux) out=dist/ModernBabyType.x86_64 ;;
 		macOS) out=dist/ModernBabyType.zip ;;
 		Android) out=dist/ModernBabyType.apk ;;
+		AndroidEmu) out=dist/ModernBabyType.emu.apk ;;
 		*) echo "неизвестный пресет: $preset" >&2; exit 2 ;;
 		esac
 		run_godot --headless --path game --export-release "$preset" "$out"

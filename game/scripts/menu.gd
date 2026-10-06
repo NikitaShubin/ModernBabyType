@@ -18,6 +18,7 @@ extends Node2D
 ## Сигналы: chosen(name) — пустое имя означает гостя.
 
 const S := preload("res://scripts/save.gd")
+const B := preload("res://scripts/balance.gd")
 
 signal chosen(user_name: String)
 
@@ -47,6 +48,13 @@ var resume_user := ""
 var view_w := BASE_W
 var view_h := BASE_H
 var k := 1.0
+## Высота клавиатуры в пикселях канваса (ставит игра из своего kb_h —
+## см. main._relayout/_open_menu; 0 — скрыта). Низ, занятый клавиатурой,
+## не наш: блок строк и подсказка считаются от эффективной высоты,
+## иначе поле ввода и кнопки уезжают под Gboard на живом телефоне.
+## На стенде keyboard не вызывается (гейт движка), проверяется
+## симуляцией через игру (F4 в дебажной сборке) + profiles_test.
+var kb_h := 0.0
 var mono: Font
 ## Оформление (только картинка): скруглённые чипсы под строками,
 ## рамка поля ввода и пилюля подсказки. Строки и тексты не меняются —
@@ -85,7 +93,9 @@ func _relayout() -> void:
 		return
 	view_w = s.x
 	view_h = s.y
-	k = clampf(minf(view_w / BASE_W, view_h / BASE_H), 0.5, 2.5)
+	# Масштаб — от эффективной высоты (минус клавиатура), как в игре:
+	# иначе в альбомной с клавиатурой блок меню не влезает над ней.
+	k = clampf(minf(view_w / BASE_W, _menu_eff_h() / BASE_H), 0.5, 2.5)
 	queue_redraw()
 
 
@@ -156,9 +166,15 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		_toggle_all_keys()
 		_eaten()
 		return
+	# RU-клавиатура — той же механикой, что A для «всех клавиш»:
+	# клавиша R при неактивном поле, иначе — вторая галочка мышью.
+	if not input_active and ke.keycode == KEY_R:
+		_toggle_ru()
+		_eaten()
+		return
 	if not input_active or ke.unicode == 0:
 		return
-	var ch := String.chr(ke.unicode)
+	var ch := _menu_char(ke)
 	# Пропускаем управляющие символы (меньше пробела) и пробелы: в имени
 	# их быть не должно, а имя всё равно обрежется по краям.
 	if ke.unicode < 32 or ch == " " or input_text.length() >= S.MAX_NAME_LENGTH:
@@ -204,6 +220,10 @@ func _input(event: InputEvent) -> void:
 			return
 	if _check_tap_rect().has_point(pos):
 		_toggle_all_keys()
+		get_viewport().set_input_as_handled()
+		return
+	if _ru_tap_rect().has_point(pos):
+		_toggle_ru()
 		get_viewport().set_input_as_handled()
 		return
 	if _field_tap_rect().has_point(pos):
@@ -318,6 +338,22 @@ func _toggle_all_keys() -> void:
 	_reload()
 
 
+## RU-клавиатура: печатать русское с латинской (глобально, как ночь —
+## это про устройство, а не про игрока).
+func _toggle_ru() -> void:
+	S.set_ru_kb(not S.get_ru_kb())
+	queue_redraw()
+
+
+## Символ из клавиши (та же механика, что _key_char в main.gd).
+func _menu_char(ke: InputEventKey) -> String:
+	if S.get_ru_kb():
+		var mapped := B.latin_to_ru(ke.keycode, ke.shift_pressed)
+		if mapped != "":
+			return mapped
+	return String.chr(ke.unicode)
+
+
 func _guest() -> void:
 	S.set_last_user(S.GUEST)
 	chosen.emit(S.GUEST)
@@ -328,6 +364,15 @@ func _row_caption(name: String) -> String:
 	var p := S.load_profile(name)
 	var games := int(p.get("total_games", 0))
 	var wins := int(p.get("total_wins", 0))
+	# На узком экране — ужатая подпись: полная в чипс не влезает.
+	# Победы/игры пакуются как «побед из игр».
+	if view_w < 700.0:
+		var short := "%s · ур.%d · %d/%d" % [
+			name, int(p.get("difficulty", 0)), wins, games
+		]
+		if bool(p.get("all_keys", false)):
+			short += "   " + ALL_KEYS_BADGE
+		return short
 	var line := "%s   уровень %d · игр %d · побед %d" % [
 		name, int(p.get("difficulty", 0)), games, wins
 	]
@@ -358,20 +403,42 @@ func _field_text() -> String:
 
 
 ## Базовая строка меню: заголовок + строки. Дальше всё считается от неё.
+## В портрете блок опускаем, чтобы не кучковался сверху (низ пустой);
+## альбом не трогаем. Тапы идут через те же хелперы — мимо не бьют.
+## Центрирование — от эффективной высоты (минус клавиатура): иначе
+## на телефоне с выездом клавиатуры блок остаётся под ней.
+func _menu_eff_h() -> float:
+	return maxf(view_h - kb_h, 220.0)
+
+
 func _rows_top() -> float:
-	return 90.0 * k + 70.0 * k
+	var y := 90.0 * k + 70.0 * k
+	if view_h > view_w:
+		var eff := _menu_eff_h()
+		var need := 170.0 * k + float(maxi(users.size(), 1)) * ROW_H * k + 320.0 * k
+		y += maxf(0.0, (eff - need) * 0.22)
+	return y
 
 
-## Строка поля ввода: после заголовка, строк и отступа. Если игроки
-## есть — ниже ещё галочка «все клавиши», поле едет под неё с запасом,
-## чтобы на телефоне не слипалось.
+## Строка поля ввода: после заголовка, строк и отступа. Ниже ещё
+## галочка «все клавиши» — она есть ВСЕГДА (на пустом списке
+## относится к вводимому имени), поэтому запас под неё не зависит от
+## наличия игроков. Раньше на пустом списке запаса не было, и рамка
+## поля накрывала подпись галочки (видел на эмуляторе).
+## Под галочкой — вторая, «RU-клавиатура»: поле едет ещё ниже.
 func _field_line_y() -> float:
 	return (
 		_rows_top()
 		+ float(maxi(users.size(), 1)) * ROW_H * k
 		+ 30.0 * k
-		+ (78.0 * k if not users.is_empty() else 0.0)
+		+ 78.0 * k
+		+ 48.0 * k
 	)
+
+
+## Строка галочки «RU-клавиатура»: под первой галочкой.
+func _ru_line_y() -> float:
+	return _check_line_y() + 48.0 * k
 
 
 ## Строка галочки «все клавиши»: под списком, над полем ввода.
@@ -494,6 +561,28 @@ func _check_tap_rect() -> Rect2:
 	return Rect2(48.0 * k, y - 36.0 * k, w + 84.0 * k, 48.0 * k)
 
 
+## Галочка «RU-клавиатура»: печатать русское с латинской (тот же
+## переключатель, что клавиша R, но пальцем/мышью).
+func _ru_tap_rect() -> Rect2:
+	var y := _ru_line_y()
+	var w := _text_size("RU-клавиатура", FONT_ROW).x
+	return Rect2(48.0 * k, y - 36.0 * k, w + 84.0 * k, 48.0 * k)
+
+
+## Квадратик галочки с птичкой (один хелпер на обе галочки).
+func _draw_checkbox(cy: float, on: bool) -> void:
+	draw_style_box(box_sb, Rect2(60.0 * k, cy - 32.0 * k, 32.0 * k, 32.0 * k))
+	if on:
+		draw_line(
+			Vector2(66.0 * k, cy - 12.0 * k), Vector2(76.0 * k, cy - 2.0 * k),
+			_ink(), 4.0 * k
+		)
+		draw_line(
+			Vector2(76.0 * k, cy - 2.0 * k), Vector2(92.0 * k, cy - 26.0 * k),
+			_ink(), 4.0 * k
+		)
+
+
 ## Включён ли взрослый режим: у выбранного — его флаг, на пустом
 ## списке — флаг вводимого имени.
 func _check_on() -> bool:
@@ -540,7 +629,8 @@ func _draw() -> void:
 	veil.a = 0.94
 	draw_rect(Rect2(Vector2.ZERO, Vector2(view_w, view_h)), veil)
 	var cx := view_w * 0.5
-	var top := 90.0 * k
+	var y := _rows_top()
+	var top := y - 70.0 * k
 	var title := "Кто играет?"
 	var title_w := _text_size(title, FONT_TITLE).x
 	_draw_bunny(Vector2(cx - title_w * 0.5 - 78.0 * k, top - 20.0 * k))
@@ -550,7 +640,6 @@ func _draw() -> void:
 		FONT_TITLE,
 		_ink()
 	)
-	var y := top + 70.0 * k
 	if users.is_empty():
 		_text(
 			"Пока нет сохранённых игроков",
@@ -573,17 +662,12 @@ func _draw() -> void:
 	# Галочка «все клавиши»: на пустом списке относится к вводимому
 	# имени, иначе — к выбранному профилю.
 	var cy := _check_line_y()
-	draw_style_box(box_sb, Rect2(60.0 * k, cy - 32.0 * k, 32.0 * k, 32.0 * k))
-	if _check_on():
-		draw_line(
-			Vector2(66.0 * k, cy - 12.0 * k), Vector2(76.0 * k, cy - 2.0 * k),
-			_ink(), 4.0 * k
-		)
-		draw_line(
-			Vector2(76.0 * k, cy - 2.0 * k), Vector2(92.0 * k, cy - 26.0 * k),
-			_ink(), 4.0 * k
-		)
+	_draw_checkbox(cy, _check_on())
 	_text("Все клавиши", Vector2(104.0 * k, cy), FONT_ROW, _ink())
+	# Галочка «RU-клавиатура»: глобально, как ночь.
+	var ry := _ru_line_y()
+	_draw_checkbox(ry, S.get_ru_kb())
+	_text("RU-клавиатура", Vector2(104.0 * k, ry), FONT_ROW, _ink())
 	# Поле ввода нового имени. Рамка — только когда активно, а тыкается
 	# всегда: тап включает ввод, как Tab.
 	var field_txt := _field_text()
@@ -608,26 +692,31 @@ func _draw() -> void:
 				_mkb_tap_rect().position + Vector2((14.0 + 14.0 * float(ix)) * k, (17.0 + 12.0 * float(iy)) * k),
 				2.5 * k, UI_TEXT
 			)
-	y = _buttons_y() + 52.0 * k + 30.0 * k
-	# Подсказка — в пилюле по центру низа, в две строки: в одну она
-	# не влезает в окно. Делим только для показа, сама строка та же.
+		# Подсказка — в пилюле по центру низа (геометрия в _hint_rect()).
+		draw_style_box(hint_sb, _hint_rect())
 	var lines := _hint_lines()
-	var hy := minf(y, view_h - 60.0 * k - 30.0 * k * float(lines.size() - 1))
+	var hy := _hint_rect().position.y + 30.0 * k
+	for li in lines.size():
+		var lw := _text_size(lines[li], FONT_SMALL).x
+		_text(lines[li], Vector2(cx - lw * 0.5, hy + 30.0 * k * float(li)), FONT_SMALL, _uitext())
+
+
+## Пилюля подсказки: та же геометрия, что рисует _draw. Низ пилюли —
+## якорь от эффективной высоты, чтобы с клавиатурой не уехать под неё.
+func _hint_rect() -> Rect2:
+	var cx := view_w * 0.5
+	var y := _buttons_y() + 52.0 * k + 30.0 * k
+	var lines := _hint_lines()
+	var hy := minf(y, _menu_eff_h() - 60.0 * k - 30.0 * k * float(lines.size() - 1))
 	var widest := 0.0
 	for ln in lines:
 		widest = maxf(widest, _text_size(ln, FONT_SMALL).x)
 	# Замер шрифта чуть уже отрисовки: запас, чтобы текст не торчал.
 	widest += 20.0 * k
-	draw_style_box(
-		hint_sb,
-		Rect2(
-			cx - widest * 0.5 - 24.0 * k, hy - 30.0 * k,
-			widest + 48.0 * k, 30.0 * k * float(lines.size()) + 22.0 * k
-		)
+	return Rect2(
+		cx - widest * 0.5 - 24.0 * k, hy - 30.0 * k,
+		widest + 48.0 * k, 30.0 * k * float(lines.size()) + 22.0 * k
 	)
-	for li in lines.size():
-		var lw := _text_size(lines[li], FONT_SMALL).x
-		_text(lines[li], Vector2(cx - lw * 0.5, hy + 30.0 * k * float(li)), FONT_SMALL, _uitext())
 
 
 ## Зайчик рядом с заголовком: тот же спрайт, что в игре.
@@ -659,20 +748,22 @@ func _hint() -> String:
 	)
 
 
-## Подсказка для показа: та же строка, но разложенная в две строчки —
-## в одну она не влезает в окно. Делим жадно пополам по «·», саму
-## строку не трогаем (её проверяют тесты).
+## Подсказка для показа: та же строка, но разложенная в столько строчек,
+## чтобы каждая влезла в окно (меряем, а не гадаем по символам). На
+## десктопе выходят те же две строки, на телефоне — три. Саму строку
+## не трогаем (её проверяют тесты).
 func _hint_lines() -> Array[String]:
 	var hint := _hint()
 	var parts := hint.split(" · ")
 	if parts.size() <= 1:
 		return [hint]
+	var max_w := view_w - 144.0 * k
 	var lines: Array[String] = []
 	var cur := ""
-	var budget := float(hint.length()) / 2.0
 	for p in parts:
 		var add := p if cur == "" else " · " + p
-		if cur != "" and lines.is_empty() and float((cur + add).length()) > budget:
+		var w := _text_size(cur + add, FONT_SMALL).x
+		if cur != "" and w > max_w:
 			lines.append(cur)
 			cur = p
 		else:

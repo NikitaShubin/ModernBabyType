@@ -7,6 +7,40 @@ extends RefCounted
 const KEY_PROGRESSION := " аовлыдфжпреимтнгрушщзхъёйчясмитьбю,.!?-:;\"'()1234567890"
 const INITIAL_ACTIVE_COUNT := 3
 const WINS_TO_LEVEL_UP := 3
+## Позиционная русская раскладка для латинской клавиатуры: keycode
+## физической клавиши → буква ЙЦУКЕН (стандарт Windows-RU). Нужно стенду
+## (в образах эмулятора русских KCM нет вообще) и хромбукам с английской
+## раскладкой. Чистая таблица: keycode → [без шифта, с шифтом].
+## Софтовые клавиатуры шлют KEY_UNKNOWN/0 и идут мимо таблицы как есть.
+const RU_POS := {
+	KEY_A: ["ф", "Ф"], KEY_B: ["и", "И"], KEY_C: ["с", "С"],
+	KEY_D: ["в", "В"], KEY_E: ["у", "У"], KEY_F: ["а", "А"],
+	KEY_G: ["п", "П"], KEY_H: ["р", "Р"], KEY_I: ["ш", "Ш"],
+	KEY_J: ["о", "О"], KEY_K: ["л", "Л"], KEY_L: ["д", "Д"],
+	KEY_M: ["ь", "Ь"], KEY_N: ["т", "Т"], KEY_O: ["щ", "Щ"],
+	KEY_P: ["з", "З"], KEY_Q: ["й", "Й"], KEY_R: ["к", "К"],
+	KEY_S: ["ы", "Ы"], KEY_T: ["е", "Е"], KEY_U: ["г", "Г"],
+	KEY_V: ["м", "М"], KEY_W: ["ц", "Ц"], KEY_X: ["ч", "Ч"],
+	KEY_Y: ["н", "Н"], KEY_Z: ["я", "Я"],
+	KEY_0: ["0", ")"], KEY_1: ["1", "!"], KEY_2: ["2", "\""],
+	KEY_3: ["3", "№"], KEY_4: ["4", ";"], KEY_5: ["5", "%"],
+	KEY_6: ["6", ":"], KEY_7: ["7", "?"], KEY_8: ["8", "*"],
+	KEY_9: ["9", "("],
+	KEY_MINUS: ["-", "_"], KEY_EQUAL: ["=", "+"],
+	KEY_BRACKETLEFT: ["х", "Х"], KEY_BRACKETRIGHT: ["ъ", "Ъ"],
+	KEY_SEMICOLON: ["ж", "Ж"], KEY_APOSTROPHE: ["э", "Э"],
+	KEY_BACKSLASH: ["\\", "/"], KEY_COMMA: ["б", "Б"],
+	KEY_PERIOD: ["ю", "Ю"], KEY_SLASH: [".", ","],
+	KEY_QUOTELEFT: ["ё", "Ё"], KEY_SPACE: [" ", " "],
+}
+
+
+## Буква под keycode на латинской клавиатуре (пусто — не буква).
+static func latin_to_ru(keycode: int, shifted: bool) -> String:
+	if not RU_POS.has(keycode):
+		return ""
+	var pair: Array = RU_POS[keycode]
+	return pair[1] if shifted else pair[0]
 ## База slow: даже ребёнок, который только сел за клавиатуру и ищет
 ## три кнопки (пробел, а, о), успевает убежать. Было 2.0 — ёж ловил
 ## новичка раньше, чем тот находил буквы.

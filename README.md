@@ -8,7 +8,7 @@
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20Android-lightgrey.svg)
 ![License](https://img.shields.io/badge/license-MIT-orange.svg)
 
-Версия **0.0.7**. Это ранняя сборка: правила и тексты ещё меняются.
+Версия **0.0.8**. Это ранняя сборка: правила и тексты ещё меняются.
 
 ## Как устроена игра
 

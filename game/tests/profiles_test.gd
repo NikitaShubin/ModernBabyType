@@ -53,6 +53,7 @@ func _process(_dt: float) -> bool:
 	_part12_soft_keyboard()
 	_part13_touch()
 	_part14_night()
+	_part15_ru_keyboard()
 	_report()
 	return true
 
@@ -547,6 +548,71 @@ func _part13_touch() -> void:
 	_check(S.get_all_keys(first), "checkbox turns all_keys on")
 	_menu.call("_input", _tap(_menu.call("_check_tap_rect").get_center()))
 	_check(not S.get_all_keys(first), "checkbox turns all_keys off")
+	# Узкий экран: ужатая подпись влезает, строки подсказки влезают,
+	# блок опущен ниже альбомного.
+	_menu.view_w = 1100.0
+	_menu.view_h = 650.0
+	_menu.k = 1.0
+	var y_land: float = _menu.call("_rows_top")
+	_menu.view_w = 412.0
+	_menu.view_h = 915.0
+	_menu.k = 0.736
+	_check(_menu.call("_rows_top") > y_land, "portrait block sits lower")
+	var cap := String(_menu.call("_row_caption", first))
+	_check(not ("побед" in cap), "narrow caption drops the long words")
+	_check(
+		_menu.call("_text_size", cap, 30).x <= 412.0,
+		"narrow caption fits the screen"
+	)
+	for ln in _menu.call("_hint_lines"):
+		_check(
+			_menu.call("_text_size", String(ln), 20).x <= 412.0,
+			"hint lines fit the narrow screen"
+		)
+	# Галочка «все клавиши» и рамка поля ввода не наезжают друг на друга
+	# НИ НА ПУСТОМ СПИСКЕ ИГРОКОВ: галочка есть и там (относится к
+	# вводимому имени), а поле раньше получало запас под неё только
+	# при непустом списке — и рамка накрывала подпись (видел на
+	# эмуляторе, строка читалась как «Расскажи»).
+	for case_vw in [1100.0, 412.0]:
+		_menu.view_w = case_vw
+		_menu.view_h = 915.0 if case_vw < 700.0 else 650.0
+		_menu.k = 0.736 if case_vw < 700.0 else 1.0
+		var chk := Rect2(_menu.call("_check_tap_rect"))
+		var fld := Rect2(_menu.call("_field_tap_rect"))
+		_check(
+			fld.position.y >= chk.position.y + chk.size.y - 1.0,
+			"field frame clears the all-keys checkbox (vw=%.0f)" % case_vw
+		)
+		# Кнопки под полем не наезжают на поле и остаются на экране.
+		var btn := Rect2(_menu.call("_play_tap_rect"))
+		_check(
+			btn.position.y >= fld.position.y + fld.size.y - 1.0,
+			"buttons sit below the field (vw=%.0f)" % case_vw
+		)
+		_check(
+			btn.position.y + btn.size.y <= _menu.view_h,
+			"buttons fit on screen (vw=%.0f)" % case_vw
+		)
+		# С открытой клавиатурой (kb_h) низ меню — не низ экрана: кнопки
+		# и подсказка обязаны влезть ВЫШЕ неё, иначе на телефоне поле ввода
+		# и кнопки уезжают под Gboard. Было: меню про kb_h не знало вообще.
+		_menu.set("kb_h", _menu.view_h * 0.42)
+		# k — как в _relayout (от эффективной высоты): иначе проверка
+		# бессмысленна, в проде k жмётся именно там.
+		_menu.k = clampf(minf(_menu.view_w / 1100.0, (_menu.view_h - float(_menu.get("kb_h"))) / 650.0), 0.5, 2.5)
+		var eff: float = _menu.view_h - float(_menu.get("kb_h"))
+		var btn2 := Rect2(_menu.call("_play_tap_rect"))
+		_check(
+			btn2.position.y + btn2.size.y <= eff + 1.0,
+			"buttons clear the keyboard (vw=%.0f)" % case_vw
+		)
+		var hpill := Rect2(_menu.call("_hint_rect"))
+		_check(
+			hpill.position.y + hpill.size.y <= eff + 1.0,
+			"hint pill clears the keyboard (vw=%.0f)" % case_vw
+		)
+		_menu.set("kb_h", 0.0)
 	# Скрытое меню тычков не видит.
 	_menu.visible = false
 	_picked = ""
@@ -578,6 +644,52 @@ func _part14_night() -> void:
 	_menu.call("_input", _tap(_menu.call("_night_tap_rect").get_center()))
 	_check(not _menu.night, "night button flips the mode off")
 	_check(S.get_night_mode() == 0, "flip back persists as day")
+
+
+## RU-клавиатура: печатать русское с латинской (стенд, хромбуки).
+## Глобально, как ночь. Тап по галочке и клавиша R при неактивном поле.
+func _part15_ru_keyboard() -> void:
+	S.set_ru_kb(false)
+	_check(not S.get_ru_kb(), "ru keyboard off by default")
+	_menu.call("_reload")
+	_menu.input_active = false
+	# Прямоугольник второй галочки — под первой, над полем ввода.
+	var r1 := Rect2(_menu.call("_check_tap_rect"))
+	var r2 := Rect2(_menu.call("_ru_tap_rect"))
+	_check(
+		r2.position.y >= r1.position.y + r1.size.y - 1.0,
+		"ru checkbox sits below the all-keys checkbox"
+	)
+	var fld := Rect2(_menu.call("_field_tap_rect"))
+	_check(
+		fld.position.y >= r2.position.y + r2.size.y - 1.0,
+		"field frame clears the ru checkbox"
+	)
+	_menu.call("_input", _tap(r2.get_center()))
+	_check(S.get_ru_kb(), "tap turns ru keyboard on")
+	_menu.call("_input", _tap(r2.get_center()))
+	_check(not S.get_ru_kb(), "tap turns ru keyboard off")
+	_menu.call("_unhandled_key_input", _key(KEY_R))
+	_check(S.get_ru_kb(), "R turns ru keyboard on in the menu")
+	_menu.call("_unhandled_key_input", _key(KEY_R))
+	_check(not S.get_ru_kb(), "R turns ru keyboard off in the menu")
+	# При активном поле R — буква, а не переключатель.
+	_menu.call("_toggle_input")
+	_menu.input_text = ""
+	S.set_ru_kb(false)
+	_menu.call("_unhandled_key_input", _typed_key(KEY_R, "r"))
+	_check(_menu.input_text == "r", "R types a letter while the field is active")
+	# С включённой RU-клавиатурой железная латиница идёт в ЙЦУКЕН,
+	# а софтовая (без keycode) — как есть.
+	S.set_ru_kb(true)
+	_menu.input_text = ""
+	_menu.call("_unhandled_key_input", _typed_key(KEY_A, "a"))
+	_check(_menu.input_text == "ф", "hardware A types ef with ru on")
+	_menu.input_text = ""
+	_menu.call("_unhandled_key_input", _key_event("a"))
+	_check(_menu.input_text == "a", "soft A passes through with ru on")
+	S.set_ru_kb(false)
+	_menu.input_active = false
 
 
 ## Сколько разных букв на экране во взрослом режиме: все знаки

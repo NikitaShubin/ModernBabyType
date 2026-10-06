@@ -22,7 +22,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgles2 \
         zip \
         unzip \
+        libxkbfile1 \
+        libxcb-cursor0 \
+        libx11-6 \
+        libxcb1 \
+        libxext6 \
+        libxi6 \
+        libxrender1 \
+        libxtst6 \
+        libsm6 \
+        libice6 \
+        libglib2.0-0 \
+        libdbus-1-3 \
+        libfontconfig1 \
     && rm -rf /var/lib/apt/lists/*
+# Рантайм Qt-xcb сверх Mesa: нужен только окну эмулятора
+# (tools/emulator). Сборкам и тестам он не мешает, в CI лишний вес —
+# полтора десятка мегабайт.
 
 # llvmpipe: рендер на CPU, видеокарта в контейнере не нужна
 ENV LIBGL_ALWAYS_SOFTWARE=1

@@ -5,10 +5,12 @@ __pycache__/
 progress.json
 
 # tools/: в репозитории лежат скрипты сборки (tools/docker), генератор
-# иконок (tools/icons) и хелпер визуального стенда (tools/x11test.py).
-# Всё остальное — кэши и шаблоны, которые пересоздаются: export
-# templates (1.7 ГБ) и бинарь движка.
+# иконок (tools/icons), хелпер визуального стенда (tools/x11test.py) и
+# скрипт эмулятора (tools/emulator/run-emu.sh). Всё остальное — кэши
+# и шаблоны, которые пересоздаются: export templates (1.7 ГБ), бинарь
+# движка, SDK и образы эмулятора.
 tools/*
 !tools/docker/
 !tools/icons/
 !tools/x11test.py
+!tools/emulator/run-emu.sh
