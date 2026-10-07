@@ -143,12 +143,16 @@ func _draw() -> void:
 	if s.x <= 0.0 or s.y <= 0.0:
 		return
 	draw_texture_rect(_sky, Rect2(Vector2.ZERO, s), false)
-	_draw_hills(s)
 	if night:
 		_draw_stars(s)
 		_draw_moon(s)
 	else:
 		_draw_sun(s)
+	# Холмы — поверх звёзд: небо кончается там, где начинается земля,
+	# звёзды на холмах не висят. Птицы — перед холмами (они ближе),
+	# облака выше всех.
+	_draw_hills(s)
+	if not night:
 		_draw_birds()
 	_draw_clouds(s)
 
