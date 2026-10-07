@@ -64,6 +64,9 @@ var k := 1.0
 ## На стенде keyboard не вызывается (гейт движка), проверяется
 ## симуляцией через игру (F4 в дебажной сборке) + profiles_test.
 var kb_h := 0.0
+## Ручной режим ночи из настроек: 0 день, 1 ночь, -1 авто (система).
+## Кнопка крутит по кругу день → ночь → авто.
+var nmode := -1
 var mono: Font
 ## Оформление (только картинка): скруглённые чипсы под строками,
 ## рамка поля ввода и пилюля подсказки. Строки и тексты не меняются —
@@ -93,6 +96,7 @@ func _ready() -> void:
 	hint_sb = _panel_sb(Color(1, 1, 1, 0.72), 14.0, Color("#e0d5bd"), 1.5, false)
 	_meadow = Meadow.new()
 	add_child(_meadow)
+	nmode = S.get_night_mode()
 	_apply_night()
 	get_tree().root.size_changed.connect(_relayout)
 	_relayout()
@@ -116,6 +120,8 @@ func _reload() -> void:
 	users = S.user_list()
 	if sel >= users.size():
 		sel = maxi(0, users.size() - 1)
+	# Режим ночи — из настроек (кнопка могла его сменить, файл — тоже).
+	nmode = S.get_night_mode()
 	# Модалка список не переживает: ушли из меню через F2 посреди
 	# подтверждения — при следующем открытии чистый список, а не
 	# вчерашний вопрос.
@@ -698,7 +704,7 @@ func _sprite_tint() -> Color:
 
 ## Ночь: ручной выбор из файла важнее системы.
 func _night_resolve() -> void:
-	night = S.resolve_night(S.get_night_mode(), true, S.system_dark())
+	night = S.resolve_night(nmode, true, S.system_dark())
 
 
 ## Применить ночь: панели мутируют на месте, фон переключается.
@@ -726,27 +732,34 @@ func _apply_night() -> void:
 	queue_redraw()
 
 
-## Переключатель ночи (кнопка «Ночь»/«День»): выбор запоминается.
+## Переключатель ночи по кругу: день → ночь → авто → день.
+## Выбор запоминается в настройках.
 func _toggle_night() -> void:
-	night = not night
-	S.set_night_mode(S.NIGHT_ON if night else S.NIGHT_DAY)
+	if nmode == S.NIGHT_DAY:
+		nmode = S.NIGHT_ON
+	elif nmode == S.NIGHT_ON:
+		nmode = S.NIGHT_AUTO
+	else:
+		nmode = S.NIGHT_DAY
+	S.set_night_mode(nmode)
 	_apply_night()
 
 
-## Кнопки «Играть», «Без профиля» и «Ночь»/«День»: тройка по центру.
+## Кнопки «Играть», «Без профиля» и день/ночь: тройка по центру.
+## Ночная — маленький квадрат: значок-символ в нём, а не вокруг.
 func _play_tap_rect() -> Rect2:
 	var y := _buttons_y()
-	return Rect2(cx_of() - 337.0 * k, y, 230.0 * k, 52.0 * k)
+	return Rect2(cx_of() - 288.0 * k, y, 230.0 * k, 52.0 * k)
 
 
 func _guest_tap_rect() -> Rect2:
 	var y := _buttons_y()
-	return Rect2(cx_of() - 337.0 * k + 246.0 * k, y, 262.0 * k, 52.0 * k)
+	return Rect2(cx_of() - 288.0 * k + 246.0 * k, y, 262.0 * k, 52.0 * k)
 
 
 func _night_tap_rect() -> Rect2:
 	var y := _buttons_y()
-	return Rect2(cx_of() - 337.0 * k + 524.0 * k, y, 150.0 * k, 52.0 * k)
+	return Rect2(cx_of() - 288.0 * k + 524.0 * k, y, 52.0 * k, 52.0 * k)
 
 
 func cx_of() -> float:
@@ -800,15 +813,22 @@ func _button(r: Rect2, label: String) -> void:
 	_text(label, Vector2(r.get_center().x - w * 0.5, r.position.y + 36.0 * k), 26, _ink())
 
 
-## Кнопка день/ночь: стандартный символ из шрифта (☀/☾), а не
-## рисованная картинка. Иконка показывает, ВО ЧТО переключит:
-## днём — месяц, ночью — солнце.
+## Кнопка день/ночь/авто: стандартный символ из шрифта, а не рисованная
+## картинка. Показывает ТЕКУЩИЙ режим: ☀ — день, залитый месяц — ночь,
+## ◐ (тёмная/светлая) — авто, как в системе. Залитого месяца в шрифте
+## нет (только контурный ☾), поэтому месяц компонуем: диск чернилами
+## плюс вырез цветом пилюли со сдвигом. Кнопка — маленький квадрат,
+## значок вписан с полями, а не вылезает.
 func _draw_daynight(r: Rect2) -> void:
 	draw_style_box(hint_sb, r)
 	var c := r.get_center()
-	var fs := int(30.0 * k)
-	# Ночью кнопка предлагает день (солнце), днём — ночь (месяц).
-	var glyph := "☀" if night else "☾"
+	if nmode == S.NIGHT_ON:
+		var mr := 11.0 * k
+		draw_circle(c, mr, _ink())
+		draw_circle(c + Vector2(mr * 0.42, -mr * 0.38), mr * 0.82, hint_sb.bg_color)
+		return
+	var glyph := "◐" if nmode == S.NIGHT_AUTO else "☀"
+	var fs := int(26.0 * k)
 	var gw := _text_size(glyph, fs).x
 	_text(glyph, Vector2(c.x - gw * 0.5, c.y + float(fs) * 0.36), fs, _ink())
 

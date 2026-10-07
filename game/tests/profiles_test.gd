@@ -812,12 +812,18 @@ func _part14_night() -> void:
 	_check(S.get_night_mode() == -1, "mode clamps to auto")
 	_menu.visible = true
 	_menu.night = false
+	_menu.nmode = S.NIGHT_DAY
+	# Кнопка крутит по кругу день → ночь → авто → день.
 	_menu.call("_input", _tap(_menu.call("_night_tap_rect").get_center()))
 	_check(_menu.night, "night button flips the mode on")
 	_check(S.get_night_mode() == 1, "flip persists as night")
+	_check(_menu.nmode == S.NIGHT_ON, "mode tracks night")
 	_menu.call("_input", _tap(_menu.call("_night_tap_rect").get_center()))
-	_check(not _menu.night, "night button flips the mode off")
-	_check(S.get_night_mode() == 0, "flip back persists as day")
+	_check(S.get_night_mode() == -1, "second flip goes auto")
+	_check(_menu.nmode == S.NIGHT_AUTO, "mode tracks auto")
+	_menu.call("_input", _tap(_menu.call("_night_tap_rect").get_center()))
+	_check(not _menu.night, "third flip returns to day")
+	_check(S.get_night_mode() == 0, "day persists after the full circle")
 
 
 ## RU-клавиатура: печатать русское с латинской (стенд, хромбуки).
