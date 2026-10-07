@@ -699,13 +699,20 @@ func _run_part2() -> void:
 		_main.cursor_line == 0 and _main.cursor_pos == 0,
 		"new level starts at the beginning"
 	)
-	# На десктопе кнопка ⌨ спрятана: тап по её месту идёт дальше,
-	# а не вызывает клавиатуру.
+	# На десктопе кнопки ⌨ нет и тап по её месту — это тап по ≡:
+	# угол принадлежит одной кнопке. Мобильная ветка ниже — только
+	# с _force_touch (в headless иначе не проверить).
 	_main._finish(true)
 	_check(_main.state == "won", "setup: level won again")
+	_main._force_touch = true
+	_main._relayout()
 	_main.call("_input", _tap(_main._kb_rect.get_center()))
-	_check(_main.state == "playing", "kb tap advances on desktop")
+	_check(_main._kb_manual, "kb tap summons the keyboard on touch layouts")
+	_check(_main.state == "won", "kb tap does not advance past the modal")
+	_main._force_touch = false
+	_main._relayout()
 	# Полые звёзды: недобранный балл виден (2 из 3).
+	_main._new_level()
 	_main.typed_ok = 94
 	_main.typed_bad = 6
 	_main._finish(true)
@@ -729,6 +736,15 @@ func _run_part2() -> void:
 	_check(_main._plural(0, "ошибка", "ошибки", "ошибок") == "ошибок", "plural zero")
 	_check(_main._is_desktop(), "headless counts as desktop")
 	_check(_main._players_hint() == "Меню (F2)", "desktop hints the menu key")
+	# Подсказка видна только по наведению, а не постоянно.
+	var mmin := InputEventMouseMotion.new()
+	mmin.position = _main._players_rect.get_center()
+	_main.call("_input", mmin)
+	_check(_main._players_hover, "hover arms the menu hint")
+	var mmout := InputEventMouseMotion.new()
+	mmout.position = Vector2.ZERO
+	_main.call("_input", mmout)
+	_check(not _main._players_hover, "hover away hides the menu hint")
 
 	# --- CapsLock и подсказка-«кнопка» (п.6): строгий режим. ---
 	_main.grace_t = 0.0

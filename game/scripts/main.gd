@@ -456,6 +456,7 @@ func _open_menu() -> void:
 		add_child(menu)
 	menu.visible = true
 	menu_open = true
+	_players_hover = false
 	_set_play_ui(false)
 	# Свежая высота клавиатуры — в меню сразу, не дожидаясь релэяута.
 	menu.set("kb_h", kb_h)
@@ -552,9 +553,13 @@ func _relayout() -> void:
 	# Геометрия модалки — в _layout_text_lines (каждый кадр): позиция
 	# зависит от скролла. Здесь только кнопки и панели.
 	hud_label.size = Vector2(view_w - margin * 2.0, 70.0 * k)
-	# Кнопки тач-интерфейса: справа вверху, друг под другом.
+	# Кнопки тач-интерфейса: справа вверху, друг под другом. На десктопе
+	# кнопки ⌨ нет, и ≡ едет в освободившийся верхний угол.
 	_kb_rect = Rect2(view_w - 72.0 * k, 16.0 * k, 56.0 * k, 56.0 * k)
-	_players_rect = Rect2(view_w - 72.0 * k, 84.0 * k, 56.0 * k, 48.0 * k)
+	if _is_desktop():
+		_players_rect = Rect2(view_w - 72.0 * k, 16.0 * k, 56.0 * k, 48.0 * k)
+	else:
+		_players_rect = Rect2(view_w - 72.0 * k, 84.0 * k, 56.0 * k, 48.0 * k)
 	_layout_card()
 	_layout_pills()
 	_layout_overlay_panel()
@@ -1509,36 +1514,6 @@ func _draw_hint() -> void:
 		x += w + gap
 
 
-## Обратный отсчёт старта — крупно по центру карточки. Раньше жил
-## в табло, которого больше нет: три секунды висит, потом исчезает.
-func _draw_countdown() -> void:
-	if state != "playing" or grace_t <= 0.0:
-		return
-	var fs := int(44.0 * k)
-	var t := "Старт через %d" % int(ceil(grace_t))
-	var tw := mono.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x
-	var c := card_p.get_rect().get_center()
-	draw_string(
-		mono, Vector2(c.x - tw * 0.5, c.y - 6.0 * k),
-		t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs, _ui_ink()
-	)
-	var fs2 := int(28.0 * k)
-	var sub := "печатай %s буквы!" % ("светлые" if night else "чёрные")
-	var sw := mono.get_string_size(sub, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs2).x
-	# Подложка-пилюля: без неё крупные буквы ложатся прямо на текст
-	# уровня и строка не читается.
-	var bw := maxf(tw, sw) + 56.0 * k
-	var bh := 44.0 * k + 12.0 * k + 34.0 * k + 28.0 * k
-	draw_style_box(
-		pill_sb,
-		Rect2(c.x - bw * 0.5, c.y - 6.0 * k - 44.0 * k - 14.0 * k, bw, bh)
-	)
-	draw_string(
-		mono, Vector2(c.x - sw * 0.5, c.y + 38.0 * k),
-		sub, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs2, _ui_ink()
-	)
-
-
 ## Ширина, доступная строке табло: от поля до поля.
 func _hud_avail() -> float:
 	return view_w - margin * 2.0
@@ -1721,7 +1696,6 @@ func _draw() -> void:
 	_draw_progress()
 	_draw_cursor_marker()
 	_draw_hint()
-	_draw_countdown()
 	_draw_star_tip()
 	_draw_enemy()
 	# Героя рисуем всегда: на проигрыше у него шок на лице (укололи),
@@ -1739,15 +1713,23 @@ func _ui_ink() -> Color:
 
 ## Десктоп — там, где нет системной клавиатуры (нет и клавиши F2
 ## на экране, зато есть физическая). Кнопка игроков там подписана.
+## _force_touch включает мобильную раскладку принудительно — для
+## headless-тестов веток с клавиатурой (там фичи нет никогда).
+var _force_touch := false
 func _is_desktop() -> bool:
-	return not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD)
+	return not _force_touch and not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD)
 
 
 ## Подсказка кнопки игроков: на десктопе словами «Меню (F2)»
 ## (физическая клавиша есть), на телефоне пусто — там значок ≡
-## без слов, клавиши F2 нет.
+## без слов, клавиши F2 нет. Показываем только по наведению мыши,
+## а не постоянно: сбоку от кнопки она лезла на луну и не читалась.
 func _players_hint() -> String:
 	return "Меню (F2)" if _is_desktop() else ""
+
+
+## Мышь наведена на кнопку игроков: подсказка видна, пока наведена.
+var _players_hover := false
 
 
 ## Кнопки тач-интерфейса: ⌨ — вызвать системную клавиатуру, ≡ — игроки.
@@ -1775,7 +1757,7 @@ func _draw_touch_buttons() -> void:
 			_ui_ink(), 3.0 * k
 		)
 	var ph := _players_hint()
-	if ph != "":
+	if ph != "" and _players_hover:
 		var pfs := int(22.0 * k)
 		var ptw := mono.get_string_size(
 			ph, HORIZONTAL_ALIGNMENT_LEFT, -1.0, pfs
@@ -1808,6 +1790,15 @@ func _input(event: InputEvent) -> void:
 				tip = i + 1
 		if tip != _star_tip:
 			_star_tip = tip
+			queue_redraw()
+		return
+	# Наведение на кнопку игроков (десктоп): подсказка «Меню (F2)»
+	# видна, пока мышь на кнопке. Пальцем наведения нет — там и клавиши
+	# F2 нет, подсказка не нужна.
+	if event is InputEventMouseMotion and _is_desktop() and not menu_open:
+		var hov := _players_rect.has_point((event as InputEventMouseMotion).position)
+		if hov != _players_hover:
+			_players_hover = hov
 			queue_redraw()
 		return
 	var has_pos := false
@@ -1867,12 +1858,14 @@ func _input(event: InputEvent) -> void:
 ## Кнопка ⌨: показать системную клавиатуру прямо сейчас, не дожидаясь
 ## смены состояния (ей и так положено быть видимой — исчезла системно).
 func _kb_summon() -> void:
+	# Ручной флаг — до платформенного гейта: намерение вызвано, даже
+	# если показать нечем (десктоп/headless). Дальше решает платформа.
+	_kb_manual = true
 	if not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
 		return
-	# Ручной флаг: иначе _sync_keyboard на следующем кадре решит,
-	# что клавиатура не нужна (в альбоме _kb_want=false), и спрячет
+	# Без флага _sync_keyboard на следующем кадре решил бы,
+	# что клавиатура не нужна (в альбоме _kb_want=false), и спрятал
 	# только что показанную.
-	_kb_manual = true
 	_kb_request_t = time
 	_kb_seen = false
 	_kb_reshown = false

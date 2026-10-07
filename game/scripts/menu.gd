@@ -71,6 +71,8 @@ var mono: Font
 var row_sb: StyleBoxFlat
 var row_idle_sb: StyleBoxFlat
 var box_sb: StyleBoxFlat
+## Бокс выбранной стрелками галки: залит цветом вместо рамки.
+var selbox_sb: StyleBoxFlat
 var hint_sb: StyleBoxFlat
 ## Ночь (S.resolve_night: ручной выбор или система). Краски берутся
 ## из хелперов _ink/_uitext/_dim, панели мутируют в _apply_night.
@@ -87,6 +89,7 @@ func _ready() -> void:
 	row_sb = _panel_sb(Color("#f0d98a"), 12.0)
 	row_idle_sb = _panel_sb(Color(1, 1, 1, 0.45), 12.0)
 	box_sb = _panel_sb(Color("#ffffff"), 10.0, INK, 2.0, false)
+	selbox_sb = _panel_sb(Color("#a9c6ec"), 10.0, INK, 2.0, false)
 	hint_sb = _panel_sb(Color(1, 1, 1, 0.72), 14.0, Color("#e0d5bd"), 1.5, false)
 	_meadow = Meadow.new()
 	add_child(_meadow)
@@ -705,12 +708,16 @@ func _apply_night() -> void:
 		row_idle_sb.bg_color = Color(0.10, 0.12, 0.20, 0.60)
 		box_sb.bg_color = Color("#232c44")
 		box_sb.border_color = Color("#8b93a8")
+		selbox_sb.bg_color = Color("#3d5a8f")
+		selbox_sb.border_color = Color("#8b93a8")
 		hint_sb.bg_color = Color(0.10, 0.12, 0.20, 0.80)
 		hint_sb.border_color = Color("#3a4a6b")
 	else:
 		row_idle_sb.bg_color = Color(1, 1, 1, 0.45)
 		box_sb.bg_color = Color("#ffffff")
 		box_sb.border_color = INK
+		selbox_sb.bg_color = Color("#a9c6ec")
+		selbox_sb.border_color = INK
 		hint_sb.bg_color = Color(1, 1, 1, 0.72)
 		hint_sb.border_color = Color("#e0d5bd")
 	if _meadow != null:
@@ -885,8 +892,18 @@ func _draw() -> void:
 		# (tcol) на выбранной строке тёмный всегда — ночью галочка
 		# тонула в тёмном боксе, стоило навести выделение.
 		var chk_col := Color("#f2ede0") if night else INK
+		# Выбранная стрелками галка залита своим боксом (selbox_sb),
+		# заголовок колонки подсвечен выше. Рамки было не видно
+		# в длинном списке.
+		var pro_box := box_sb
+		var yo_box := box_sb
+		if i == sel:
+			if sel_col == 0:
+				pro_box = selbox_sb
+			else:
+				yo_box = selbox_sb
 		var pcx := (cols[3] + cols[4]) * 0.5
-		draw_style_box(box_sb, Rect2(pcx - 16.0 * k, row_y - 32.0 * k, 32.0 * k, 32.0 * k))
+		draw_style_box(pro_box, Rect2(pcx - 16.0 * k, row_y - 32.0 * k, 32.0 * k, 32.0 * k))
 		if bool(S.load_profile(users[i]).get("all_keys", false)):
 			draw_line(
 				Vector2(pcx - 10.0 * k, row_y - 12.0 * k),
@@ -900,7 +917,7 @@ func _draw() -> void:
 			)
 		# Галочка «Ё» по центру своей колонки: тот же бокс, тот же цвет.
 		var ycx := (cols[4] + cols[5]) * 0.5
-		draw_style_box(box_sb, Rect2(ycx - 16.0 * k, row_y - 32.0 * k, 32.0 * k, 32.0 * k))
+		draw_style_box(yo_box, Rect2(ycx - 16.0 * k, row_y - 32.0 * k, 32.0 * k, 32.0 * k))
 		if bool(S.load_profile(users[i]).get("yo_strict", true)):
 			draw_line(
 				Vector2(ycx - 10.0 * k, row_y - 12.0 * k),
@@ -914,14 +931,6 @@ func _draw() -> void:
 			)
 		# Крестик удаления по центру своей колонки.
 		var dcx := (cols[5] + cols[6]) * 0.5
-		# Выбранная стрелками галка подсвечена рамкой прямо на боксе:
-		# заголовка в длинном списке глазами не проследить.
-		if i == sel:
-			var scx := pcx if sel_col == 0 else ycx
-			draw_rect(
-				Rect2(scx - 20.0 * k, row_y - 36.0 * k, 40.0 * k, 40.0 * k),
-				_ink(), false, 2.5 * k
-			)
 		var dtxt := "✕"
 		var dw := _text_size(dtxt, FONT_ROW)
 		_text(dtxt, Vector2(dcx - dw.x * 0.5, row_y), FONT_ROW, _danger())
@@ -933,7 +942,8 @@ func _draw() -> void:
 	if users.is_empty():
 		var cy := _check_line_y()
 		var ychk_col := Color("#f2ede0") if night else INK
-		draw_style_box(box_sb, Rect2(60.0 * k, cy - 32.0 * k, 32.0 * k, 32.0 * k))
+		var pro_box0 := selbox_sb if sel_col == 0 else box_sb
+		draw_style_box(pro_box0, Rect2(60.0 * k, cy - 32.0 * k, 32.0 * k, 32.0 * k))
 		if _check_on():
 			draw_line(
 				Vector2(66.0 * k, cy - 12.0 * k), Vector2(76.0 * k, cy - 2.0 * k),
@@ -944,10 +954,9 @@ func _draw() -> void:
 				ychk_col, 4.0 * k
 			)
 		_text("Про", Vector2(104.0 * k, cy), FONT_ROW, _ink())
-		if sel_col == 0:
-			draw_rect(Rect2(56.0 * k, cy - 36.0 * k, 40.0 * k, 40.0 * k), _ink(), false, 2.0 * k)
 		var yob := 210.0 * k
-		draw_style_box(box_sb, Rect2(yob, cy - 32.0 * k, 32.0 * k, 32.0 * k))
+		var yo_box0 := selbox_sb if sel_col == 1 else box_sb
+		draw_style_box(yo_box0, Rect2(yob, cy - 32.0 * k, 32.0 * k, 32.0 * k))
 		if input_yo_strict:
 			draw_line(
 				Vector2(yob + 6.0 * k, cy - 12.0 * k), Vector2(yob + 16.0 * k, cy - 2.0 * k),
@@ -958,8 +967,6 @@ func _draw() -> void:
 				ychk_col, 4.0 * k
 			)
 		_text("Ё", Vector2(yob + 44.0 * k, cy), FONT_ROW, _ink())
-		if sel_col == 1:
-			draw_rect(Rect2(yob - 4.0 * k, cy - 36.0 * k, 40.0 * k, 40.0 * k), _ink(), false, 2.0 * k)
 	# Поле ввода нового имени. Рамка — только когда активно, а тыкается
 	# всегда: тап включает ввод, как Tab.
 	var field_txt := _field_text()
