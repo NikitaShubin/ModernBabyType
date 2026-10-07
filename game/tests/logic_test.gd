@@ -692,14 +692,17 @@ func _run_part2() -> void:
 	_main._finish(true)
 	_check(_main.state == "won", "setup: level won")
 	_main._relayout()
-	_main.call("_input", _tap(_main._star_cell_rect(2).get_center()))
+	_main.call("_input", _tap(_main._star_center(2)))
 	_check(_main._star_tip == 3, "star tap explains the score")
 	_check(_main.state == "won", "star tap does not start a new level")
 	# Наведение мыши на первую звезду меняет подсказку без клика.
-	var mm := InputEventMouseMotion.new()
-	mm.position = _main._star_cell_rect(0).get_center()
-	_main.call("_input", mm)
-	_check(_main._star_tip == 1, "star hover explains the score")
+	# Каждая звезда даёт СВОЮ подсказку (зоны — по глифам строки,
+	# а не третями лейбла: иначе боковые недостижимы).
+	for si in 3:
+		var sme := InputEventMouseMotion.new()
+		sme.position = _main._star_center(si)
+		_main.call("_input", sme)
+		_check(_main._star_tip == si + 1, "star %d has its own hint" % (si + 1))
 	_main.call("_input", _tap(Rect2(_main.card_p.position, _main.card_p.size).get_center()))
 	_check(_main.state == "playing", "tap on the work area starts a new level")
 	_check(

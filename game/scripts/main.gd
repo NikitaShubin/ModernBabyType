@@ -1418,15 +1418,42 @@ func _hint_text() -> String:
 	return " ".join(out)
 
 
-## Зона i-й звёздочки (0..2) в модалке: верхняя половина лейбла
-## третями. Звёзды центрированы, трети широкие — пальцем попасть легко.
-func _star_cell_rect(i: int) -> Rect2:
-	var r := Rect2(
-		overlay_label.position,
-		Vector2(overlay_label.size.x, overlay_label.size.y * 0.5)
+## Центр i-й звёздочки (0..2): строка центрирована в лейбле,
+## шаг — advance глифа (моноширинный шрифт: ★ и ☆ одинаковы).
+func _star_center(i: int) -> Vector2:
+	var pitch := mono.get_string_size(
+		"★", HORIZONTAL_ALIGNMENT_LEFT, -1.0, _over_fs
+	).x
+	var cx := overlay_label.position.x + overlay_label.size.x * 0.5
+	return Vector2(
+		cx + (float(i) - 1.0) * pitch,
+		overlay_label.position.y + overlay_label.size.y * 0.25
 	)
-	var w := r.size.x / 3.0
-	return Rect2(r.position + Vector2(w * float(i), 0.0), Vector2(w, r.size.y))
+
+
+## Какая звезда под точкой (1..3, 0 — мимо). Маппинг относительный
+## (ближайший центр), а не прямоугольниками: абсолютные размеры
+## плывут от кегля, а центры всегда на своих местах. Палец прощает
+## полшага в стороны.
+func _star_at(pos: Vector2) -> int:
+	if state != "won" or not over_p.visible:
+		return 0
+	var top := overlay_label.position.y
+	if pos.y < top or pos.y > top + overlay_label.size.y * 0.5:
+		return 0
+	var pitch := mono.get_string_size(
+		"★", HORIZONTAL_ALIGNMENT_LEFT, -1.0, _over_fs
+	).x
+	if pitch <= 0.0:
+		return 0
+	var cx := overlay_label.position.x + overlay_label.size.x * 0.5
+	var f := (pos.x - cx) / pitch + 1.0
+	var i := int(floor(f + 0.5))
+	if i < 0 or i > 2:
+		return 0
+	if absf(f - float(i)) > 0.5 + 14.0 * k / pitch:
+		return 0
+	return i + 1
 
 
 ## Объяснение звёздочки: минимальная расшифровка балла.
@@ -1762,11 +1789,7 @@ func _input(event: InputEvent) -> void:
 	# подсказку показывает тап (см. ниже), убирать её некуда — модалка
 	# и так уйдёт следующим тапом.
 	if event is InputEventMouseMotion and over_p.visible and state == "won":
-		var mpos := (event as InputEventMouseMotion).position
-		var tip := 0
-		for i in 3:
-			if _star_cell_rect(i).has_point(mpos):
-				tip = i + 1
+		var tip := _star_at((event as InputEventMouseMotion).position)
 		if tip != _star_tip:
 			_star_tip = tip
 			queue_redraw()
@@ -1809,12 +1832,12 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 		if state == "won":
-			for i in 3:
-				if _star_cell_rect(i).has_point(pos):
-					_star_tip = i + 1
-					queue_redraw()
-					get_viewport().set_input_as_handled()
-					return
+			var tip := _star_at(pos)
+			if tip > 0:
+				_star_tip = tip
+				queue_redraw()
+				get_viewport().set_input_as_handled()
+				return
 		_new_level()
 		get_viewport().set_input_as_handled()
 		return
