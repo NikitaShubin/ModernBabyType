@@ -181,7 +181,6 @@ var _kb_reshown := false
 ## Кнопки тач-интерфейса: прямоугольники из _draw для хит-теста в _input.
 var _kb_rect := Rect2()
 var _players_rect := Rect2()
-var _next_rect := Rect2()
 ## Кружок уровня: тап по нему включает/выключает дебаг (на телефоне
 ## клавиши F3 нет, а цифры клавиатуры для настройки нужны).
 var _badge_rect := Rect2()
@@ -214,6 +213,11 @@ var card_p: Panel
 var hud_p: Panel
 var hint_p: Panel
 var over_p: Panel
+## Кегль модалки (считает _layout_text_lines): нужен для зон звёздочек.
+var _over_fs := 30
+## Подсказка звёздочки (1..3, 0 — нет): наведение и тап по звезде
+## объясняют, за что она. Сбрасывается новым уровнем.
+var _star_tip := 0
 ## Скролл текста в пикселях: длинные уровни не влезают в карточку —
 ## окно едет за курсором построчно. Логика (ось _lin) его не видит:
 ## _line_y зовут только отрисовки.
@@ -245,11 +249,13 @@ func _ready() -> void:
 		add_child(tl)
 		text_labels.append(tl)
 
+	# Табло-дебаг (F3): в обычной игре пусто и скрыто, пилюля видна
+	# только с техническими цифрами. clip_text обязателен: без него
+	# Label расширяется под самую длинную строку, и пилюля уезжает
+	# за правый край вместе с обрезанным текстом.
 	hud_label = Label.new()
+	hud_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hud_label.add_theme_color_override("font_color", UI_TEXT)
-	# clip_text обязателен: без него Label расширяется под самую длинную
-	# строку текста (минимальный размер), и пилюля табло уезжает за
-	# правый край экрана вместе с обрезанным текстом.
 	hud_label.clip_text = true
 	hud_label.z_index = 2
 	add_child(hud_label)
@@ -473,8 +479,8 @@ func _close_menu() -> void:
 ## На время меню всё это выключено: сквозь вуаль подписи меню и буквы
 ## уровня наезжали друг на друга. Небо остаётся видимым.
 ## Порядок важен: сначала пересчёт (_layout_text_lines включает буквы
-## обратно, _refresh_hud — пилюли), и только потом гашение. Иначе
-## меню открывается поверх полупогашенного слоя — каша.
+## обратно), и только потом гашение. Иначе меню открывается поверх
+## полупогашенного слоя — каша.
 func _set_play_ui(on: bool) -> void:
 	_layout_text_lines()
 	_refresh_hud()
@@ -538,8 +544,8 @@ func _relayout() -> void:
 		tl.size = Vector2(view_w - margin * 2.0, line_h + 8.0 * k)
 		tl.add_theme_font_size_override("normal_font_size", font_size)
 	_layout_text_lines()
-	# Табло и подсказка якорятся к низу ЭФФЕКТИВНОЙ области: иначе
-	# клавиатура их перекрывает.
+	# Табло-дебаг якорится к низу ЭФФЕКТИВНОЙ области: иначе
+	# клавиатура его перекрывает. В обычной игре оно скрыто.
 	hud_label.position = Vector2(margin, _eff_h() - 95.0 * k)
 	hud_label.add_theme_font_size_override("font_size", int(18.0 * k))
 	# Подсказка рисуется в _draw_hint (позиция и пилюля — там же).
@@ -603,6 +609,7 @@ func _layout_text_lines() -> void:
 	# Не шире экрана, шрифт под ширину (на телефоне 980px не влезают).
 	var ow := minf(980.0 * k, view_w - 32.0 * k)
 	var ofs := int(minf(40.0 * k, (view_w - 64.0 * k) / 17.0))
+	_over_fs = ofs
 	overlay_label.position = Vector2((view_w - ow) * 0.5, text_y + float(vis) * line_h + 24.0 * k)
 	overlay_label.size = Vector2(ow, 150.0 * k)
 	overlay_label.add_theme_font_size_override("font_size", ofs)
@@ -651,13 +658,14 @@ func _toggle_fullscreen() -> void:
 
 
 ## Панель под модалкой победы/поражения: тот же картон, что и у текста.
-## Под ней — кнопка «Дальше» для пальца (тот же Enter).
+## Кнопки «Дальше» больше нет: дальше — тап по любому месту рабочей
+## области или любая незарезервированная клавиша (см. _input,
+## _unhandled_key_input). Зарезервированы: меню (F2), выход (Esc),
+## дебаг (F3/F4/F11) и полноэкранный (Alt+Enter).
 func _layout_overlay_panel() -> void:
 	over_p.position = overlay_label.position + Vector2(-24.0 * k, -16.0 * k)
 	over_p.size = overlay_label.size + Vector2(48.0 * k, 32.0 * k)
 	over_p.visible = overlay_label.visible
-	var nc := Vector2(view_w * 0.5, over_p.position.y + over_p.size.y + 16.0 * k)
-	_next_rect = Rect2(nc - Vector2(140.0 * k, 0), Vector2(280.0 * k, 60.0 * k))
 
 
 func _key(l: int, p: int) -> String:
@@ -719,6 +727,8 @@ func _new_level() -> void:
 	_kb_manual = false
 	# И предупреждение о CapsLock: новый текст — новая жизнь.
 	_caps_warn = false
+	# И подсказка звёздочки: модалки больше нет.
+	_star_tip = 0
 	line_base.clear()
 	var acc := 0.0
 	for line in display_lines:
@@ -857,12 +867,11 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		# Остальные клавиши обрабатывает меню.
 		return
 	if state == "won" or state == "lost":
-		# Системная клавиатура шлёт Enter без keycode, одним unicode 10/13.
-		if (
-			ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER
-			or ke.unicode == 10 or ke.unicode == 13
-		):
-			_new_level()
+		# Модалка: дальше — любая незарезервированная клавиша.
+		# Зарезервированные разобраны выше (F2 — меню, Esc — выход,
+		# F3/F4/F11 — дебаг, Alt+Enter — полноэкранный): сюда они
+		# не доходят. Отдельный Enter не нужен — он тоже «любая».
+		_new_level()
 		return
 	if state != "playing":
 		return
@@ -1005,12 +1014,6 @@ func _live_cpm() -> float:
 
 
 ## Статус ежа для HUD: до выхода на след он ждёт.
-func _hedge_status() -> String:
-	if not hedge_active:
-		return "ёж ждёт"
-	return "ёж %.1f симв/с" % enemy_cps
-
-
 ## Склонение числительных: 1 знак, 3 знака, 12 знаков; 1 ошибка,
 ## 3 ошибки, 12 ошибок. Модалка показывает только цифры со словами.
 static func _plural(n: int, one: String, few: String, many: String) -> String:
@@ -1083,7 +1086,8 @@ func _finish(won: bool, reason := "") -> void:
 	if won:
 		overlay_label.add_theme_color_override("font_color", GREEN if not night else Color("#8fd07f"))
 		overlay_label.text = "%s\n%s · %s" % [
-			"★".repeat(stars), _speed_word(int(round(cpm))), _err_word(typed_bad)
+			"★".repeat(stars) + "☆".repeat(3 - stars),
+			_speed_word(int(round(cpm))), _err_word(typed_bad)
 		]
 		_fw_burst(true)
 	else:
@@ -1420,6 +1424,41 @@ func _hint_text() -> String:
 	return " ".join(out)
 
 
+## Зона i-й звёздочки (0..2) в модалке: верхняя половина лейбла
+## третями. Звёзды центрированы, трети широкие — пальцем попасть легко.
+func _star_cell_rect(i: int) -> Rect2:
+	var r := Rect2(
+		overlay_label.position,
+		Vector2(overlay_label.size.x, overlay_label.size.y * 0.5)
+	)
+	var w := r.size.x / 3.0
+	return Rect2(r.position + Vector2(w * float(i), 0.0), Vector2(w, r.size.y))
+
+
+## Объяснение звёздочки: минимальная расшифровка балла.
+static func _star_tip_text(i: int) -> String:
+	match i:
+		1:
+			return "★ — уровень пройден"
+		2:
+			return "★★ — точность от 94%"
+		_:
+			return "★★★ — точность от 98% без ошибок"
+
+
+## Рисуем подсказку звёздочки под модалкой (только победа — только
+## там есть звёзды).
+func _draw_star_tip() -> void:
+	if not over_p.visible or state != "won" or _star_tip < 1 or _star_tip > 3:
+		return
+	var fs := int(20.0 * k)
+	var t := _star_tip_text(_star_tip)
+	var tw := mono.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x
+	draw_string(
+		mono,
+		Vector2(view_w * 0.5 - tw * 0.5, over_p.position.y + over_p.size.y + 30.0 * k),
+		t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs, _ui_ink()
+	)
 ## Рисуем подсказку по центру низа: текст словами, кнопки — в рамках.
 ## Пилюля жмётся по содержимому: пустая плашка во всю ширину экрана
 ## под двумя буквами выглядела ошибкой (ловили на эмуляторе).
@@ -1470,6 +1509,36 @@ func _draw_hint() -> void:
 		x += w + gap
 
 
+## Обратный отсчёт старта — крупно по центру карточки. Раньше жил
+## в табло, которого больше нет: три секунды висит, потом исчезает.
+func _draw_countdown() -> void:
+	if state != "playing" or grace_t <= 0.0:
+		return
+	var fs := int(44.0 * k)
+	var t := "Старт через %d" % int(ceil(grace_t))
+	var tw := mono.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x
+	var c := card_p.get_rect().get_center()
+	draw_string(
+		mono, Vector2(c.x - tw * 0.5, c.y - 6.0 * k),
+		t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs, _ui_ink()
+	)
+	var fs2 := int(28.0 * k)
+	var sub := "печатай %s буквы!" % ("светлые" if night else "чёрные")
+	var sw := mono.get_string_size(sub, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs2).x
+	# Подложка-пилюля: без неё крупные буквы ложатся прямо на текст
+	# уровня и строка не читается.
+	var bw := maxf(tw, sw) + 56.0 * k
+	var bh := 44.0 * k + 12.0 * k + 34.0 * k + 28.0 * k
+	draw_style_box(
+		pill_sb,
+		Rect2(c.x - bw * 0.5, c.y - 6.0 * k - 44.0 * k - 14.0 * k, bw, bh)
+	)
+	draw_string(
+		mono, Vector2(c.x - sw * 0.5, c.y + 38.0 * k),
+		sub, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs2, _ui_ink()
+	)
+
+
 ## Ширина, доступная строке табло: от поля до поля.
 func _hud_avail() -> float:
 	return view_w - margin * 2.0
@@ -1490,68 +1559,35 @@ func _first_fit(cands: Array[String], fs: int, avail: float) -> String:
 	return ""
 
 
+## Табло — только дебаг (F3): игровую статистику автор убрал,
+## остался технический readout для настройки (сдвиг клавиатуры,
+## позиции, масштаб). В обычной игре пилюля скрыта.
 func _refresh_hud() -> void:
-	var acc := 1.0
-	var total := typed_ok + typed_bad
-	if total > 0:
-		acc = float(typed_ok) / float(total)
-	# Табло в две строки: верхняя — кто играет и как идут дела,
-	# нижняя — куда нажимать. В одну строку всё не влезает.
+	if not show_dbg:
+		hud_label.text = ""
+		hud_label.visible = false
+		hud_p.visible = false
+		return
 	var fs := int(18.0 * k)
 	var avail := _hud_avail()
-	var who := profile_name if profile_name != S.GUEST else "гость"
-	var keys := " · все клавиши" if _all_keys() else ""
-	var lines := [_first_fit([
-		# Полная строка — для альбомной вкладки.
-		"%s%s · Уровень %d · побед подряд %d/%d · %s · точность %d%% · скорость %.0f" % [
-			who, keys, difficulty, wins_in_row, B.WINS_TO_LEVEL_UP,
-			_hedge_status(), int(acc * 100.0), _live_cpm()
-		],
-		# Ужатая: без «точности» и скорости.
-		"%s · ур.%d · %d/%d · %s" % [
-			who, difficulty, wins_in_row, B.WINS_TO_LEVEL_UP,
-			_hedge_status()
-		],
-		# Аварийная: кто играет — это нужно всегда.
-		"%s · ур.%d" % [who, difficulty],
-	], fs, avail)]
-	if grace_t > 0.0 and state == "playing":
-		# На обратном отсчёте — только он: полная строка со статистикой
-		# в пилюлю не влезает, а цифры всё равно нулевые. Табло вернётся
-		# через три секунды.
-		lines[0] = _first_fit([
-			"Приготовься… старт через %d · печатай %s буквы!" % [
-				int(ceil(grace_t)), "светлые" if night else "чёрные"
-			],
-			"Старт через %d" % int(ceil(grace_t)),
-			"Старт…",
-		], fs, avail)
-	# Нижних подсказок (Enter/F2) больше нет: имя игрока — заголовком
-	# сверху по центру (см. _draw_title), кнопка меню на десктопе
-	# подписана сама («Меню (F2)»), а «Дальше» и так перед глазами.
-	var txt := "\n".join(lines)
-	if show_dbg:
-		# kb — сдвиг раскладки в пикселях канваса, kh — сырая высота
-		# клавиатуры в экранных пикселях, sc — масштаб экрана, vw/vh —
-		# вьюпорт. Нужно для настройки сдвига на живых телефонах.
-		var sc := 1.0
-		if DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
-			sc = DisplayServer.screen_get_scale(DisplayServer.window_get_current_screen())
-		var dbg := "[dbg ex=%.0f eln=%d cur=%d:%d cw=%.1f k=%.2f ok=%d bad=%d kb=%.0f kh=%.0f sc=%.2f vw=%.0f vh=%.0f%s]" % [
-			enemy_x, enemy_line, cursor_line, cursor_pos, char_w, k, typed_ok, typed_bad,
-			kb_h, _kb_raw, sc, view_w, view_h,
-			" FAKEKB" if _kb_fake else "",
-		]
-		txt = dbg + "\n" + txt
+	# kb — сдвиг раскладки в пикселях канваса, kh — сырая высота
+	# клавиатуры в экранных пикселях, sc — масштаб экрана, vw/vh —
+	# вьюпорт. Нужно для настройки сдвига на живых телефонах.
+	var sc := 1.0
+	if DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
+		sc = DisplayServer.screen_get_scale(DisplayServer.window_get_current_screen())
+	var txt := "[dbg ex=%.0f eln=%d cur=%d:%d cw=%.1f k=%.2f ok=%d bad=%d kb=%.0f kh=%.0f sc=%.2f vw=%.0f vh=%.0f%s]" % [
+		enemy_x, enemy_line, cursor_line, cursor_pos, char_w, k, typed_ok, typed_bad,
+		kb_h, _kb_raw, sc, view_w, view_h,
+		" FAKEKB" if _kb_fake else "",
+	]
 	hud_label.text = txt
 	# Лейблу задаём свою ширину: он не должен раздуваться под текст
 	# (clip_text), а пилюля — вылезать за поле.
-	var hud_lines := 2.0 + (1.0 if show_dbg else 0.0)
-	if lines.size() == 1:
-		hud_lines -= 1.0
-	hud_label.size = Vector2(avail, (hud_lines * 23.0 + 14.0) * k)
+	hud_label.size = Vector2(avail, (23.0 + 14.0) * k)
 	hud_p.size = hud_label.size + Vector2(28.0 * k, 16.0 * k)
 	hud_p.visible = true
+	hud_label.visible = true
 
 
 ## Герои бегут ПО строке, вместе с буквами: герой съедает букву
@@ -1685,6 +1721,8 @@ func _draw() -> void:
 	_draw_progress()
 	_draw_cursor_marker()
 	_draw_hint()
+	_draw_countdown()
+	_draw_star_tip()
 	_draw_enemy()
 	# Героя рисуем всегда: на проигрыше у него шок на лице (укололи),
 	# съедения нет.
@@ -1716,14 +1754,17 @@ func _players_hint() -> String:
 ## Рисуем всегда (и на десктопе — как подсказка), работают везде: тап
 ## или клик. Прямоугольники считает _relayout, тычки разбирает _input.
 func _draw_touch_buttons() -> void:
-	# Клавиатура: пилюля + сетка точек 3×2.
-	draw_style_box(pill_sb, _kb_rect)
-	for ix in 3:
-		for iy in 2:
-			var dot := _kb_rect.position + Vector2(
-				(14.0 + 14.0 * float(ix)) * k, (17.0 + 12.0 * float(iy)) * k
-			)
-			draw_circle(dot, 2.5 * k, _ui_ink())
+	# Клавиатура: пилюля + сетка точек 3×2. Только там, где она может
+	# понадобиться (телефон): на десктопе системной клавиатуры нет,
+	# кнопка ничего не делала и только путала.
+	if not _is_desktop():
+		draw_style_box(pill_sb, _kb_rect)
+		for ix in 3:
+			for iy in 2:
+				var dot := _kb_rect.position + Vector2(
+					(14.0 + 14.0 * float(ix)) * k, (17.0 + 12.0 * float(iy)) * k
+				)
+				draw_circle(dot, 2.5 * k, _ui_ink())
 	# Игроки: значок ≡, на десктопе слева словами «Меню (F2)».
 	draw_style_box(pill_sb, _players_rect)
 	for i in 3:
@@ -1744,17 +1785,6 @@ func _draw_touch_buttons() -> void:
 			Vector2(_players_rect.position.x - 12.0 * k - ptw, _players_rect.get_center().y + float(pfs) * 0.36),
 			ph, HORIZONTAL_ALIGNMENT_LEFT, -1.0, pfs, _ui_ink()
 		)
-	# «Дальше» на модалке победы/поражения: тот же Enter, но пальцем.
-	if over_p.visible:
-		draw_style_box(pill_sb, _next_rect)
-		var t := "Дальше"
-		var fs := int(30.0 * k)
-		var w := mono.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs)
-		draw_string(
-			mono,
-			Vector2(_next_rect.get_center().x - w.x * 0.5, _next_rect.get_center().y + w.y * 0.35),
-			t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs, _ui_ink()
-		)
 
 
 ## Тач и мышь: кнопки интерфейса. Клавиши идут другим путём
@@ -1765,6 +1795,20 @@ func _draw_touch_buttons() -> void:
 ## за один палец). На десктопе касаний нет — ничего не меняется.
 func _input(event: InputEvent) -> void:
 	if menu_open:
+		return
+	# Наведение на звёздочки модалки: показать расшифровку балла.
+	# Только победа (там есть звёзды) и только десктопная мышь: пальцем
+	# подсказку показывает тап (см. ниже), убирать её некуда — модалка
+	# и так уйдёт следующим тапом.
+	if event is InputEventMouseMotion and over_p.visible and state == "won":
+		var mpos := (event as InputEventMouseMotion).position
+		var tip := 0
+		for i in 3:
+			if _star_cell_rect(i).has_point(mpos):
+				tip = i + 1
+		if tip != _star_tip:
+			_star_tip = tip
+			queue_redraw()
 		return
 	var has_pos := false
 	var pos := Vector2.ZERO
@@ -1781,11 +1825,30 @@ func _input(event: InputEvent) -> void:
 			show_dbg = not show_dbg
 		get_viewport().set_input_as_handled()
 		return
-	if over_p.visible and _next_rect.has_point(pos):
+	if over_p.visible:
+		# Модалка победы/поражения: дальше — тап где угодно, кроме
+		# кнопок. ⌨ возвращает смахнутую клавиатуру, ≡ ведёт в меню,
+		# бейдж — дебаг (только дебажная сборка). Тап по звезде только
+		# показывает расшифровку (следующий тап всё равно идёт дальше).
+		if not _is_desktop() and _kb_rect.has_point(pos):
+			_kb_summon()
+			get_viewport().set_input_as_handled()
+			return
+		if _players_rect.has_point(pos):
+			_open_menu()
+			get_viewport().set_input_as_handled()
+			return
+		if state == "won":
+			for i in 3:
+				if _star_cell_rect(i).has_point(pos):
+					_star_tip = i + 1
+					queue_redraw()
+					get_viewport().set_input_as_handled()
+					return
 		_new_level()
 		get_viewport().set_input_as_handled()
 		return
-	if _kb_rect.has_point(pos):
+	if not _is_desktop() and _kb_rect.has_point(pos):
 		_kb_summon()
 		get_viewport().set_input_as_handled()
 		return

@@ -674,8 +674,10 @@ func _run_part2() -> void:
 		"card is a window, not the whole text"
 	)
 
-	# --- Тач и мышь в игре: кнопка игроков открывает меню, кнопка
-	# «Дальше» на модалке начинает новый уровень. ---
+	# --- Тач и мышь в игре: кнопка игроков открывает меню, а дальше
+	# с модалки — тап по любому месту рабочей области (кнопки «Дальше»
+	# больше нет). Тап по звезде только объясняет балл, уровень
+	# при этом не начинается.
 	_main.call("_input", _tap(_main._players_rect.get_center()))
 	_check(_main.menu_open, "players button opens the menu")
 	_main._close_menu()
@@ -683,12 +685,34 @@ func _run_part2() -> void:
 	_main._finish(true)
 	_check(_main.state == "won", "setup: level won")
 	_main._relayout()
-	_main.call("_input", _tap(_main._next_rect.get_center()))
-	_check(_main.state == "playing", "next button starts a new level")
+	_main.call("_input", _tap(_main._star_cell_rect(2).get_center()))
+	_check(_main._star_tip == 3, "star tap explains the score")
+	_check(_main.state == "won", "star tap does not start a new level")
+	# Наведение мыши на первую звезду меняет подсказку без клика.
+	var mm := InputEventMouseMotion.new()
+	mm.position = _main._star_cell_rect(0).get_center()
+	_main.call("_input", mm)
+	_check(_main._star_tip == 1, "star hover explains the score")
+	_main.call("_input", _tap(Rect2(_main.card_p.position, _main.card_p.size).get_center()))
+	_check(_main.state == "playing", "tap on the work area starts a new level")
 	_check(
 		_main.cursor_line == 0 and _main.cursor_pos == 0,
 		"new level starts at the beginning"
 	)
+	# На десктопе кнопка ⌨ спрятана: тап по её месту идёт дальше,
+	# а не вызывает клавиатуру.
+	_main._finish(true)
+	_check(_main.state == "won", "setup: level won again")
+	_main.call("_input", _tap(_main._kb_rect.get_center()))
+	_check(_main.state == "playing", "kb tap advances on desktop")
+	# Полые звёзды: недобранный балл виден (2 из 3).
+	_main.typed_ok = 94
+	_main.typed_bad = 6
+	_main._finish(true)
+	var stars_line: String = _main.overlay_label.text.split("\n")[0]
+	_check(stars_line == "★★☆", "missing star is hollow")
+	# Дальше по тесту идёт ввод букв — вернуть партию.
+	_main._new_level()
 
 	# --- Бейдж, заголовок, склонения, десктоп-кнопка (п.2 автора). ---
 	_main.difficulty = 2

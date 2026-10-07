@@ -319,7 +319,9 @@ func _input(event: InputEvent) -> void:
 		_toggle_night()
 		get_viewport().set_input_as_handled()
 		return
-	if _mkb_tap_rect().has_point(pos):
+	# Кнопка ⌨ — только там, где есть системная клавиатура (телефон):
+	# на десктопе она ничего не делала и только путала.
+	if not _is_desktop() and _mkb_tap_rect().has_point(pos):
 		if not input_active:
 			_toggle_input()
 		_kb_show()
@@ -332,6 +334,12 @@ func _input(event: InputEvent) -> void:
 func _kb_show() -> void:
 	if DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
 		DisplayServer.virtual_keyboard_show("")
+
+
+## Десктоп — там, где нет системной клавиатуры: кнопка ⌨ там
+## ничего не делала и только путала, поэтому её нет (и тычка тоже).
+func _is_desktop() -> bool:
+	return not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD)
 
 
 ## Буква по коду клавиши: «A» без физической раскладки (в латинице на
@@ -906,6 +914,14 @@ func _draw() -> void:
 			)
 		# Крестик удаления по центру своей колонки.
 		var dcx := (cols[5] + cols[6]) * 0.5
+		# Выбранная стрелками галка подсвечена рамкой прямо на боксе:
+		# заголовка в длинном списке глазами не проследить.
+		if i == sel:
+			var scx := pcx if sel_col == 0 else ycx
+			draw_rect(
+				Rect2(scx - 20.0 * k, row_y - 36.0 * k, 40.0 * k, 40.0 * k),
+				_ink(), false, 2.5 * k
+			)
 		var dtxt := "✕"
 		var dw := _text_size(dtxt, FONT_ROW)
 		_text(dtxt, Vector2(dcx - dw.x * 0.5, row_y), FONT_ROW, _danger())
@@ -961,13 +977,15 @@ func _draw() -> void:
 	_button(_guest_tap_rect(), "Без профиля")
 	_draw_daynight(_night_tap_rect())
 	# Кнопка ⌨ справа вверху: вызвать системную клавиатуру.
-	draw_style_box(hint_sb, _mkb_tap_rect())
-	for ix in 3:
-		for iy in 2:
-			draw_circle(
-				_mkb_tap_rect().position + Vector2((14.0 + 14.0 * float(ix)) * k, (17.0 + 12.0 * float(iy)) * k),
-				2.5 * k, _uitext()
-			)
+	# На десктопе её нет (см. _input): нечего и рисовать.
+	if not _is_desktop():
+		draw_style_box(hint_sb, _mkb_tap_rect())
+		for ix in 3:
+			for iy in 2:
+				draw_circle(
+					_mkb_tap_rect().position + Vector2((14.0 + 14.0 * float(ix)) * k, (17.0 + 12.0 * float(iy)) * k),
+					2.5 * k, _uitext()
+				)
 	# Пояснение галки по тапу на заголовок — строкой под кнопками.
 	# Модалка его перекрывает (рисуется позже поверх).
 	if hint_header != "" and confirm_name == "":
