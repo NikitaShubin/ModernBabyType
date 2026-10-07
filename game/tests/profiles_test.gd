@@ -169,6 +169,19 @@ func _part5_all_keys() -> void:
 	S.save_profile("Иван", {"difficulty": 6, "all_keys": false})
 	_check(not S.get_all_keys("Иван"), "all_keys survives a profile save off")
 	S.set_all_keys("Иван", false)
+	# Строгая ё: по умолчанию строго, переключается и переживает сохранение.
+	_check(S.get_yo_strict("Иван"), "yo is strict by default")
+	_check(not S.user_exists("нет такого"), "no such user before set_yo_strict")
+	S.set_yo_strict("нет такого", false)
+	_check(
+		not S.user_exists("нет такого"),
+		"set_yo_strict on an unknown user does not create it"
+	)
+	S.set_yo_strict("Иван", false)
+	_check(not S.get_yo_strict("Иван"), "yo leniency turns on")
+	S.save_profile("Иван", {"difficulty": 5, "yo_strict": false})
+	_check(not S.get_yo_strict("Иван"), "yo leniency survives a profile save")
+	S.set_yo_strict("Иван", true)
 
 
 ## Навигация списка: ↑↓ с перехватом, Delete удаляет, Enter входит.
@@ -483,6 +496,18 @@ func _part9_main_game() -> void:
 	_check(not _main.fw_parts.is_empty(), "winning spawns fireworks")
 	_check("знаков в минуту" in _main.overlay_label.text, "modal shows pace in plain words")
 	_check("CPM" not in _main.overlay_label.text, "no anglicism CPM on the modal")
+	# Модалка упрощена: ни заголовка, ни «нажми Enter» — только звёзды,
+	# скорость и ошибки.
+	_check("Уровень" not in _main.overlay_label.text, "won modal has no header")
+	_check("Enter" not in _main.overlay_label.text, "won modal has no enter hint")
+	_check("★" in _main.overlay_label.text, "won modal keeps the stars")
+	# Проигрыш — та же краткость, без «укололся».
+	_main._new_level()
+	_main._finish(false)
+	_check("укололся" not in _main.overlay_label.text, "lost modal has no header")
+	_check("Enter" not in _main.overlay_label.text, "lost modal has no enter hint")
+	_check("знаков в минуту" in _main.overlay_label.text, "lost modal shows pace")
+	_check("★" not in _main.overlay_label.text, "lost modal has no stars")
 	var pety_after: Dictionary = S.load_profile("Петя")
 	_check(
 		is_equal_approx(
@@ -526,6 +551,18 @@ func _part10_first_run() -> void:
 	_check(S.get_all_keys("Гри"), "pending flag moved into the profile")
 	_check(not _menu.input_all_keys, "pending flag resets after creating")
 	S.delete_user("Гри")
+	_menu.call("_reload")
+	# Компактная галка «Ё»: тап снимает строгость, флаг переезжает
+	# в профиль и сбрасывается в строго. Список пуст — поле открыто.
+	_menu.call("_input", _tap(_menu.call("_yocheck_tap_rect").get_center()))
+	_check(not _menu.input_yo_strict, "yo checkbox disarms strictness")
+	for ch in "Гоша":
+		_menu.call("_unhandled_key_input", _key_event(ch))
+	_menu.call("_unhandled_key_input", _key(KEY_ENTER))
+	_check(S.user_exists("Гоша"), "profile created with yo off")
+	_check(not S.get_yo_strict("Гоша"), "pending yo flag moved into the profile")
+	_check(_menu.input_yo_strict, "pending yo flag resets after creating")
+	S.delete_user("Гоша")
 	_menu.call("_reload")
 	# Буквы печатаются сразу, без Tab.
 	for ch in "Маша":
@@ -645,6 +682,36 @@ func _part13_touch() -> void:
 	_check(_picked == "", "pro tap does not play the profile")
 	_menu.call("_input", _tap(_menu.call("_pro_tap_rect", 0).get_center()))
 	_check(not S.get_all_keys(first), "pro checkbox turns all_keys off")
+	# Галочка «Ё» в строке: тап переключает строгость ЭТОГО профиля.
+	_check(S.get_yo_strict(first), "yo is strict by default")
+	_menu.call("_input", _tap(_menu.call("_yo_tap_rect", 0).get_center()))
+	_check(not S.get_yo_strict(first), "yo tap relaxes strictness")
+	_check(_picked == "", "yo tap does not play the profile")
+	_menu.call("_input", _tap(_menu.call("_yo_tap_rect", 0).get_center()))
+	_check(S.get_yo_strict(first), "yo tap restores strictness")
+	# Стрелки ←/→ выбирают колонку, пробел переключает её флаг.
+	# Поле ввода гасим: иначе пробел — это ввод, а не переключатель.
+	_menu.input_active = false
+	_check(_menu.sel_col == 0, "flag column starts at pro")
+	_menu.call("_unhandled_key_input", _key(KEY_RIGHT))
+	_check(_menu.sel_col == 1, "right arrow moves to the yo column")
+	_menu.call("_unhandled_key_input", _key(KEY_SPACE))
+	_check(not S.get_yo_strict(first), "space toggles the yo flag")
+	_menu.call("_unhandled_key_input", _key(KEY_LEFT))
+	_check(_menu.sel_col == 0, "left arrow moves back to pro")
+	_menu.call("_unhandled_key_input", _key(KEY_SPACE))
+	_check(S.get_all_keys(first), "space toggles the pro flag")
+	_menu.call("_unhandled_key_input", _key(KEY_SPACE))
+	_check(not S.get_all_keys(first), "space toggles the pro flag back")
+	# Тап по заголовку объясняет галку, повторный гасит.
+	_menu.call("_input", _tap(_menu.call("_yo_head_rect").get_center()))
+	_check(String(_menu.hint_header) == "yo", "yo header tap explains the flag")
+	_menu.call("_input", _tap(_menu.call("_yo_head_rect").get_center()))
+	_check(String(_menu.hint_header) == "", "yo header tap again hides it")
+	_menu.call("_input", _tap(_menu.call("_pro_head_rect").get_center()))
+	_check(String(_menu.hint_header) == "pro", "pro header tap explains the flag")
+	_menu.call("_input", _tap(_menu.call("_pro_head_rect").get_center()))
+	_check(String(_menu.hint_header) == "", "pro header tap again hides it")
 	# Тап по второй строке играет вторым (галочки не мешают).
 	_picked = ""
 	_menu.call("_input", _tap(_menu.call("_row_tap_rect", 1).get_center()))

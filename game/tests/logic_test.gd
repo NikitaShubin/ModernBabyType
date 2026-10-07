@@ -6,6 +6,7 @@ extends SceneTree
 ## Код выхода 0 — всё сошлось.
 
 const BB := preload("res://scripts/balance.gd")
+const S := preload("res://scripts/save.gd")
 
 var _frame := 0
 var _main: Node = null
@@ -689,6 +690,22 @@ func _run_part2() -> void:
 		"new level starts at the beginning"
 	)
 
+	# --- Бейдж, заголовок, склонения, десктоп-кнопка (п.2 автора). ---
+	_main.difficulty = 2
+	_main.wins_in_row = 2
+	_check(_main._badge_text() == "УР 2 · 2/3", "badge shows level and progress")
+	_main.profile_name = "Петя"
+	_check(_main._title_text() == "Петя", "title shows the player name")
+	_main.profile_name = S.GUEST
+	_check(_main._title_text() == "гость", "guest is titled as guest")
+	_check(_main._plural(1, "знак", "знака", "знаков") == "знак", "plural one")
+	_check(_main._plural(3, "знак", "знака", "знаков") == "знака", "plural few")
+	_check(_main._plural(12, "знак", "знака", "знаков") == "знаков", "plural many")
+	_check(_main._plural(21, "ошибка", "ошибки", "ошибок") == "ошибка", "plural 21")
+	_check(_main._plural(0, "ошибка", "ошибки", "ошибок") == "ошибок", "plural zero")
+	_check(_main._is_desktop(), "headless counts as desktop")
+	_check(_main._players_hint() == "Меню (F2)", "desktop hints the menu key")
+
 	# --- CapsLock и подсказка-«кнопка» (п.6): строгий режим. ---
 	_main.grace_t = 0.0
 	_main.cursor_line = 0
@@ -771,6 +788,72 @@ func _run_part2() -> void:
 			_main._hint_text() == "Жми: [" + _main._current() + "]",
 			"lowercase hint keeps its case in strict mode"
 		)
+
+	# --- Нeстрогая ё: е засчитывается за ё и обратно. ---
+	_main._new_level()
+	_main.grace_t = 0.0
+	_main.exact_case = false
+	_main.profile_yo = false
+	_main.active = {"е": true, "ё": true, "ж": true, " ": true}
+	var yo1: Array[String] = ["ёж"]
+	_main.display_lines = yo1
+	_main.cursor_line = 0
+	_main.cursor_pos = 0
+	_main.errors.clear()
+	_main._type_char("е")
+	_check(
+		_main.cursor_pos == 1 and _main.errors.is_empty(),
+		"lenient yo accepts е for ё"
+	)
+	# И обратно: ё за е.
+	_main._new_level()
+	_main.grace_t = 0.0
+	_main.exact_case = false
+	_main.profile_yo = false
+	_main.active = {"е": true, "ё": true, "ж": true, " ": true}
+	var yo2: Array[String] = ["еж"]
+	_main.display_lines = yo2
+	_main.cursor_line = 0
+	_main.cursor_pos = 0
+	_main.errors.clear()
+	_main._type_char("ё")
+	_check(
+		_main.cursor_pos == 1 and _main.errors.is_empty(),
+		"lenient yo accepts ё for е"
+	)
+	# Строгая (по умолчанию): е за ё не идёт.
+	_main._new_level()
+	_main.grace_t = 0.0
+	_main.exact_case = false
+	_main.profile_yo = true
+	_main.active = {"е": true, "ё": true, "ж": true, " ": true}
+	var yo4: Array[String] = ["ёж"]
+	_main.display_lines = yo4
+	_main.cursor_line = 0
+	_main.cursor_pos = 0
+	_main.errors.clear()
+	_main._type_char("е")
+	_check(
+		not _main.errors.is_empty(),
+		"strict yo rejects е for ё"
+	)
+	# Строгий регистр + нестрогая ё: ортогональны (е за ё идёт,
+	# но регистр всё равно важен).
+	_main._new_level()
+	_main.grace_t = 0.0
+	_main.exact_case = true
+	_main.profile_yo = false
+	_main.active = {"е": true, "Ё": true, " ": true}
+	var yo3: Array[String] = ["Ё"]
+	_main.display_lines = yo3
+	_main.cursor_line = 0
+	_main.cursor_pos = 0
+	_main.errors.clear()
+	_main._type_char("е")
+	_check(
+		_main.errors.is_empty(),
+		"strict case still accepts е for ё when yo is lenient"
+	)
 
 
 ## Позиция на строке l для теста: хотела бы want, но не за концом

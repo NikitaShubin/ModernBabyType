@@ -41,6 +41,14 @@ var input_text := ""
 ## ещё нет — применять не к кому). При создании профиля переносится
 ## в него, затем сбрасывается.
 var input_all_keys := false
+## То же для строгой ё (колонка «Ё»): ждёт создания профиля.
+var input_yo_strict := true
+## Выбранная колонка флагов: 0 — «Про», 1 — «Ё». Стрелки ←/→ двигают,
+## пробел переключает. Видна подсветкой заголовка.
+var sel_col := 0
+## Подсказка по заголовку колонки («pro»/«yo»): тап по заголовку
+## объясняет, что за галка. Пусто — молчим.
+var hint_header := ""
 ## Игрок, ради которого меню открыли: F2 возвращает в игру с ним.
 var resume_user := ""
 ## Удаление на подтверждении: имя профиля, ждущего «Да». Пусто — модалки
@@ -157,6 +165,23 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		_nav(1)
 		_eaten()
 		return
+	# Стрелки ←/→ — выбор колонки флагов (Про/Ё), пробел — переключить
+	# флаг у выбранной строки. В поле ввода пробел молчит (имени
+	# с пробелами не бывает), модалку стрелки не трогают (она выше).
+	if ke.keycode == KEY_LEFT:
+		sel_col = (sel_col + 1) % 2
+		queue_redraw()
+		_eaten()
+		return
+	if ke.keycode == KEY_RIGHT:
+		sel_col = (sel_col + 1) % 2
+		queue_redraw()
+		_eaten()
+		return
+	if ke.keycode == KEY_SPACE:
+		_toggle_flag()
+		_eaten()
+		return
 	if ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER or ke.unicode == 10 or ke.unicode == 13:
 		_enter()
 		_eaten()
@@ -242,6 +267,10 @@ func _input(event: InputEvent) -> void:
 			_toggle_pro(i)
 			get_viewport().set_input_as_handled()
 			return
+		if _yo_tap_rect(i).has_point(pos):
+			_toggle_yo(i)
+			get_viewport().set_input_as_handled()
+			return
 		if _del_tap_rect(i).has_point(pos):
 			confirm_name = users[i]
 			queue_redraw()
@@ -252,8 +281,24 @@ func _input(event: InputEvent) -> void:
 			chosen.emit(users[i])
 			get_viewport().set_input_as_handled()
 			return
+	# Заголовки «Про»/«Ё» — подсказка, что за галка. Повторный тап гасит.
+	if not users.is_empty() and _pro_head_rect().has_point(pos):
+		hint_header = "" if hint_header == "pro" else "pro"
+		queue_redraw()
+		get_viewport().set_input_as_handled()
+		return
+	if not users.is_empty() and _yo_head_rect().has_point(pos):
+		hint_header = "" if hint_header == "yo" else "yo"
+		queue_redraw()
+		get_viewport().set_input_as_handled()
+		return
 	if users.is_empty() and _check_tap_rect().has_point(pos):
 		_toggle_all_keys()
+		get_viewport().set_input_as_handled()
+		return
+	if users.is_empty() and _yocheck_tap_rect().has_point(pos):
+		input_yo_strict = not input_yo_strict
+		queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
 	if _field_tap_rect().has_point(pos):
@@ -330,16 +375,18 @@ func _panel_sb(bg: Color, radius: float, border := Color(0, 0, 0, 0), bw := 0.0,
 func _enter() -> void:
 	if input_active and not input_text.strip_edges().is_empty():
 		var name := S.clean_name(input_text)
-		# Новое имя — создать, существующее — просто войти. Флаг
-		# вводимого имени переезжает в созданный профиль.
+		# Новое имя — создать, существующее — просто войти. Флаги
+		# вводимого имени переезжают в созданный профиль.
 		if not S.user_exists(name):
 			S.create_user(name)
 			S.set_all_keys(name, input_all_keys)
+			S.set_yo_strict(name, input_yo_strict)
 		else:
 			S.touch(name)
 		input_text = ""
 		input_active = false
 		input_all_keys = false
+		input_yo_strict = true
 		chosen.emit(name)
 		return
 	if not users.is_empty():
@@ -392,6 +439,33 @@ func _toggle_pro(i: int) -> void:
 	_reload()
 
 
+## Строгая ё строке: различать ё и е именно этому игроку.
+func _toggle_yo(i: int) -> void:
+	if i < 0 or i >= users.size():
+		return
+	var name := users[i]
+	S.set_yo_strict(name, not S.get_yo_strict(name))
+	_reload()
+
+
+## Пробел по флагам: выбранная стрелками колонка (sel_col) у выбранной
+## строки — или у вводимого имени, если список пуст.
+func _toggle_flag() -> void:
+	if input_active or confirm_name != "":
+		return
+	if users.is_empty():
+		if sel_col == 0:
+			input_all_keys = not input_all_keys
+		else:
+			input_yo_strict = not input_yo_strict
+		queue_redraw()
+		return
+	if sel_col == 0:
+		_toggle_pro(sel)
+	else:
+		_toggle_yo(sel)
+
+
 func _guest() -> void:
 	S.set_last_user(S.GUEST)
 	chosen.emit(S.GUEST)
@@ -408,30 +482,32 @@ func _cell_texts(name: String) -> Array[String]:
 	return res
 
 
-## Колонки таблицы [имя, уровень, счёт, Про, ✕]: левые края и правый край.
-## Имя занимает остаток (длинные режем с многоточием), остальные —
-## по самой широкой ячейке. Та же геометрия у отрисовки, хит-теста
-## и тестов: мимо не бьёт.
+## Колонки таблицы [имя, уровень, счёт, Про, Ё, ✕]: левые края
+## и правый край. Имя занимает остаток (длинные режем с многоточием),
+## остальные — по самой широкой ячейке. Та же геометрия у отрисовки,
+## хит-теста и тестов: мимо не бьёт.
 func _table_cols() -> Array[float]:
 	var left := 48.0 * k
 	var right := view_w - 48.0 * k
 	var gap := 12.0 * k
 	var del_w := 44.0 * k
 	var pro_w := _text_size("Про", FONT_SMALL).x + 44.0 * k
+	var yo_w := _text_size("Ё", FONT_SMALL).x + 44.0 * k
 	var lvl_w := _text_size("Ур", FONT_SMALL).x + 16.0 * k
 	var rec_w := _text_size("Победы", FONT_SMALL).x + 16.0 * k
 	for u in users:
 		var cells := _cell_texts(u)
 		lvl_w = maxf(lvl_w, _text_size(cells[0], FONT_ROW).x + 16.0 * k)
 		rec_w = maxf(rec_w, _text_size(cells[1], FONT_ROW).x + 16.0 * k)
-	var fixed := lvl_w + rec_w + pro_w + del_w + gap * 4.0
+	var fixed := lvl_w + rec_w + pro_w + yo_w + del_w + gap * 5.0
 	var name_w := maxf(80.0 * k, right - left - fixed)
 	var name_x := left
 	var lvl_x := left + name_w + gap
 	var rec_x := lvl_x + lvl_w + gap
 	var pro_x := rec_x + rec_w + gap
-	var del_x := pro_x + pro_w + gap
-	var cols: Array[float] = [name_x, lvl_x, rec_x, pro_x, del_x, right]
+	var yo_x := pro_x + pro_w + gap
+	var del_x := yo_x + yo_w + gap
+	var cols: Array[float] = [name_x, lvl_x, rec_x, pro_x, yo_x, del_x, right]
 	return cols
 
 
@@ -512,6 +588,13 @@ func _check_tap_rect() -> Rect2:
 	return Rect2(48.0 * k, y - 36.0 * k, w + 84.0 * k, 48.0 * k)
 
 
+## Компактная галка «Ё» на пустом списке: та же строка, правее.
+func _yocheck_tap_rect() -> Rect2:
+	var y := _check_line_y()
+	var w := _text_size("Ё", FONT_ROW).x
+	return Rect2(198.0 * k, y - 36.0 * k, w + 84.0 * k, 48.0 * k)
+
+
 ## Строка кнопок: под полем ввода, на пустом списке — под галочкой
 ## «Про» для вводимого имени.
 func _buttons_y() -> float:
@@ -524,7 +607,7 @@ func _row_tap_rect(i: int) -> Rect2:
 	var row_y := _rows_top() + float(i) * ROW_H * k
 	return Rect2(
 		cols[0] - 16.0 * k, row_y - 38.0 * k,
-		cols[5] - cols[0] + 32.0 * k, ROW_H * k - 6.0 * k
+		cols[6] - cols[0] + 32.0 * k, ROW_H * k - 6.0 * k
 	)
 
 
@@ -537,12 +620,36 @@ func _pro_tap_rect(i: int) -> Rect2:
 	return Rect2(cx - 26.0 * k, row_y - 26.0 * k, 52.0 * k, 52.0 * k)
 
 
+## Галочка «Ё» в строке: строгая ё именно этому игроку.
+## Тап не играет профилем, только флагом.
+func _yo_tap_rect(i: int) -> Rect2:
+	var cols := _table_cols()
+	var row_y := _rows_top() + float(i) * ROW_H * k
+	var cx := (cols[4] + cols[5]) * 0.5
+	return Rect2(cx - 26.0 * k, row_y - 26.0 * k, 52.0 * k, 52.0 * k)
+
+
 ## Крестик удаления в строке: открывает модалку подтверждения.
 func _del_tap_rect(i: int) -> Rect2:
 	var cols := _table_cols()
 	var row_y := _rows_top() + float(i) * ROW_H * k
-	var cx := (cols[4] + cols[5]) * 0.5
+	var cx := (cols[5] + cols[6]) * 0.5
 	return Rect2(cx - 24.0 * k, row_y - 24.0 * k, 48.0 * k, 48.0 * k)
+
+
+## Заголовки «Про»/«Ё»: тап показывает, что за галка (hint_header).
+func _pro_head_rect() -> Rect2:
+	var cols := _table_cols()
+	var cx := (cols[3] + cols[4]) * 0.5
+	var y := _rows_top() - 44.0 * k
+	return Rect2(cx - 48.0 * k, y - 28.0 * k, 96.0 * k, 40.0 * k)
+
+
+func _yo_head_rect() -> Rect2:
+	var cols := _table_cols()
+	var cx := (cols[4] + cols[5]) * 0.5
+	var y := _rows_top() - 44.0 * k
+	return Rect2(cx - 48.0 * k, y - 28.0 * k, 96.0 * k, 40.0 * k)
 
 
 ## Рамка поля ввода (рисуется только когда активно, тыкается всегда).
@@ -731,8 +838,10 @@ func _draw() -> void:
 			_dim()
 		)
 	# Таблица игроков: шапка + строки во всю ширину. Тап по строке
-	# сразу играет этим игроком, тап по галочке — только флаг «Про»,
-	# тап по крестику — удаление с подтверждением.
+	# сразу играет этим игроком, тап по галочке — только флаг,
+	# тап по крестику — удаление с подтверждением. Тап по заголовку
+	# «Про»/«Ё» объясняет галку. Выбранная стрелками колонка подсвечена
+	# в шапке (пробел переключает её флаг).
 	if not users.is_empty():
 		var hcols := _table_cols()
 		_text("Имя", Vector2(hcols[0], y - 44.0 * k), FONT_SMALL, _dim())
@@ -742,7 +851,13 @@ func _draw() -> void:
 		_text(
 			"Про",
 			Vector2((hcols[3] + hcols[4]) * 0.5 - pro_hw * 0.5, y - 44.0 * k),
-			FONT_SMALL, _dim()
+			FONT_SMALL, _ink() if sel_col == 0 else _dim()
+		)
+		var yo_hw := _text_size("Ё", FONT_SMALL).x
+		_text(
+			"Ё",
+			Vector2((hcols[4] + hcols[5]) * 0.5 - yo_hw * 0.5, y - 44.0 * k),
+			FONT_SMALL, _ink() if sel_col == 1 else _dim()
 		)
 	for i in users.size():
 		var row_y := y + float(i) * ROW_H * k
@@ -757,41 +872,78 @@ func _draw() -> void:
 		var cells := _cell_texts(users[i])
 		_text(cells[0], Vector2(cols[1], row_y), FONT_ROW, tcol)
 		_text(cells[1], Vector2(cols[2], row_y), FONT_ROW, tcol)
-		# Галочка «Про» по центру своей колонки.
+		# Галочка «Про» по центру своей колонки. Цвет — от БОКСА, а не
+		# от строки: бокс белый днём и тёмный ночью, а цвет строки
+		# (tcol) на выбранной строке тёмный всегда — ночью галочка
+		# тонула в тёмном боксе, стоило навести выделение.
+		var chk_col := Color("#f2ede0") if night else INK
 		var pcx := (cols[3] + cols[4]) * 0.5
 		draw_style_box(box_sb, Rect2(pcx - 16.0 * k, row_y - 32.0 * k, 32.0 * k, 32.0 * k))
 		if bool(S.load_profile(users[i]).get("all_keys", false)):
 			draw_line(
 				Vector2(pcx - 10.0 * k, row_y - 12.0 * k),
 				Vector2(pcx, row_y - 2.0 * k),
-				tcol, 4.0 * k
+				chk_col, 4.0 * k
 			)
 			draw_line(
 				Vector2(pcx, row_y - 2.0 * k),
 				Vector2(pcx + 16.0 * k, row_y - 26.0 * k),
-				tcol, 4.0 * k
+				chk_col, 4.0 * k
+			)
+		# Галочка «Ё» по центру своей колонки: тот же бокс, тот же цвет.
+		var ycx := (cols[4] + cols[5]) * 0.5
+		draw_style_box(box_sb, Rect2(ycx - 16.0 * k, row_y - 32.0 * k, 32.0 * k, 32.0 * k))
+		if bool(S.load_profile(users[i]).get("yo_strict", true)):
+			draw_line(
+				Vector2(ycx - 10.0 * k, row_y - 12.0 * k),
+				Vector2(ycx, row_y - 2.0 * k),
+				chk_col, 4.0 * k
+			)
+			draw_line(
+				Vector2(ycx, row_y - 2.0 * k),
+				Vector2(ycx + 16.0 * k, row_y - 26.0 * k),
+				chk_col, 4.0 * k
 			)
 		# Крестик удаления по центру своей колонки.
-		var dcx := (cols[4] + cols[5]) * 0.5
+		var dcx := (cols[5] + cols[6]) * 0.5
 		var dtxt := "✕"
 		var dw := _text_size(dtxt, FONT_ROW)
 		_text(dtxt, Vector2(dcx - dw.x * 0.5, row_y), FONT_ROW, _danger())
 	y = _field_line_y()
-	# Компактная галочка «Про» для вводимого имени — только когда
-	# список пуст (иначе «Про» живёт в колонке таблицы).
+	# Компактные галки для вводимого имени — только когда список пуст
+	# (иначе флаги живут в колонках таблицы). Обе в одну строку:
+	# места хватает, раскладку не двигаем. Выбранную стрелками колонку
+	# обводим (пробел переключает её флаг).
 	if users.is_empty():
 		var cy := _check_line_y()
+		var ychk_col := Color("#f2ede0") if night else INK
 		draw_style_box(box_sb, Rect2(60.0 * k, cy - 32.0 * k, 32.0 * k, 32.0 * k))
 		if _check_on():
 			draw_line(
 				Vector2(66.0 * k, cy - 12.0 * k), Vector2(76.0 * k, cy - 2.0 * k),
-				_ink(), 4.0 * k
+				ychk_col, 4.0 * k
 			)
 			draw_line(
 				Vector2(76.0 * k, cy - 2.0 * k), Vector2(92.0 * k, cy - 26.0 * k),
-				_ink(), 4.0 * k
+				ychk_col, 4.0 * k
 			)
 		_text("Про", Vector2(104.0 * k, cy), FONT_ROW, _ink())
+		if sel_col == 0:
+			draw_rect(Rect2(56.0 * k, cy - 36.0 * k, 40.0 * k, 40.0 * k), _ink(), false, 2.0 * k)
+		var yob := 210.0 * k
+		draw_style_box(box_sb, Rect2(yob, cy - 32.0 * k, 32.0 * k, 32.0 * k))
+		if input_yo_strict:
+			draw_line(
+				Vector2(yob + 6.0 * k, cy - 12.0 * k), Vector2(yob + 16.0 * k, cy - 2.0 * k),
+				ychk_col, 4.0 * k
+			)
+			draw_line(
+				Vector2(yob + 16.0 * k, cy - 2.0 * k), Vector2(yob + 32.0 * k, cy - 26.0 * k),
+				ychk_col, 4.0 * k
+			)
+		_text("Ё", Vector2(yob + 44.0 * k, cy), FONT_ROW, _ink())
+		if sel_col == 1:
+			draw_rect(Rect2(yob - 4.0 * k, cy - 36.0 * k, 40.0 * k, 40.0 * k), _ink(), false, 2.0 * k)
 	# Поле ввода нового имени. Рамка — только когда активно, а тыкается
 	# всегда: тап включает ввод, как Tab.
 	var field_txt := _field_text()
@@ -815,6 +967,21 @@ func _draw() -> void:
 			draw_circle(
 				_mkb_tap_rect().position + Vector2((14.0 + 14.0 * float(ix)) * k, (17.0 + 12.0 * float(iy)) * k),
 				2.5 * k, _uitext()
+			)
+	# Пояснение галки по тапу на заголовок — строкой под кнопками.
+	# Модалка его перекрывает (рисуется позже поверх).
+	if hint_header != "" and confirm_name == "":
+		var expl: Array[String] = []
+		if hint_header == "pro":
+			expl = ["Про: все буквы сразу,", "важен регистр."]
+		else:
+			expl = ["Ё: без галки", "е засчитывается за ё."]
+		var ey := _buttons_y() + 52.0 * k + 30.0 * k
+		for li in expl.size():
+			var lw := _text_size(expl[li], FONT_SMALL).x
+			_text(
+				expl[li], Vector2(view_w * 0.5 - lw * 0.5, ey + 30.0 * k * float(li)),
+				FONT_SMALL, _uitext()
 			)
 	# Модалка подтверждения удаления — поверх всего.
 	if confirm_name != "":

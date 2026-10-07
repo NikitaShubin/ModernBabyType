@@ -141,6 +141,8 @@ var puff_cd := 0.0
 var profile_name := S.GUEST
 ## Взрослый режим профиля из меню игроков (клавиша A).
 var profile_all_keys := false
+## Строгая ё профиля: различать ё и е. Гость и молчуны — строго.
+var profile_yo := true
 ## Ручное «все клавиши»: -1 не задано, 1 да, 0 нет. Ставится тестами и
 ## аргументами запуска --all-keys / --no-all-keys. Итоговый приоритет в
 ## _all_keys(): ручной флаг, потом флаг профиля, потом debug-сборка.
@@ -431,6 +433,7 @@ func _start_game() -> void:
 	_relayout()
 	var prof: Dictionary = S.load_profile(profile_name)
 	profile_all_keys = bool(prof.get("all_keys", false))
+	profile_yo = bool(prof.get("yo_strict", true))
 	difficulty = int(prof.get("difficulty", 0))
 	wins_in_row = int(prof.get("wins_in_row", 0))
 	ema_cpm = float(prof.get("ema_cpm", 0.0))
@@ -773,6 +776,12 @@ func _is_active(ch: String) -> bool:
 
 ## Сравнение ввода: в дебаге регистр важен, иначе — без учёта.
 func _eq(a: String, b: String) -> bool:
+	# Нeстрогая ё: ё и е — одна буква в обе стороны. Обе сводим
+	# к строчной е, потом обычный регистровый разбор (ошибочный
+	# регистр при строгом режиме всё равно не проходит).
+	if not profile_yo:
+		a = a.replace("ё", "е").replace("Ё", "е")
+		b = b.replace("ё", "е").replace("Ё", "е")
 	if exact_case:
 		return a == b
 	return a.to_lower() == b.to_lower()
@@ -1002,6 +1011,30 @@ func _hedge_status() -> String:
 	return "ёж %.1f симв/с" % enemy_cps
 
 
+## Склонение числительных: 1 знак, 3 знака, 12 знаков; 1 ошибка,
+## 3 ошибки, 12 ошибок. Модалка показывает только цифры со словами.
+static func _plural(n: int, one: String, few: String, many: String) -> String:
+	var m := absi(n) % 100
+	var d := m % 10
+	if m >= 11 and m <= 14:
+		return many
+	if d == 1:
+		return one
+	if d >= 2 and d <= 4:
+		return few
+	return many
+
+
+## «168 знаков в минуту» — со склонением.
+func _speed_word(v: int) -> String:
+	return "%d %s в минуту" % [v, _plural(v, "знак", "знака", "знаков")]
+
+
+## «0 ошибок», «1 ошибка», «3 ошибки» — со склонением.
+func _err_word(v: int) -> String:
+	return "%d %s" % [v, _plural(v, "ошибка", "ошибки", "ошибок")]
+
+
 func _finish(won: bool, reason := "") -> void:
 	if state != "playing":
 		return
@@ -1043,19 +1076,20 @@ func _finish(won: bool, reason := "") -> void:
 		"ema_acc": ema_acc,
 		"enemy_cps": enemy_cps,
 		"all_keys": profile_all_keys,
+		"yo_strict": profile_yo,
 		"total_games": prof.get("total_games", 0),
 		"total_wins": prof.get("total_wins", 0),
 	})
 	if won:
 		overlay_label.add_theme_color_override("font_color", GREEN if not night else Color("#8fd07f"))
-		overlay_label.text = "Уровень пройден! %s\nСкорость %d знаков в минуту · ошибок %d\nEnter — дальше (или кнопка)" % [
-			"★".repeat(stars), int(round(cpm)), typed_bad
+		overlay_label.text = "%s\n%s · %s" % [
+			"★".repeat(stars), _speed_word(int(round(cpm))), _err_word(typed_bad)
 		]
 		_fw_burst(true)
 	else:
 		overlay_label.add_theme_color_override("font_color", DARK_RED if not night else Color("#ff7a6b"))
-		overlay_label.text = "Ай, укололся!\nСкорость %d знаков в минуту · ошибок %d\nEnter — ещё раз (или кнопка)" % [
-			int(round(cpm)), typed_bad
+		overlay_label.text = "%s · %s" % [
+			_speed_word(int(round(cpm))), _err_word(typed_bad)
 		]
 	overlay_label.visible = true
 	over_p.visible = true
@@ -1492,14 +1526,9 @@ func _refresh_hud() -> void:
 			"Старт через %d" % int(ceil(grace_t)),
 			"Старт…",
 		], fs, avail)
-	var help := _first_fit([
-		"Enter — дальше (или тап) · F2 — игроки (или кнопки справа)",
-		"Enter — дальше (или тап) · F2 — игроки",
-		"Enter — дальше",
-		"",
-	], fs, avail)
-	if help != "":
-		lines.append(help)
+	# Нижних подсказок (Enter/F2) больше нет: имя игрока — заголовком
+	# сверху по центру (см. _draw_title), кнопка меню на десктопе
+	# подписана сама («Меню (F2)»), а «Дальше» и так перед глазами.
 	var txt := "\n".join(lines)
 	if show_dbg:
 		# kb — сдвиг раскладки в пикселях канваса, kh — сырая высота
@@ -1642,10 +1671,16 @@ func _draw() -> void:
 	if state == "won" or state == "lost":
 		var dim := Color(1, 1, 1, 0.55) if not night else Color(0.05, 0.07, 0.12, 0.60)
 		draw_rect(Rect2(Vector2.ZERO, Vector2(view_w, view_h)), dim)
-	_draw_touch_buttons()
+	# Кнопки интерфейса — только в игре: под открытым меню они
+	# просвечивали сквозь вуаль и ложились на шапку таблицы
+	# (широкая «Меню (F2)» накрывала заголовок «Ё»). Тычки меню
+	# и так разбирает само.
+	if not menu_open:
+		_draw_touch_buttons()
 	if menu_open:
 		return
 	_draw_level_badge()
+	_draw_title()
 	_draw_fireworks()
 	_draw_progress()
 	_draw_cursor_marker()
@@ -1664,6 +1699,19 @@ func _ui_ink() -> Color:
 	return Color("#e8e4d8") if night else INK
 
 
+## Десктоп — там, где нет системной клавиатуры (нет и клавиши F2
+## на экране, зато есть физическая). Кнопка игроков там подписана.
+func _is_desktop() -> bool:
+	return not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD)
+
+
+## Подсказка кнопки игроков: на десктопе словами «Меню (F2)»
+## (физическая клавиша есть), на телефоне пусто — там значок ≡
+## без слов, клавиши F2 нет.
+func _players_hint() -> String:
+	return "Меню (F2)" if _is_desktop() else ""
+
+
 ## Кнопки тач-интерфейса: ⌨ — вызвать системную клавиатуру, ≡ — игроки.
 ## Рисуем всегда (и на десктопе — как подсказка), работают везде: тап
 ## или клик. Прямоугольники считает _relayout, тычки разбирает _input.
@@ -1676,7 +1724,7 @@ func _draw_touch_buttons() -> void:
 				(14.0 + 14.0 * float(ix)) * k, (17.0 + 12.0 * float(iy)) * k
 			)
 			draw_circle(dot, 2.5 * k, _ui_ink())
-	# Игроки: три чёрточки.
+	# Игроки: значок ≡, на десктопе слева словами «Меню (F2)».
 	draw_style_box(pill_sb, _players_rect)
 	for i in 3:
 		var ly := _players_rect.position.y + (14.0 + 10.0 * float(i)) * k
@@ -1684,6 +1732,17 @@ func _draw_touch_buttons() -> void:
 			Vector2(_players_rect.position.x + 14.0 * k, ly),
 			Vector2(_players_rect.end.x - 14.0 * k, ly),
 			_ui_ink(), 3.0 * k
+		)
+	var ph := _players_hint()
+	if ph != "":
+		var pfs := int(22.0 * k)
+		var ptw := mono.get_string_size(
+			ph, HORIZONTAL_ALIGNMENT_LEFT, -1.0, pfs
+		).x
+		draw_string(
+			mono,
+			Vector2(_players_rect.position.x - 12.0 * k - ptw, _players_rect.get_center().y + float(pfs) * 0.36),
+			ph, HORIZONTAL_ALIGNMENT_LEFT, -1.0, pfs, _ui_ink()
 		)
 	# «Дальше» на модалке победы/поражения: тот же Enter, но пальцем.
 	if over_p.visible:
@@ -1810,8 +1869,50 @@ func _draw_fireworks() -> void:
 ## кружок с одной цифрой — на телефоне от него остаётся кружок с
 ## «0», и ребёнок не понимает, что это уровень. С подписью «УР» и
 ## в кружке-пилюле по ширине текста.
+## Кто сейчас играет, для заголовка: имя или «гость».
+func _title_text() -> String:
+	return profile_name if profile_name != S.GUEST else "гость"
+
+
+## Имя игрока заголовком сверху по центру, в рамке-пилюле.
+## Длинное режем многоточием, чтобы не налезть на бейдж и кнопки.
+func _draw_title() -> void:
+	var who := _title_text()
+	var fs := int(26.0 * k)
+	var pad := 16.0 * k
+	var max_w := maxf(view_w - _badge_rect.size.x - 220.0 * k, 120.0 * k)
+	var t := _short_text(who, fs, max_w)
+	var tw := mono.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x
+	var w := tw + pad * 2.0
+	var h := 42.0 * k
+	var r := Rect2(Vector2((view_w - w) * 0.5, 14.0 * k), Vector2(w, h))
+	draw_style_box(pill_sb, r)
+	draw_string(
+		mono, r.position + Vector2(pad, h * 0.5 + float(fs) * 0.36), t,
+		HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs, _ui_ink()
+	)
+
+
+## Ужать строку в ширину: длинное режем с многоточием.
+func _short_text(t: String, fs: int, max_w: float) -> String:
+	if mono.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x <= max_w:
+		return t
+	var out := t
+	while out.length() > 1 and mono.get_string_size(
+		out + "…", HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs
+	).x > max_w:
+		out = out.left(out.length() - 1)
+	return out + "…"
+
+
+## Текст кружка уровня: уровень и счёт до него одной дробью.
+func _badge_text() -> String:
+	return "УР %d · %d/%d" % [difficulty, wins_in_row, B.WINS_TO_LEVEL_UP]
+
+
 func _draw_level_badge() -> void:
-	var t := "УР %d" % difficulty
+	# Уровень и счёт до него одной дробью: «УР 2 · 2/3».
+	var t := _badge_text()
 	var fs := int(26.0 * k)
 	var tw := mono.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x
 	var pad := 16.0 * k
@@ -1855,6 +1956,10 @@ func _draw_progress() -> void:
 	var tw := mono.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs)
 	# Подпись ПОД полосой, то есть прямо по небу: старые цвета давали
 	# днём 3:1 (мелкий серый на светлом) — берём общий рисованный текст.
+	# Под модалкой победы/поражения подпись прячем: иначе цифры
+	# налезают на звёзды. Сама полоса остаётся — контекст.
+	if over_p.visible:
+		return
 	draw_string(
 		mono,
 		Vector2(r.position.x + r.size.x * 0.5 - tw.x * 0.5, r.position.y + th + 20.0 * k),

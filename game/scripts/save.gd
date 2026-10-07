@@ -39,6 +39,9 @@ static func default_profile() -> Dictionary:
 		## Взрослый режим: активны все знаки сразу, печать не тормозит
 		## из-за прогрессии. Ставится в меню игроков клавишей A.
 		"all_keys": false,
+		## Строгая ё: различать ё и е. Без галки е засчитывается за ё
+		## (для тех, кто ё не любит). Ставится там же, колонка «Ё».
+		"yo_strict": true,
 		"total_games": 0,
 		"total_wins": 0,
 		"last_played": 0,
@@ -173,6 +176,23 @@ static func set_all_keys(user_name: String, on: bool) -> void:
 		return
 	var data := load_profile(user_name)
 	data["all_keys"] = on
+	var cfg := _cfg()
+	var stored := data
+	stored["last_played"] = int(stored.get("last_played", _now()))
+	cfg.set_value(SECTION_PROFILES, user_name, stored)
+	cfg.save(PATH)
+
+
+## Строгая ё профиля: различать ё и е. По умолчанию строго (как было).
+static func get_yo_strict(user_name: String) -> bool:
+	return bool(load_profile(user_name).get("yo_strict", true))
+
+
+static func set_yo_strict(user_name: String, on: bool) -> void:
+	if not user_exists(user_name):
+		return
+	var data := load_profile(user_name)
+	data["yo_strict"] = on
 	var cfg := _cfg()
 	var stored := data
 	stored["last_played"] = int(stored.get("last_played", _now()))
