@@ -1,7 +1,7 @@
 extends Node2D
 ## Меню игроков: список профилей, поле ввода имени, гостевой режим.
 ##
-## Поведение перенесено из pygame-прототипа (git show 1a097c0:main.py):
+## Управление:
 ##   ↑ / ↓      прокрутка списка, с перехватом через конец
 ##   Enter      в поле ввода — создать профиль (или войти, если имя есть),
 ##              без поля — войти выбранным
@@ -31,7 +31,6 @@ const PAPER := Color("#f7f3e8")
 const INK := Color("#1c1a16")
 const UI_TEXT := Color("#4a4438")
 const DIM := Color("#8d8778")
-const ALL_KEYS_BADGE := "⌨ все клавиши"
 const HERO_TEX: Texture2D = preload("res://assets/hero.png")
 
 var users: Array[String] = []
@@ -42,8 +41,30 @@ var input_text := ""
 ## ещё нет — применять не к кому). При создании профиля переносится
 ## в него, затем сбрасывается.
 var input_all_keys := false
+## То же для строгой ё (колонка «Ё»): ждёт создания профиля.
+var input_yo_strict := true
+## Самообновление с GitHub: только по кнопке (никакой фоновой магии).
+## Состояния: "" покой, "checking" проверка, "latest" всё свежее,
+## "error" ошибка с текстом, "downloading" качаем. Модалка «Вышла X?»
+## — флагом _upd_open (только Да/Нет, как подтверждение удаления).
+var _upd: Updater = null
+var _upd_state := ""
+var _upd_msg := ""
+var _upd_tag := ""
+var _upd_url := ""
+var _upd_notes: Array[String] = []
+var _upd_open := false
+## Выбранная колонка флагов: 0 — «Про», 1 — «Ё». Стрелки ←/→ двигают,
+## пробел переключает. Видна подсветкой заголовка.
+var sel_col := 0
+## Подсказка по заголовку колонки («pro»/«yo»): тап по заголовку
+## объясняет, что за галка. Пусто — молчим.
+var hint_header := ""
 ## Игрок, ради которого меню открыли: F2 возвращает в игру с ним.
 var resume_user := ""
+## Удаление на подтверждении: имя профиля, ждущего «Да». Пусто — модалки
+## нет, меню живёт как обычно. Пока висит — весь остальной ввод глушим.
+var confirm_name := ""
 var view_w := BASE_W
 var view_h := BASE_H
 var k := 1.0
@@ -54,6 +75,9 @@ var k := 1.0
 ## На стенде keyboard не вызывается (гейт движка), проверяется
 ## симуляцией через игру (F4 в дебажной сборке) + profiles_test.
 var kb_h := 0.0
+## Ручной режим ночи из настроек: 0 день, 1 ночь, -1 авто (система).
+## Кнопка крутит по кругу день → ночь → авто.
+var nmode := -1
 var mono: Font
 ## Оформление (только картинка): скруглённые чипсы под строками,
 ## рамка поля ввода и пилюля подсказки. Строки и тексты не меняются —
@@ -61,6 +85,8 @@ var mono: Font
 var row_sb: StyleBoxFlat
 var row_idle_sb: StyleBoxFlat
 var box_sb: StyleBoxFlat
+## Бокс выбранной стрелками галки: залит цветом вместо рамки.
+var selbox_sb: StyleBoxFlat
 var hint_sb: StyleBoxFlat
 ## Ночь (S.resolve_night: ручной выбор или система). Краски берутся
 ## из хелперов _ink/_uitext/_dim, панели мутируют в _apply_night.
@@ -74,12 +100,14 @@ func _ready() -> void:
 		var fallback := SystemFont.new()
 		fallback.font_names = PackedStringArray(["monospace"])
 		mono = fallback
-	row_sb = _panel_sb(Color("#f0d98a"), 12.0)
-	row_idle_sb = _panel_sb(Color(1, 1, 1, 0.45), 12.0)
-	box_sb = _panel_sb(Color("#ffffff"), 10.0, INK, 2.0, false)
-	hint_sb = _panel_sb(Color(1, 1, 1, 0.72), 14.0, Color("#e0d5bd"), 1.5, false)
+	row_sb = Ui.panel_sb(Color("#f0d98a"), 12.0)
+	row_idle_sb = Ui.panel_sb(Color(1, 1, 1, 0.45), 12.0)
+	box_sb = Ui.panel_sb(Color("#ffffff"), 10.0, INK, 2.0, false)
+	selbox_sb = Ui.panel_sb(Color("#a9c6ec"), 10.0, INK, 2.0, false)
+	hint_sb = Ui.panel_sb(Color(1, 1, 1, 0.72), 14.0, Color("#e0d5bd"), 1.5, false)
 	_meadow = Meadow.new()
 	add_child(_meadow)
+	nmode = S.get_night_mode()
 	_apply_night()
 	get_tree().root.size_changed.connect(_relayout)
 	_relayout()
@@ -98,11 +126,37 @@ func _relayout() -> void:
 	queue_redraw()
 
 
+## Открыть меню поверх игры. Видимость и процесс — только здесь:
+## скрытое меню глухо и слепо архитектурно (process выключен),
+## а не только проверками visible.
+func open(resume: String, kb: float) -> void:
+	resume_user = resume
+	kb_h = kb
+	visible = true
+	process_mode = Node.PROCESS_MODE_INHERIT
+	_apply_night()
+	_reload()
+	queue_redraw()
+
+
+## Закрыть меню: скрыть и заглушить процесс до следующего open().
+func close() -> void:
+	visible = false
+	process_mode = Node.PROCESS_MODE_DISABLED
+	queue_redraw()
+
+
 ## Перечитать список с диска и встать на разумную позицию.
 func _reload() -> void:
 	users = S.user_list()
 	if sel >= users.size():
 		sel = maxi(0, users.size() - 1)
+	# Режим ночи — из настроек (кнопка могла его сменить, файл — тоже).
+	nmode = S.get_night_mode()
+	# Модалка список не переживает: ушли из меню через F2 посреди
+	# подтверждения — при следующем открытии чистый список, а не
+	# вчерашний вопрос.
+	confirm_name = ""
 	# Пустой список — это первый запуск: курсор сразу в поле имени.
 	# Иначе буквы уходят в никуда, и кажется, что игра не реагирует.
 	# Набирать имя при пустом списке больше нечем, так что неактивное
@@ -124,6 +178,30 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	# переключала «все клавиши», а Tab уводил буквы в невидимое поле.
 	if not visible:
 		return
+	# Модалка подтверждения — только свои клавиши, остальное мимо:
+	# Enter/Д — «Да», Esc/N — «Нет». Д — та же физическая клавиша,
+	# что L (раскладка не важна, смотрим keycode), N — KEY_N.
+	if confirm_name != "":
+		if (
+			ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER
+			or ke.unicode == 10 or ke.unicode == 13
+			or ke.keycode == KEY_L
+		):
+			_confirm_delete()
+		elif ke.keycode == KEY_ESCAPE or ke.keycode == KEY_N:
+			_cancel_confirm()
+		_eaten()
+		return
+	# Модалка обновления: Enter — «Скачать», остальное мимо
+	# (Esc — выход из игры, как везде, модалку не дергаем).
+	if _upd_open:
+		if (
+			ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER
+			or ke.unicode == 10 or ke.unicode == 13
+		):
+			_upd_yes()
+		_eaten()
+		return
 	# F2 — вернуться в игру тем же игроком, кого открыли меню.
 	if ke.keycode == KEY_F2:
 		chosen.emit(resume_user)
@@ -135,6 +213,23 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		return
 	if ke.keycode == KEY_DOWN:
 		_nav(1)
+		_eaten()
+		return
+	# Стрелки ←/→ — выбор колонки флагов (Про/Ё), пробел — переключить
+	# флаг у выбранной строки. В поле ввода пробел молчит (имени
+	# с пробелами не бывает), модалку стрелки не трогают (она выше).
+	if ke.keycode == KEY_LEFT:
+		sel_col = (sel_col + 1) % 2
+		queue_redraw()
+		_eaten()
+		return
+	if ke.keycode == KEY_RIGHT:
+		sel_col = (sel_col + 1) % 2
+		queue_redraw()
+		_eaten()
+		return
+	if ke.keycode == KEY_SPACE:
+		_toggle_flag()
 		_eaten()
 		return
 	if ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER or ke.unicode == 10 or ke.unicode == 13:
@@ -150,7 +245,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		_eaten()
 		return
 	if ke.keycode == KEY_ESCAPE:
-		_guest()
+		# Esc в меню — выход из игры, а не гость. Гость — только
+		# кнопкой «Без профиля» (тап или Enter по пустому списку).
+		get_tree().quit()
 		_eaten()
 		return
 	if ke.keycode == KEY_BACKSPACE or ke.unicode == 8:
@@ -204,15 +301,70 @@ func _input(event: InputEvent) -> void:
 			has_pos = true
 	if not has_pos:
 		return
+	# Модалка — только свои две кнопки, остальное мимо.
+	if confirm_name != "":
+		if _confirm_yes_rect().has_point(pos):
+			_confirm_delete()
+			get_viewport().set_input_as_handled()
+		elif _confirm_no_rect().has_point(pos):
+			_cancel_confirm()
+			get_viewport().set_input_as_handled()
+		return
+	# Модалка обновления — только свои две кнопки (удаление первее).
+	if _upd_open:
+		if _upd_yes_rect().has_point(pos):
+			_upd_yes()
+			get_viewport().set_input_as_handled()
+		elif _upd_no_rect().has_point(pos):
+			_upd_no()
+			get_viewport().set_input_as_handled()
+		return
 	# Прямоугольники — из тех же хелперов, что рисует _draw: единый
 	# источник геометрии, работает и без отрисовки (тесты headless).
+	# Внутри строки сначала точечные цели (галочка, крестик), потом
+	# сама строка: иначе тап по галочке играл бы этим профилем.
+	for i in users.size():
+		if _pro_tap_rect(i).has_point(pos):
+			_toggle_pro(i)
+			get_viewport().set_input_as_handled()
+			return
+		if _yo_tap_rect(i).has_point(pos):
+			_toggle_yo(i)
+			get_viewport().set_input_as_handled()
+			return
+		if _del_tap_rect(i).has_point(pos):
+			confirm_name = users[i]
+			queue_redraw()
+			get_viewport().set_input_as_handled()
+			return
 	for i in users.size():
 		if _row_tap_rect(i).has_point(pos):
 			chosen.emit(users[i])
 			get_viewport().set_input_as_handled()
 			return
-	if _check_tap_rect().has_point(pos):
+	# Заголовки «Про»/«Ё» — подсказка, что за галка. Повторный тап гасит.
+	if not users.is_empty() and _pro_head_rect().has_point(pos):
+		hint_header = "" if hint_header == "pro" else "pro"
+		queue_redraw()
+		get_viewport().set_input_as_handled()
+		return
+	if not users.is_empty() and _yo_head_rect().has_point(pos):
+		hint_header = "" if hint_header == "yo" else "yo"
+		queue_redraw()
+		get_viewport().set_input_as_handled()
+		return
+	# Кнопка обновлений: проверить релизы на GitHub.
+	if _upd_button_rect().has_point(pos):
+		_upd_check()
+		get_viewport().set_input_as_handled()
+		return
+	if users.is_empty() and _check_tap_rect().has_point(pos):
 		_toggle_all_keys()
+		get_viewport().set_input_as_handled()
+		return
+	if users.is_empty() and _yocheck_tap_rect().has_point(pos):
+		input_yo_strict = not input_yo_strict
+		queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
 	if _field_tap_rect().has_point(pos):
@@ -233,7 +385,9 @@ func _input(event: InputEvent) -> void:
 		_toggle_night()
 		get_viewport().set_input_as_handled()
 		return
-	if _mkb_tap_rect().has_point(pos):
+	# Кнопка ⌨ — только там, где есть системная клавиатура (телефон):
+	# на десктопе она ничего не делала и только путала.
+	if not Ui.is_desktop() and _mkb_tap_rect().has_point(pos):
 		if not input_active:
 			_toggle_input()
 		_kb_show()
@@ -248,6 +402,8 @@ func _kb_show() -> void:
 		DisplayServer.virtual_keyboard_show("")
 
 
+## Десктоп — там, где нет системной клавиатуры: кнопка ⌨ там
+## ничего не делала и только путала, поэтому её нет (и тычка тоже).
 ## Буква по коду клавиши: «A» без физической раскладки (в латинице на
 ## русской раскладке KeyA тоже проходит). Ручная раскладка не важна:
 ## клавиша одна и та же.
@@ -271,34 +427,21 @@ func _toggle_input() -> void:
 	queue_redraw()
 
 
-## Стиль скруглённой панели (тот же приём, что в main.gd).
-func _panel_sb(bg: Color, radius: float, border := Color(0, 0, 0, 0), bw := 0.0, shadow := false) -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = bg
-	sb.set_corner_radius_all(int(radius))
-	if bw > 0.0:
-		sb.set_border_width_all(int(bw))
-		sb.border_color = border
-	if shadow:
-		sb.shadow_color = Color(0.25, 0.20, 0.12, 0.18)
-		sb.shadow_size = 6
-		sb.shadow_offset = Vector2(0, 3)
-	return sb
-
-
 func _enter() -> void:
 	if input_active and not input_text.strip_edges().is_empty():
 		var name := S.clean_name(input_text)
-		# Новое имя — создать, существующее — просто войти. Флаг
-		# вводимого имени переезжает в созданный профиль.
+		# Новое имя — создать, существующее — просто войти. Флаги
+		# вводимого имени переезжают в созданный профиль.
 		if not S.user_exists(name):
 			S.create_user(name)
 			S.set_all_keys(name, input_all_keys)
+			S.set_yo_strict(name, input_yo_strict)
 		else:
 			S.touch(name)
 		input_text = ""
 		input_active = false
 		input_all_keys = false
+		input_yo_strict = true
 		chosen.emit(name)
 		return
 	if not users.is_empty():
@@ -311,8 +454,92 @@ func _enter() -> void:
 func _delete() -> void:
 	if input_active or users.is_empty():
 		return
-	S.delete_user(users[sel])
+	# Удаление непоправимо — только через подтверждение.
+	confirm_name = users[sel]
+	queue_redraw()
+
+
+## Подтверждено: снести и вернуться в список.
+func _confirm_delete() -> void:
+	if confirm_name != "":
+		S.delete_user(confirm_name)
+	confirm_name = ""
 	_reload()
+
+
+## Отмена: профиль цел, модалка гаснет.
+func _cancel_confirm() -> void:
+	confirm_name = ""
+	queue_redraw()
+
+
+## Ленивый узел проверки обновлений + сигналы в состояние меню.
+func _upd_ensure() -> void:
+	if _upd != null:
+		return
+	_upd = Updater.new()
+	add_child(_upd)
+	_upd.checked.connect(_on_upd_checked)
+	_upd.failed.connect(_on_upd_failed)
+	_upd.downloaded.connect(_on_upd_downloaded)
+
+
+## Кнопка «Обновления»: спросить GitHub.
+func _upd_check() -> void:
+	_upd_ensure()
+	_upd_state = "checking"
+	_upd_msg = "Проверяю…"
+	_upd_open = false
+	queue_redraw()
+	_upd.check()
+
+
+func _on_upd_checked(has: bool, tag: String, notes: String, _url: String) -> void:
+	if has:
+		_upd_tag = tag
+		_upd_notes.clear()
+		for ln in notes.split("\n"):
+			_upd_notes.append(ln)
+		_upd_state = ""
+		_upd_msg = ""
+		_upd_open = true
+	else:
+		_upd_state = "latest"
+		_upd_msg = "У вас последняя (%s)" % tag
+		_upd_open = false
+	queue_redraw()
+
+
+func _on_upd_failed(what: String) -> void:
+	_upd_state = "error"
+	_upd_msg = what
+	_upd_open = false
+	queue_redraw()
+
+
+## «Скачать»: качаем, дальше — дело платформы (см. update.gd).
+func _upd_yes() -> void:
+	_upd_open = false
+	_upd_state = "downloading"
+	_upd_msg = "Качаю…"
+	queue_redraw()
+	_upd.download()
+
+
+## «Позже»: модалка гаснет, проверка сброшена.
+func _upd_no() -> void:
+	_upd_open = false
+	_upd_state = ""
+	_upd_msg = ""
+	queue_redraw()
+
+
+func _on_upd_downloaded(_path: String) -> void:
+	# Платформа забрала файл (установщик / перезапуск): меню молчит.
+	_upd_state = ""
+	_upd_msg = ""
+	_upd_open = false
+	queue_redraw()
 
 
 func _toggle_all_keys() -> void:
@@ -327,31 +554,104 @@ func _toggle_all_keys() -> void:
 	_reload()
 
 
+## Про-режим строке: все клавиши сразу именно этому игроку.
+func _toggle_pro(i: int) -> void:
+	if i < 0 or i >= users.size():
+		return
+	var name := users[i]
+	S.set_all_keys(name, not S.get_all_keys(name))
+	_reload()
+
+
+## Строгая ё строке: различать ё и е именно этому игроку.
+func _toggle_yo(i: int) -> void:
+	if i < 0 or i >= users.size():
+		return
+	var name := users[i]
+	S.set_yo_strict(name, not S.get_yo_strict(name))
+	_reload()
+
+
+## Пробел по флагам: выбранная стрелками колонка (sel_col) у выбранной
+## строки — или у вводимого имени, если список пуст.
+func _toggle_flag() -> void:
+	if input_active or confirm_name != "":
+		return
+	if users.is_empty():
+		if sel_col == 0:
+			input_all_keys = not input_all_keys
+		else:
+			input_yo_strict = not input_yo_strict
+		queue_redraw()
+		return
+	if sel_col == 0:
+		_toggle_pro(sel)
+	else:
+		_toggle_yo(sel)
+
+
 func _guest() -> void:
 	S.set_last_user(S.GUEST)
 	chosen.emit(S.GUEST)
 
 
-## Подпись строки профиля: кто, сколько играл, все ли клавиши открыты.
-func _row_caption(name: String) -> String:
+## Ячейки строки таблицы: уровень и счёт «побед из игр». Шапка
+## объясняет колонки, поэтому в ячейках только цифры.
+func _cell_texts(name: String) -> Array[String]:
 	var p := S.load_profile(name)
-	var games := int(p.get("total_games", 0))
-	var wins := int(p.get("total_wins", 0))
-	# На узком экране — ужатая подпись: полная в чипс не влезает.
-	# Победы/игры пакуются как «побед из игр».
-	if view_w < 700.0:
-		var short := "%s · ур.%d · %d/%d" % [
-			name, int(p.get("difficulty", 0)), wins, games
-		]
-		if bool(p.get("all_keys", false)):
-			short += "   " + ALL_KEYS_BADGE
-		return short
-	var line := "%s   уровень %d · игр %d · побед %d" % [
-		name, int(p.get("difficulty", 0)), games, wins
+	var res: Array[String] = [
+		"ур.%d" % int(p.get("difficulty", 0)),
+		"%d/%d" % [int(p.get("total_wins", 0)), int(p.get("total_games", 0))],
 	]
-	if bool(p.get("all_keys", false)):
-		line += "   " + ALL_KEYS_BADGE
-	return line
+	return res
+
+
+## Колонки таблицы [имя, уровень, счёт, Про, Ё, ✕]: левые края
+## и правый край. Имя занимает остаток (длинные режем с многоточием),
+## остальные — по самой широкой ячейке. Та же геометрия у отрисовки,
+## хит-теста и тестов: мимо не бьёт.
+func _table_cols() -> Array[float]:
+	var left := 48.0 * k
+	var right := view_w - 48.0 * k
+	var gap := 12.0 * k
+	var del_w := 44.0 * k
+	var pro_w := _text_size("Про", FONT_SMALL).x + 44.0 * k
+	var yo_w := _text_size("Ё", FONT_SMALL).x + 44.0 * k
+	var lvl_w := _text_size("Ур", FONT_SMALL).x + 16.0 * k
+	var rec_w := _text_size("Победы", FONT_SMALL).x + 16.0 * k
+	for u in users:
+		var cells := _cell_texts(u)
+		lvl_w = maxf(lvl_w, _text_size(cells[0], FONT_ROW).x + 16.0 * k)
+		rec_w = maxf(rec_w, _text_size(cells[1], FONT_ROW).x + 16.0 * k)
+	var fixed := lvl_w + rec_w + pro_w + yo_w + del_w + gap * 5.0
+	var name_w := maxf(80.0 * k, right - left - fixed)
+	var name_x := left
+	var lvl_x := left + name_w + gap
+	var rec_x := lvl_x + lvl_w + gap
+	var pro_x := rec_x + rec_w + gap
+	var yo_x := pro_x + pro_w + gap
+	var del_x := yo_x + yo_w + gap
+	var cols: Array[float] = [name_x, lvl_x, rec_x, pro_x, yo_x, del_x, right]
+	return cols
+
+
+## Имя в ширину колонки: длинное режем с многоточием, иначе таблица
+## разъезжается (имена до 15 знаков).
+func _short_name(name: String) -> String:
+	var cols := _table_cols()
+	return _clip(name, FONT_ROW, cols[1] - cols[0] - 8.0 * k)
+
+
+## Обрезать строку по ширине, с многоточием. Нужна для чужих строк
+## (длинная ссылка из changelog иначе вылезает за карточку) и для
+## имени профиля.
+func _clip(txt: String, size_px: int, cap: float) -> String:
+	if _text_size(txt, size_px).x <= cap:
+		return txt
+	var out := txt
+	while out.length() > 1 and _text_size(out + "…", size_px).x > cap:
+		out = out.left(out.length() - 1)
+	return out + "…"
 
 
 func _text_size(txt: String, size_px: int) -> Vector2:
@@ -381,49 +681,138 @@ func _field_text() -> String:
 ## Центрирование — от эффективной высоты (минус клавиатура): иначе
 ## на телефоне с выездом клавиатуры блок остаётся под ней.
 func _menu_eff_h() -> float:
-	return maxf(view_h - kb_h, 220.0)
+	return Ui.eff_h(view_h, kb_h)
 
 
 func _rows_top() -> float:
 	var y := 90.0 * k + 70.0 * k
 	if view_h > view_w:
 		var eff := _menu_eff_h()
-		var need := 170.0 * k + float(maxi(users.size(), 1)) * ROW_H * k + 320.0 * k
+		var need := 170.0 * k + float(maxi(users.size(), 1)) * ROW_H * k + 220.0 * k
 		y += maxf(0.0, (eff - need) * 0.22)
 	return y
 
 
-## Строка поля ввода: после заголовка, строк и отступа. Ниже ещё
-## галочка «все клавиши» — она есть ВСЕГДА (на пустом списке
-## относится к вводимому имени), поэтому запас под неё не зависит от
-## наличия игроков. Раньше на пустом списке запаса не было, и рамка
-## поля накрывала подпись галочки (видел на эмуляторе).
+## Строка поля ввода: после заголовка, строк и отступа. Отдельной
+## галочки между строками и полем больше нет: «Про» живёт в колонке
+## таблицы, на пустом списке — компактной галочкой под полем.
 func _field_line_y() -> float:
 	return (
 		_rows_top()
 		+ float(maxi(users.size(), 1)) * ROW_H * k
-		+ 30.0 * k
-		+ 78.0 * k
+		+ 34.0 * k
 	)
 
 
-## Строка галочки «все клавиши»: под списком, над полем ввода.
+## Строка галочки «Про» для вводимого имени (только пустой список):
+## под полем ввода.
 func _check_line_y() -> float:
-	return _rows_top() + float(maxi(users.size(), 1)) * ROW_H * k + 6.0 * k
+	return _field_line_y() + 56.0 * k
 
 
-## Строка кнопок: под полем ввода.
+## Галочка «Про» для вводимого имени: тот же флаг, что у профилей,
+## но до создания — переедет в профиль (см. _enter).
+func _check_tap_rect() -> Rect2:
+	var y := _check_line_y()
+	var w := _text_size("Про", FONT_ROW).x
+	return Rect2(48.0 * k, y - 36.0 * k, w + 84.0 * k, 48.0 * k)
+
+
+## Компактная галка «Ё» на пустом списке: та же строка, правее.
+func _yocheck_tap_rect() -> Rect2:
+	var y := _check_line_y()
+	var w := _text_size("Ё", FONT_ROW).x
+	return Rect2(198.0 * k, y - 36.0 * k, w + 84.0 * k, 48.0 * k)
+
+
+## Строка кнопок: под полем ввода, на пустом списке — под галочкой
+## «Про» для вводимого имени.
 func _buttons_y() -> float:
-	return _field_line_y() + 64.0 * k
+	return _field_line_y() + 64.0 * k + (56.0 * k if users.is_empty() else 0.0)
 
 
-## Чипс строки: та же геометрия, что рисует _draw.
+## Чипс строки: во всю ширину таблицы. Та же геометрия, что _draw.
 func _row_tap_rect(i: int) -> Rect2:
+	var cols := _table_cols()
 	var row_y := _rows_top() + float(i) * ROW_H * k
 	return Rect2(
-		44.0 * k, row_y - 36.0 * k,
-		_text_size(_row_caption(users[i]), FONT_ROW).x + 32.0 * k,
-		ROW_H * k - 10.0 * k
+		cols[0] - 16.0 * k, row_y - 38.0 * k,
+		cols[6] - cols[0] + 32.0 * k, ROW_H * k - 6.0 * k
+	)
+
+
+## Галочка «Про» в строке: тот же переключатель, что клавиша A,
+## но пальцем/мышью. Тап по ней не играет профилем, только флагом.
+func _pro_tap_rect(i: int) -> Rect2:
+	var cols := _table_cols()
+	var row_y := _rows_top() + float(i) * ROW_H * k
+	var cx := (cols[3] + cols[4]) * 0.5
+	return Rect2(cx - 26.0 * k, row_y - 26.0 * k, 52.0 * k, 52.0 * k)
+
+
+## Галочка «Ё» в строке: строгая ё именно этому игроку.
+## Тап не играет профилем, только флагом.
+func _yo_tap_rect(i: int) -> Rect2:
+	var cols := _table_cols()
+	var row_y := _rows_top() + float(i) * ROW_H * k
+	var cx := (cols[4] + cols[5]) * 0.5
+	return Rect2(cx - 26.0 * k, row_y - 26.0 * k, 52.0 * k, 52.0 * k)
+
+
+## Крестик удаления в строке: открывает модалку подтверждения.
+func _del_tap_rect(i: int) -> Rect2:
+	var cols := _table_cols()
+	var row_y := _rows_top() + float(i) * ROW_H * k
+	var cx := (cols[5] + cols[6]) * 0.5
+	return Rect2(cx - 24.0 * k, row_y - 24.0 * k, 48.0 * k, 48.0 * k)
+
+
+## Заголовки «Про»/«Ё»: тап показывает, что за галка (hint_header).
+func _pro_head_rect() -> Rect2:
+	var cols := _table_cols()
+	var cx := (cols[3] + cols[4]) * 0.5
+	var y := _rows_top() - 44.0 * k
+	return Rect2(cx - 48.0 * k, y - 28.0 * k, 96.0 * k, 40.0 * k)
+
+
+func _yo_head_rect() -> Rect2:
+	var cols := _table_cols()
+	var cx := (cols[4] + cols[5]) * 0.5
+	var y := _rows_top() - 44.0 * k
+	return Rect2(cx - 48.0 * k, y - 28.0 * k, 96.0 * k, 40.0 * k)
+
+
+## Кнопка проверки обновлений (слева вверху) и строка состояния.
+## Замер — тем же кеглем, каким рисует _button (26, не FONT_SMALL).
+func _upd_button_rect() -> Rect2:
+	var w := _text_size("Обновления", 26).x + 36.0 * k
+	return Rect2(16.0 * k, 16.0 * k, w, 44.0 * k)
+
+
+## Карточка «Вышла версия?»: заголовок + заметки + две кнопки.
+## Ширина — по самому длинному тексту, кнопки всегда внизу.
+func _upd_card_rect() -> Rect2:
+	var w := _text_size("Вышла " + _upd_tag, FONT_ROW).x + 96.0 * k
+	for ln in _upd_notes:
+		w = maxf(w, _text_size(ln, FONT_SMALL).x + 96.0 * k)
+	w = clampf(w, 420.0 * k, view_w - 64.0 * k)
+	var h := 200.0 * k + 30.0 * k * float(_upd_notes.size())
+	return Rect2((view_w - w) * 0.5, (view_h - h) * 0.5, w, h)
+
+
+func _upd_yes_rect() -> Rect2:
+	var card := _upd_card_rect()
+	return Rect2(
+		Vector2(card.get_center().x - 190.0 * k, card.position.y + card.size.y - 80.0 * k),
+		Vector2(170.0 * k, 56.0 * k)
+	)
+
+
+func _upd_no_rect() -> Rect2:
+	var card := _upd_card_rect()
+	return Rect2(
+		Vector2(card.get_center().x + 20.0 * k, card.position.y + card.size.y - 80.0 * k),
+		Vector2(170.0 * k, 56.0 * k)
 	)
 
 
@@ -453,16 +842,10 @@ func _dim() -> Color:
 	return DIM
 
 
-## Спрайт ночью темнее и холоднее (как в игре).
-func _sprite_tint() -> Color:
-	if night:
-		return Color(0.72, 0.76, 0.90)
-	return Color.WHITE
-
-
+## Спрайт ночью темнее и холоднее — см. Ui.NIGHT_TINT.
 ## Ночь: ручной выбор из файла важнее системы.
 func _night_resolve() -> void:
-	night = S.resolve_night(S.get_night_mode(), true, S.system_dark())
+	night = S.resolve_night(nmode, true, S.system_dark())
 
 
 ## Применить ночь: панели мутируют на месте, фон переключается.
@@ -472,12 +855,16 @@ func _apply_night() -> void:
 		row_idle_sb.bg_color = Color(0.10, 0.12, 0.20, 0.60)
 		box_sb.bg_color = Color("#232c44")
 		box_sb.border_color = Color("#8b93a8")
+		selbox_sb.bg_color = Color("#8ab4e0")
+		selbox_sb.border_color = Color("#8b93a8")
 		hint_sb.bg_color = Color(0.10, 0.12, 0.20, 0.80)
 		hint_sb.border_color = Color("#3a4a6b")
 	else:
 		row_idle_sb.bg_color = Color(1, 1, 1, 0.45)
 		box_sb.bg_color = Color("#ffffff")
 		box_sb.border_color = INK
+		selbox_sb.bg_color = Color("#a9c6ec")
+		selbox_sb.border_color = INK
 		hint_sb.bg_color = Color(1, 1, 1, 0.72)
 		hint_sb.border_color = Color("#e0d5bd")
 	if _meadow != null:
@@ -486,27 +873,34 @@ func _apply_night() -> void:
 	queue_redraw()
 
 
-## Переключатель ночи (кнопка «Ночь»/«День»): выбор запоминается.
+## Переключатель ночи по кругу: день → ночь → авто → день.
+## Выбор запоминается в настройках.
 func _toggle_night() -> void:
-	night = not night
-	S.set_night_mode(S.NIGHT_ON if night else S.NIGHT_DAY)
+	if nmode == S.NIGHT_DAY:
+		nmode = S.NIGHT_ON
+	elif nmode == S.NIGHT_ON:
+		nmode = S.NIGHT_AUTO
+	else:
+		nmode = S.NIGHT_DAY
+	S.set_night_mode(nmode)
 	_apply_night()
 
 
-## Кнопки «Играть», «Без профиля» и «Ночь»/«День»: тройка по центру.
+## Кнопки «Играть», «Без профиля» и день/ночь: тройка по центру.
+## Ночная — маленький квадрат: значок-символ в нём, а не вокруг.
 func _play_tap_rect() -> Rect2:
 	var y := _buttons_y()
-	return Rect2(cx_of() - 337.0 * k, y, 230.0 * k, 52.0 * k)
+	return Rect2(cx_of() - 288.0 * k, y, 230.0 * k, 52.0 * k)
 
 
 func _guest_tap_rect() -> Rect2:
 	var y := _buttons_y()
-	return Rect2(cx_of() - 337.0 * k + 246.0 * k, y, 262.0 * k, 52.0 * k)
+	return Rect2(cx_of() - 288.0 * k + 246.0 * k, y, 262.0 * k, 52.0 * k)
 
 
 func _night_tap_rect() -> Rect2:
 	var y := _buttons_y()
-	return Rect2(cx_of() - 337.0 * k + 524.0 * k, y, 150.0 * k, 52.0 * k)
+	return Rect2(cx_of() - 288.0 * k + 524.0 * k, y, 52.0 * k, 52.0 * k)
 
 
 func cx_of() -> float:
@@ -518,13 +912,30 @@ func _mkb_tap_rect() -> Rect2:
 	return Rect2(view_w - 72.0 * k, 16.0 * k, 56.0 * k, 56.0 * k)
 
 
-## Галочка «все клавиши» для выбранного профиля: тот же переключатель,
-## что клавиша A, но пальцем/мышью (на телефоне буквы A нет в нужный
-## момент). Нет игроков — нет и галочки.
-func _check_tap_rect() -> Rect2:
-	var y := _check_line_y()
-	var w := _text_size("Все клавиши", FONT_ROW).x
-	return Rect2(48.0 * k, y - 36.0 * k, w + 84.0 * k, 48.0 * k)
+## Кнопки модалки подтверждения: «Да» и «Нет» по центру карточки.
+func _confirm_yes_rect() -> Rect2:
+	var c := _confirm_card_rect().get_center()
+	return Rect2(c + Vector2(-190.0 * k, 24.0 * k), Vector2(170.0 * k, 56.0 * k))
+
+
+func _confirm_no_rect() -> Rect2:
+	var c := _confirm_card_rect().get_center()
+	return Rect2(c + Vector2(20.0 * k, 24.0 * k), Vector2(170.0 * k, 56.0 * k))
+
+
+## Карточка модалки: по центру экрана, по ширине текста вопроса.
+func _confirm_card_rect() -> Rect2:
+	var t := "Удалить «%s»?" % confirm_name
+	var w := maxf(_text_size(t, FONT_ROW).x + 96.0 * k, 420.0 * k)
+	var h := 210.0 * k
+	return Rect2((view_w - w) * 0.5, (view_h - h) * 0.5, w, h)
+
+
+## Опасное действие (крестик удаления): красный в обеих темах.
+func _danger() -> Color:
+	if night:
+		return Color("#ff7a6b")
+	return Color("#b02323")
 
 
 ## Включён ли взрослый режим: у выбранного — его флаг, на пустом
@@ -543,24 +954,34 @@ func _button(r: Rect2, label: String) -> void:
 	_text(label, Vector2(r.get_center().x - w * 0.5, r.position.y + 36.0 * k), 26, _ink())
 
 
-## Кнопка день/ночь: солнце (круг + лучи) или луна (диск с кратерами).
-## Иконка показывает, ВО ЧТО переключит: днём — луну, ночью — солнце.
+## Кнопка день/ночь/авто: показывает ТЕКУЩИЙ режим. Все три значка —
+## векторный композит с явными границами (строго внутри кнопки):
+## солнце — диск с лучами, ночь — залитый месяц (диск + вырез),
+## авто — полдиска (тёмная/светлая, как системная авто-тема).
+## Шрифтовые ☀/◐ вылезали за кнопку, а эмоджи-лун в DejaVu нет
+## вовсе (проверено по cmap — тофу на половине платформ).
 func _draw_daynight(r: Rect2) -> void:
 	draw_style_box(hint_sb, r)
 	var c := r.get_center()
-	if night:
-		var sr := 13.0 * k
-		draw_line(c + Vector2(-sr, 0), c + Vector2(sr, 0), _ink(), 3.0 * k)
-		draw_line(c + Vector2(0, -sr), c + Vector2(0, sr), _ink(), 3.0 * k)
-		var d := Vector2(sr * 0.7, sr * 0.7)
-		draw_line(c - d, c + d, _ink(), 3.0 * k)
-		draw_line(c + Vector2(-d.x, d.y), c + Vector2(d.x, -d.y), _ink(), 3.0 * k)
-		draw_circle(c, 7.0 * k, Color("#e8a13a"))
-	else:
-		# Луна на светлой дневной пилюле — тёмная, иначе не видно.
+	var bg := hint_sb.bg_color
+	if nmode == S.NIGHT_ON:
+		# Залитый месяц: диск чернилами, вырез цветом кнопки со сдвигом.
 		var mr := 11.0 * k
-		draw_circle(c, mr, Color("#5a6a8a"))
-		draw_circle(c + Vector2(-mr * 0.25, -mr * 0.15), mr * 0.45, Color("#3a4a6b"))
+		draw_circle(c, mr, _ink())
+		draw_circle(c + Vector2(mr * 0.42, -mr * 0.38), mr * 0.82, bg)
+	elif nmode == S.NIGHT_AUTO:
+		# Полдиска: левая чернилами, правая вырезана под кнопку.
+		var ar := 11.0 * k
+		draw_circle(c, ar, _ink())
+		draw_rect(Rect2(c + Vector2(0.0, -ar), Vector2(ar, ar * 2.0)), bg)
+	else:
+		# Солнце: диск плюс 8 лучей, всё в радиусе 15k.
+		var sr := 7.0 * k
+		draw_circle(c, sr, _ink())
+		for i in 8:
+			var a := TAU * float(i) / 8.0
+			var dir := Vector2(cos(a), sin(a))
+			draw_line(c + dir * 10.5 * k, c + dir * 15.0 * k, _ink(), 2.5 * k)
 
 
 func _draw() -> void:
@@ -591,32 +1012,127 @@ func _draw() -> void:
 			FONT_ROW,
 			_dim()
 		)
-	# Каждая строка — отдельным «чипсом» по ширине текста: выбранный
-	# жёлтый, остальные белые. Тап по чипсу сразу играет этим игроком.
+	# Таблица игроков: шапка + строки во всю ширину. Тап по строке
+	# сразу играет этим игроком, тап по галочке — только флаг,
+	# тап по крестику — удаление с подтверждением. Тап по заголовку
+	# «Про»/«Ё» объясняет галку. Выбранная стрелками колонка подсвечена
+	# в шапке (пробел переключает её флаг).
+	if not users.is_empty():
+		var hcols := _table_cols()
+		_text("Имя", Vector2(hcols[0], y - 44.0 * k), FONT_SMALL, _dim())
+		_text("Ур", Vector2(hcols[1], y - 44.0 * k), FONT_SMALL, _dim())
+		_text("Победы", Vector2(hcols[2], y - 44.0 * k), FONT_SMALL, _dim())
+		var pro_hw := _text_size("Про", FONT_SMALL).x
+		_text(
+			"Про",
+			Vector2((hcols[3] + hcols[4]) * 0.5 - pro_hw * 0.5, y - 44.0 * k),
+			FONT_SMALL, _ink() if sel_col == 0 else _dim()
+		)
+		var yo_hw := _text_size("Ё", FONT_SMALL).x
+		_text(
+			"Ё",
+			Vector2((hcols[4] + hcols[5]) * 0.5 - yo_hw * 0.5, y - 44.0 * k),
+			FONT_SMALL, _ink() if sel_col == 1 else _dim()
+		)
 	for i in users.size():
 		var row_y := y + float(i) * ROW_H * k
+		var cols := _table_cols()
 		var chip := _row_tap_rect(i)
 		draw_style_box(row_sb if i == sel else row_idle_sb, chip)
 		# Выбранная строка всегда на жёлтом — тёмным текстом.
+		var tcol := INK if i == sel else _ink()
 		_text(
-			_row_caption(users[i]), Vector2(60.0 * k, row_y), FONT_ROW,
-			INK if i == sel else _ink()
+			_short_name(users[i]), Vector2(cols[0], row_y), FONT_ROW, tcol
 		)
+		var cells := _cell_texts(users[i])
+		_text(cells[0], Vector2(cols[1], row_y), FONT_ROW, tcol)
+		_text(cells[1], Vector2(cols[2], row_y), FONT_ROW, tcol)
+		# Галочка «Про» по центру своей колонки. Цвет — от БОКСА, а не
+		# от строки: бокс белый днём и тёмный ночью, а цвет строки
+		# (tcol) на выбранной строке тёмный всегда — ночью галочка
+		# тонула в тёмном боксе, стоило навести выделение.
+		var chk_col := Color("#f2ede0") if night else INK
+		# Выбранная стрелками галка залита своим боксом (selbox_sb),
+		# заголовок колонки подсвечен выше. Рамки было не видно
+		# в длинном списке.
+		var pro_box := box_sb
+		var yo_box := box_sb
+		if i == sel:
+			if sel_col == 0:
+				pro_box = selbox_sb
+			else:
+				yo_box = selbox_sb
+		var pcx := (cols[3] + cols[4]) * 0.5
+		draw_style_box(pro_box, Rect2(pcx - 16.0 * k, row_y - 32.0 * k, 32.0 * k, 32.0 * k))
+		# Галка на залитом боксе — тёмная всегда (заливка светлая
+		# в обеих темах), на обычном — от темы.
+		var pro_chk := INK if pro_box == selbox_sb else chk_col
+		if bool(S.load_profile(users[i]).get("all_keys", false)):
+			draw_line(
+				Vector2(pcx - 10.0 * k, row_y - 12.0 * k),
+				Vector2(pcx, row_y - 2.0 * k),
+				pro_chk, 4.0 * k
+			)
+			draw_line(
+				Vector2(pcx, row_y - 2.0 * k),
+				Vector2(pcx + 16.0 * k, row_y - 26.0 * k),
+				pro_chk, 4.0 * k
+			)
+		# Галочка «Ё» по центру своей колонки: тот же бокс, тот же цвет.
+		var ycx := (cols[4] + cols[5]) * 0.5
+		draw_style_box(yo_box, Rect2(ycx - 16.0 * k, row_y - 32.0 * k, 32.0 * k, 32.0 * k))
+		var yo_chk := INK if yo_box == selbox_sb else chk_col
+		if bool(S.load_profile(users[i]).get("yo_strict", true)):
+			draw_line(
+				Vector2(ycx - 10.0 * k, row_y - 12.0 * k),
+				Vector2(ycx, row_y - 2.0 * k),
+				yo_chk, 4.0 * k
+			)
+			draw_line(
+				Vector2(ycx, row_y - 2.0 * k),
+				Vector2(ycx + 16.0 * k, row_y - 26.0 * k),
+				yo_chk, 4.0 * k
+			)
+		# Крестик удаления по центру своей колонки.
+		var dcx := (cols[5] + cols[6]) * 0.5
+		var dtxt := "✕"
+		var dw := _text_size(dtxt, FONT_ROW)
+		_text(dtxt, Vector2(dcx - dw.x * 0.5, row_y), FONT_ROW, _danger())
 	y = _field_line_y()
-	# Галочка «все клавиши»: на пустом списке относится к вводимому
-	# имени, иначе — к выбранному профилю.
-	var cy := _check_line_y()
-	draw_style_box(box_sb, Rect2(60.0 * k, cy - 32.0 * k, 32.0 * k, 32.0 * k))
-	if _check_on():
-		draw_line(
-			Vector2(66.0 * k, cy - 12.0 * k), Vector2(76.0 * k, cy - 2.0 * k),
-			_ink(), 4.0 * k
-		)
-		draw_line(
-			Vector2(76.0 * k, cy - 2.0 * k), Vector2(92.0 * k, cy - 26.0 * k),
-			_ink(), 4.0 * k
-		)
-	_text("Все клавиши", Vector2(104.0 * k, cy), FONT_ROW, _ink())
+	# Компактные галки для вводимого имени — только когда список пуст
+	# (иначе флаги живут в колонках таблицы). Обе в одну строку:
+	# места хватает, раскладку не двигаем. Выбранную стрелками колонку
+	# обводим (пробел переключает её флаг).
+	if users.is_empty():
+		var cy := _check_line_y()
+		var ychk_col := Color("#f2ede0") if night else INK
+		var pro_box0 := selbox_sb if sel_col == 0 else box_sb
+		draw_style_box(pro_box0, Rect2(60.0 * k, cy - 32.0 * k, 32.0 * k, 32.0 * k))
+		var pro_chk0 := INK if sel_col == 0 else ychk_col
+		if _check_on():
+			draw_line(
+				Vector2(66.0 * k, cy - 12.0 * k), Vector2(76.0 * k, cy - 2.0 * k),
+				pro_chk0, 4.0 * k
+			)
+			draw_line(
+				Vector2(76.0 * k, cy - 2.0 * k), Vector2(92.0 * k, cy - 26.0 * k),
+				pro_chk0, 4.0 * k
+			)
+		_text("Про", Vector2(104.0 * k, cy), FONT_ROW, _ink())
+		var yob := 210.0 * k
+		var yo_box0 := selbox_sb if sel_col == 1 else box_sb
+		draw_style_box(yo_box0, Rect2(yob, cy - 32.0 * k, 32.0 * k, 32.0 * k))
+		var yo_chk0 := INK if sel_col == 1 else ychk_col
+		if input_yo_strict:
+			draw_line(
+				Vector2(yob + 6.0 * k, cy - 12.0 * k), Vector2(yob + 16.0 * k, cy - 2.0 * k),
+				yo_chk0, 4.0 * k
+			)
+			draw_line(
+				Vector2(yob + 16.0 * k, cy - 2.0 * k), Vector2(yob + 32.0 * k, cy - 26.0 * k),
+				yo_chk0, 4.0 * k
+			)
+		_text("Ё", Vector2(yob + 44.0 * k, cy), FONT_ROW, _ink())
 	# Поле ввода нового имени. Рамка — только когда активно, а тыкается
 	# всегда: тап включает ввод, как Tab.
 	var field_txt := _field_text()
@@ -634,89 +1150,84 @@ func _draw() -> void:
 	_button(_guest_tap_rect(), "Без профиля")
 	_draw_daynight(_night_tap_rect())
 	# Кнопка ⌨ справа вверху: вызвать системную клавиатуру.
-	draw_style_box(hint_sb, _mkb_tap_rect())
-	for ix in 3:
-		for iy in 2:
-			draw_circle(
-				_mkb_tap_rect().position + Vector2((14.0 + 14.0 * float(ix)) * k, (17.0 + 12.0 * float(iy)) * k),
-				2.5 * k, UI_TEXT
+	# На десктопе её нет (см. _input): нечего и рисовать.
+	if not Ui.is_desktop():
+		draw_style_box(hint_sb, _mkb_tap_rect())
+		for ix in 3:
+			for iy in 2:
+				draw_circle(
+					_mkb_tap_rect().position + Vector2((14.0 + 14.0 * float(ix)) * k, (17.0 + 12.0 * float(iy)) * k),
+					2.5 * k, _uitext()
+				)
+	# Пояснение галки по тапу на заголовок — строкой под кнопками.
+	# Модалка его перекрывает (рисуется позже поверх).
+	if hint_header != "" and confirm_name == "":
+		var expl: Array[String] = []
+		if hint_header == "pro":
+			expl = ["Про: все буквы сразу,", "важен регистр."]
+		else:
+			expl = ["Ё: без галки", "е засчитывается за ё."]
+		var ey := _buttons_y() + 52.0 * k + 30.0 * k
+		for li in expl.size():
+			var lw := _text_size(expl[li], FONT_SMALL).x
+			_text(
+				expl[li], Vector2(view_w * 0.5 - lw * 0.5, ey + 30.0 * k * float(li)),
+				FONT_SMALL, _uitext()
 			)
-		# Подсказка — в пилюле по центру низа (геометрия в _hint_rect()).
-		draw_style_box(hint_sb, _hint_rect())
-	var lines := _hint_lines()
-	var hy := _hint_rect().position.y + 30.0 * k
-	for li in lines.size():
-		var lw := _text_size(lines[li], FONT_SMALL).x
-		_text(lines[li], Vector2(cx - lw * 0.5, hy + 30.0 * k * float(li)), FONT_SMALL, _uitext())
-
-
-## Пилюля подсказки: та же геометрия, что рисует _draw. Низ пилюли —
-## якорь от эффективной высоты, чтобы с клавиатурой не уехать под неё.
-func _hint_rect() -> Rect2:
-	var cx := view_w * 0.5
-	var y := _buttons_y() + 52.0 * k + 30.0 * k
-	var lines := _hint_lines()
-	var hy := minf(y, _menu_eff_h() - 60.0 * k - 30.0 * k * float(lines.size() - 1))
-	var widest := 0.0
-	for ln in lines:
-		widest = maxf(widest, _text_size(ln, FONT_SMALL).x)
-	# Замер шрифта чуть уже отрисовки: запас, чтобы текст не торчал.
-	widest += 20.0 * k
-	return Rect2(
-		cx - widest * 0.5 - 24.0 * k, hy - 30.0 * k,
-		widest + 48.0 * k, 30.0 * k * float(lines.size()) + 22.0 * k
-	)
+	# Кнопка проверки обновлений слева вверху + строка состояния.
+	# На десктопе и телефоне одинаково: проверка — обычный HTTP.
+	var ub := _upd_button_rect()
+	_button(ub, "Обновления")
+	if _upd_msg != "":
+		_text(
+			_upd_msg, Vector2(16.0 * k, ub.position.y + ub.size.y + 30.0 * k),
+			FONT_SMALL, _uitext()
+		)
+	# Модалка «Вышла версия?» — поверх всего, кроме удаления
+	# (удаление первее: его ветка ввода раньше).
+	if _upd_open:
+		var dimmer := Color(0.05, 0.05, 0.08, 0.55)
+		draw_rect(Rect2(Vector2.ZERO, Vector2(view_w, view_h)), dimmer)
+		var ucard := _upd_card_rect()
+		draw_style_box(box_sb, ucard)
+		var ut := "Вышла %s" % _upd_tag
+		var uw := _text_size(ut, FONT_ROW).x
+		_text(
+			ut,
+			Vector2(ucard.get_center().x - uw * 0.5, ucard.position.y + 62.0 * k),
+			FONT_ROW, _ink()
+		)
+		var notecap := ucard.size.x - 48.0 * k
+		for li in _upd_notes.size():
+			var ln := _clip(_upd_notes[li], FONT_SMALL, notecap)
+			var lw := _text_size(ln, FONT_SMALL).x
+			_text(
+				ln,
+				Vector2(ucard.get_center().x - lw * 0.5, ucard.position.y + 110.0 * k + 30.0 * k * float(li)),
+				FONT_SMALL, _uitext()
+			)
+		_button(_upd_yes_rect(), "Скачать")
+		_button(_upd_no_rect(), "Позже")
+	# Модалка подтверждения удаления — поверх всего.
+	if confirm_name != "":
+		var dimmer := Color(0.05, 0.05, 0.08, 0.55)
+		draw_rect(Rect2(Vector2.ZERO, Vector2(view_w, view_h)), dimmer)
+		var card := _confirm_card_rect()
+		draw_style_box(box_sb, card)
+		var qt := "Удалить «%s»?" % confirm_name
+		var qw := _text_size(qt, FONT_ROW).x
+		_text(
+			qt,
+			Vector2(card.get_center().x - qw * 0.5, card.position.y + 62.0 * k),
+			FONT_ROW, _ink()
+		)
+		_button(_confirm_yes_rect(), "Да")
+		_button(_confirm_no_rect(), "Нет")
 
 
 ## Зайчик рядом с заголовком: тот же спрайт, что в игре.
 func _draw_bunny(c: Vector2) -> void:
 	var s := 76.0 * k / HERO_TEX.get_height()
 	draw_set_transform(c, 0.0, Vector2(s, s))
-	draw_texture(HERO_TEX, -HERO_TEX.get_size() * 0.5, _sprite_tint())
+	draw_texture(HERO_TEX, -HERO_TEX.get_size() * 0.5, (Ui.NIGHT_TINT if night else Color.WHITE))
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-
-
-func _hint() -> String:
-	if users.is_empty():
-		# Поле ввода на пустом списке уже открыто (_reload его включает),
-		# поэтому совет «нажми Tab» здесь был бы неверным. Гостя ведёт
-		# кнопка «Без профиля», Esc для неё не нужен.
-		return "Введите имя и нажмите Enter"
-	var tail := ""
-	if bool(S.load_profile(users[sel]).get("all_keys", false)):
-		tail = " (вкл.)"
-	elif not input_active:
-		tail = " (выкл.)"
-	# Сначала действия (тап/клик), потом горячие клавиши вторым рядом.
-	# Вторая строка умышленно телеграфная: подробно всё объясняют
-	# кнопки, а длинная строка не влезала в окно.
-	return (
-		"Тап по игроку — играть   ·   Тап по полю — новое имя"
-		+ "   ·   ↑↓ выбор   ·   Enter   ·   A — все клавиши" + tail
-		+ "   ·   Del   ·   Esc   ·   F2"
-	)
-
-
-## Подсказка для показа: та же строка, но разложенная в столько строчек,
-## чтобы каждая влезла в окно (меряем, а не гадаем по символам). На
-## десктопе выходят те же две строки, на телефоне — три. Саму строку
-## не трогаем (её проверяют тесты).
-func _hint_lines() -> Array[String]:
-	var hint := _hint()
-	var parts := hint.split(" · ")
-	if parts.size() <= 1:
-		return [hint]
-	var max_w := view_w - 144.0 * k
-	var lines: Array[String] = []
-	var cur := ""
-	for p in parts:
-		var add := p if cur == "" else " · " + p
-		var w := _text_size(cur + add, FONT_SMALL).x
-		if cur != "" and w > max_w:
-			lines.append(cur)
-			cur = p
-		else:
-			cur += add
-	if cur != "":
-		lines.append(cur)
-	return lines

@@ -6,12 +6,12 @@ extends SceneTree
 ## Код выхода 0 — всё сошлось.
 
 const BB := preload("res://scripts/balance.gd")
+const S := preload("res://scripts/save.gd")
 
 var _frame := 0
 var _main: Node = null
 var _failures: Array[String] = []
 var _d0 := 0.0
-var _ex := 0.0
 var _ex0 := 0.0
 var _hx := 0.0
 var _hx0 := 0.0
@@ -319,10 +319,15 @@ func _kb_target(l: int, p: int) -> Array:
 
 func _expected_hint(ch: String) -> String:
 	if ch == " ":
-		return "Жми: Пробел"
+		return "Жми: [Пробел]"
 	if ch == "":
 		return ""
-	return "Жми: " + ch.to_upper()
+	if _main._exact() and ch == ch.to_upper() and ch != ch.to_lower():
+		# Заглавная в строгом режиме: парой Shift + буква.
+		return "Жми: [Shift] + [" + ch + "]"
+	# В строгом режиме показываем букву как есть (регистр важен),
+	# в обычном — для удобства заглавную.
+	return "Жми: [" + (ch if _main._exact() else ch.to_upper()) + "]"
 
 
 func _run_part1() -> void:
@@ -330,7 +335,7 @@ func _run_part1() -> void:
 	# Старт: курсор на активной букве (фрагмент случайный — вычисляем).
 	var ch0: String = _main._current()
 	_check(ch0 != "" and _main._is_active(ch0), "cursor starts on active")
-	_check(_main.hint_label.text == _expected_hint(ch0), "hint matches cursor")
+	_check(_main._hint_text() == _expected_hint(ch0), "hint matches cursor")
 	_check(_main.enemy_line == 0, "hedgehog starts on line 0")
 	_check(not _main.hedge_active, "hedgehog waits until hero leaves line 0")
 	# Верный ввод символа под курсором: клетка пройдена, курсор ушёл вперёд.
@@ -345,7 +350,7 @@ func _run_part1() -> void:
 	_main._type_char(wrong1)
 	_check(_main.errors.size() == 1, "one error overlay")
 	_check(_main.shake_t > 0.0, "shake on typo")
-	_check(_main.hint_label.text == "Жми: ⌫ Backspace", "hint shows Backspace")
+	_check(_main._hint_text() == "Жми: [⌫] Стереть", "hint shows how to erase")
 	var t1 := _kb_target(b1[0], b1[1])
 	_check(_main.cursor_line == t1[0] and _main.cursor_pos == t1[1], "knockback one step")
 	# Опечатка 2 подряд: откат ЕЩЁ дальше, вторая метка.
@@ -607,6 +612,15 @@ func _run_part2() -> void:
 	_main.view_w = 1000.0
 	_main.view_h = 2000.0
 	_check(_main._kb_want(), "auto keyboard in portrait game")
+	# Ручной вызов кнопкой ⌨ держит клавиатуру и в альбоме: без флага
+	# _sync_keyboard прятал её на следующем кадре (кнопка молчала).
+	_main.view_w = 2000.0
+	_main.view_h = 1000.0
+	_main._kb_manual = true
+	_check(_main._kb_want(), "manual summon keeps keyboard in landscape")
+	_main._new_level()
+	_check(not _main._kb_manual, "new level clears the manual flag")
+	_check(not _main._kb_want(), "landscape is quiet again after new level")
 	_main.view_w = 1100.0
 	_main.view_h = 650.0
 
@@ -659,20 +673,256 @@ func _run_part2() -> void:
 		"card is a window, not the whole text"
 	)
 
-	# --- Тач и мышь в игре: кнопка игроков открывает меню, кнопка
-	# «Дальше» на модалке начинает новый уровень. ---
+	# --- Тач и мышь в игре: кнопка игроков открывает меню, а дальше
+	# с модалки — тап по любому месту рабочей области (кнопки «Дальше»
+	# больше нет). Тап по звезде только объясняет балл, уровень
+	# при этом не начинается.
 	_main.call("_input", _tap(_main._players_rect.get_center()))
 	_check(_main.menu_open, "players button opens the menu")
+	_check(
+		_main.menu.process_mode == Node.PROCESS_MODE_INHERIT,
+		"open menu runs its process"
+	)
 	_main._close_menu()
+	_check(
+		_main.menu.process_mode == Node.PROCESS_MODE_DISABLED,
+		"hidden menu process is disabled"
+	)
 	_main._new_level()
 	_main._finish(true)
 	_check(_main.state == "won", "setup: level won")
 	_main._relayout()
-	_main.call("_input", _tap(_main._next_rect.get_center()))
-	_check(_main.state == "playing", "next button starts a new level")
+	_main.call("_input", _tap(_main._star_center(2)))
+	_check(_main._star_tip == 3, "star tap explains the score")
+	_check(_main.state == "won", "star tap does not start a new level")
+	# Наведение мыши на первую звезду меняет подсказку без клика.
+	# Каждая звезда даёт СВОЮ подсказку (зоны — по глифам строки,
+	# а не третями лейбла: иначе боковые недостижимы).
+	for si in 3:
+		var sme := InputEventMouseMotion.new()
+		sme.position = _main._star_center(si)
+		_main.call("_input", sme)
+		_check(_main._star_tip == si + 1, "star %d has its own hint" % (si + 1))
+	_main.call("_input", _tap(Rect2(_main.card_p.position, _main.card_p.size).get_center()))
+	_check(_main.state == "playing", "tap on the work area starts a new level")
 	_check(
 		_main.cursor_line == 0 and _main.cursor_pos == 0,
 		"new level starts at the beginning"
+	)
+	# На десктопе кнопки ⌨ нет и тап по её месту — это тап по ≡:
+	# угол принадлежит одной кнопке. Мобильная ветка ниже — только
+	# с _force_touch (в headless иначе не проверить).
+	_main._finish(true)
+	_check(_main.state == "won", "setup: level won again")
+	_main._force_touch = true
+	_main._relayout()
+	_main.call("_input", _tap(_main._kb_rect.get_center()))
+	_check(_main._kb_manual, "kb tap summons the keyboard on touch layouts")
+	_check(_main.state == "won", "kb tap does not advance past the modal")
+	_main._force_touch = false
+	_main._relayout()
+	# Слои: модалка принадлежит игре — с открытым меню гаснет,
+	# с закрытым возвращается (партия всё ещё выиграна).
+	_check(_main.over_p.visible, "modal is up before the menu opens")
+	_main._open_menu()
+	_check(not _main.over_p.visible, "modal hides with the open menu")
+	_check(not _main.overlay_label.visible, "modal label hides with the menu")
+	_main._close_menu()
+	_check(_main.over_p.visible, "modal returns when the menu closes")
+	# Полые звёзды: недобранный балл виден (2 из 3).
+	_main._new_level()
+	_main.typed_ok = 94
+	_main.typed_bad = 6
+	_main._finish(true)
+	var stars_line: String = _main.overlay_label.text.split("\n")[0]
+	_check(stars_line == "★★☆", "missing star is hollow")
+	# Дальше по тесту идёт ввод букв — вернуть партию.
+	_main._new_level()
+	# Модалку листают только видимые символы и Enter; служебные нет.
+	_main._finish(true)
+	_check(_main.state == "won", "setup: won for key filtering")
+	for kc in [KEY_CTRL, KEY_ALT, KEY_SHIFT, KEY_TAB, KEY_BACKSPACE, KEY_DELETE, KEY_UP, KEY_F1]:
+		_main.call("_unhandled_key_input", _key(kc))
+		_check(_main.state == "won", "aux key does not advance past the modal")
+	_main.call("_unhandled_key_input", _softkey(32))
+	_check(_main.state == "playing", "space advances past the modal")
+
+	# --- Бейдж, заголовок, склонения, десктоп-кнопка (п.2 автора). ---
+	_main.difficulty = 2
+	_main.wins_in_row = 2
+	_check(_main._badge_text() == "УР 2 · 2/3", "badge shows level and progress")
+	_main.profile_name = "Петя"
+	_check(_main._title_text() == "Петя", "title shows the player name")
+	_main.profile_name = S.GUEST
+	_check(_main._title_text() == "гость", "guest is titled as guest")
+	_check(_main._plural(1, "знак", "знака", "знаков") == "знак", "plural one")
+	_check(_main._plural(3, "знак", "знака", "знаков") == "знака", "plural few")
+	_check(_main._plural(12, "знак", "знака", "знаков") == "знаков", "plural many")
+	_check(_main._plural(21, "ошибка", "ошибки", "ошибок") == "ошибка", "plural 21")
+	_check(_main._plural(0, "ошибка", "ошибки", "ошибок") == "ошибок", "plural zero")
+	_check(_main._is_desktop(), "headless counts as desktop")
+	_check(_main._players_hint() == "Меню (F2)", "desktop hints the menu key")
+	# Подсказка видна только по наведению, а не постоянно.
+	var mmin := InputEventMouseMotion.new()
+	mmin.position = _main._players_rect.get_center()
+	_main.call("_input", mmin)
+	_check(_main._players_hover, "hover arms the menu hint")
+	var mmout := InputEventMouseMotion.new()
+	mmout.position = Vector2.ZERO
+	_main.call("_input", mmout)
+	_check(not _main._players_hover, "hover away hides the menu hint")
+
+	# --- CapsLock и подсказка-«кнопка» (п.6): строгий режим. ---
+	_main.grace_t = 0.0
+	_main.cursor_line = 0
+	_main.cursor_pos = 0
+	_main.errors.clear()
+	_main._caps_warn = false
+	# Детектор чистой функцией: есть регистр — судим, нет — молчим.
+	_main._caps_check(_hardkey(KEY_A, "А".unicode_at(0), false))
+	_check(_main._caps_warn, "uppercase without shift arms the caps warning")
+	_main._caps_warn = false
+	_main._caps_check(_hardkey(KEY_A, "а".unicode_at(0), false))
+	_check(not _main._caps_warn, "lowercase without shift is fine")
+	_main._caps_warn = false
+	_main._caps_check(_hardkey(KEY_A, "А".unicode_at(0), true))
+	_check(not _main._caps_warn, "uppercase with shift is fine")
+	_main._caps_warn = false
+	_main._caps_check(_hardkey(KEY_5, "5".unicode_at(0), false))
+	_check(not _main._caps_warn, "digits have no case to police")
+	# Тот же путь, что у игрока: буква пришла через ввод, не напрямую.
+	var exp_c: String = _main._current()
+	var wrong_up := "Ы" if exp_c != "Ы" else "Ж"
+	_main._unhandled_key_input(_hardkey(KEY_A, wrong_up.unicode_at(0), false))
+	_check(_main._caps_warn, "game input path arms the caps warning")
+	_check(
+		_main._hint_text() == "Выключи CapsLock!",
+		"caps warning beats the erase hint"
+	)
+	# Верная буква гасит предупреждение: регистр сошёлся.
+	_main._type_char(_main._current())
+	_check(not _main._caps_warn, "correct letter clears the caps warning")
+	# Новый уровень сбрасывает всё прошлое.
+	_main._caps_warn = true
+	_main._new_level()
+	_check(not _main._caps_warn, "new level clears the caps warning")
+	# Заглавная под курсором: подсказка парой «Shift + буква», обе — кнопками.
+	var up_l := -1
+	var up_p := -1
+	for li in _main.display_lines.size():
+		var ln: String = _main.display_lines[li]
+		for pi in ln.length():
+			var cc: String = ln.substr(pi, 1)
+			if cc == cc.to_upper() and cc.to_lower() != cc.to_upper():
+				up_l = li
+				up_p = pi
+				break
+		if up_l >= 0:
+			break
+	_check(up_l >= 0, "level has an uppercase letter to hint")
+	if up_l >= 0:
+		_main.errors.clear()
+		_main._caps_warn = false
+		_main.cursor_line = up_l
+		_main.cursor_pos = up_p
+		_check(
+			_main._hint_text() == "Жми: [Shift] + [" + _main._current() + "]",
+			"uppercase hint is shift plus the letter"
+		)
+	# Строчная под курсором: одна кнопка, и строгий режим показывает
+	# букву как есть (регистр важен), не зеркалит в верхний.
+	_main.errors.clear()
+	_main._caps_warn = false
+	_main._new_level()
+	var low_l := -1
+	var low_p := -1
+	for li2 in _main.display_lines.size():
+		var ln2: String = _main.display_lines[li2]
+		for pi2 in ln2.length():
+			var cc2: String = ln2.substr(pi2, 1)
+			if cc2 == cc2.to_lower() and cc2.to_upper() != cc2.to_lower():
+				low_l = li2
+				low_p = pi2
+				break
+		if low_l >= 0:
+			break
+	_check(low_l >= 0, "level has a lowercase letter to hint")
+	if low_l >= 0:
+		_main.cursor_line = low_l
+		_main.cursor_pos = low_p
+		_check(
+			_main._hint_text() == "Жми: [" + _main._current() + "]",
+			"lowercase hint keeps its case in strict mode"
+		)
+
+	# --- Нeстрогая ё: е засчитывается за ё и обратно. ---
+	_main._new_level()
+	_main.grace_t = 0.0
+	_main.all_keys_override = 0
+	_main.profile_all_keys = false
+	_main.profile_yo = false
+	_main.active = {"е": true, "ё": true, "ж": true, " ": true}
+	var yo1: Array[String] = ["ёж"]
+	_main.display_lines = yo1
+	_main.cursor_line = 0
+	_main.cursor_pos = 0
+	_main.errors.clear()
+	_main._type_char("е")
+	_check(
+		_main.cursor_pos == 1 and _main.errors.is_empty(),
+		"lenient yo accepts е for ё"
+	)
+	# И обратно: ё за е.
+	_main._new_level()
+	_main.grace_t = 0.0
+	_main.all_keys_override = 0
+	_main.profile_all_keys = false
+	_main.profile_yo = false
+	_main.active = {"е": true, "ё": true, "ж": true, " ": true}
+	var yo2: Array[String] = ["еж"]
+	_main.display_lines = yo2
+	_main.cursor_line = 0
+	_main.cursor_pos = 0
+	_main.errors.clear()
+	_main._type_char("ё")
+	_check(
+		_main.cursor_pos == 1 and _main.errors.is_empty(),
+		"lenient yo accepts ё for е"
+	)
+	# Строгая (по умолчанию): е за ё не идёт.
+	_main._new_level()
+	_main.grace_t = 0.0
+	_main.all_keys_override = 0
+	_main.profile_all_keys = false
+	_main.profile_yo = true
+	_main.active = {"е": true, "ё": true, "ж": true, " ": true}
+	var yo4: Array[String] = ["ёж"]
+	_main.display_lines = yo4
+	_main.cursor_line = 0
+	_main.cursor_pos = 0
+	_main.errors.clear()
+	_main._type_char("е")
+	_check(
+		not _main.errors.is_empty(),
+		"strict yo rejects е for ё"
+	)
+	# Строгий регистр + нестрогая ё: ортогональны (е за ё идёт,
+	# но регистр всё равно важен).
+	_main._new_level()
+	_main.grace_t = 0.0
+	_main.all_keys_override = 1
+	_main.profile_all_keys = true
+	_main.profile_yo = false
+	_main.active = {"е": true, "Ё": true, " ": true}
+	var yo3: Array[String] = ["Ё"]
+	_main.display_lines = yo3
+	_main.cursor_line = 0
+	_main.cursor_pos = 0
+	_main.errors.clear()
+	_main._type_char("е")
+	_check(
+		_main.errors.is_empty(),
+		"strict case still accepts е for ё when yo is lenient"
 	)
 
 
@@ -701,6 +951,24 @@ func _cell_key(l: int, p: int) -> String:
 func _softkey(code: int) -> InputEventKey:
 	var ev := InputEventKey.new()
 	ev.unicode = code
+	ev.pressed = true
+	return ev
+
+
+## Клавиша по коду (без символа): модификаторы, стрелки, F-клавиши.
+func _key(code: int) -> InputEventKey:
+	var ev := InputEventKey.new()
+	ev.keycode = code
+	ev.pressed = true
+	return ev
+
+
+## Событие с физической клавиатуры: код клавиши, готовый символ и шифт.
+func _hardkey(code: int, uni: int, shift := false) -> InputEventKey:
+	var ev := InputEventKey.new()
+	ev.keycode = code
+	ev.unicode = uni
+	ev.shift_pressed = shift
 	ev.pressed = true
 	return ev
 

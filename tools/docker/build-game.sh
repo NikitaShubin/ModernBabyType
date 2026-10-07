@@ -43,17 +43,22 @@ run_godot() {
 		-e XDG_CONFIG_HOME=/home/agent/.config \
 		-e XDG_DATA_HOME=/home/agent/.local/share \
 		-e DISPLAY="${DISPLAY:-:99}" \
+		-e MBT_KEYSTORE="${MBT_KEYSTORE:-}" \
+		-e MBT_KEY_ALIAS="${MBT_KEY_ALIAS:-}" \
+		-e MBT_KEY_PASS="${MBT_KEY_PASS:-}" \
 		-w /work \
 		"$IMAGE" "$@"
 }
 
-# Все три теста обязательны: логика ввода, профили игроков, инвариант
+# Все четыре теста обязательны: логика ввода, обновление,
+# профили игроков, инвариант
 # погони. Тест, который ни разу не падает на сломанном коде, бесполезен:
 # правя геометрию погони, сначала ломаем правило руками, убеждаемся, что
 # CHASE_TEST это ловит, и только потом ставим исправленное.
 run_tests() {
 	run_godot --headless --path game --import
 	run_godot --headless --path game --script res://tests/logic_test.gd
+	run_godot --headless --path game --script res://tests/update_test.gd
 	run_godot --headless --path game --script res://tests/profiles_test.gd
 	run_godot --headless --path game --script res://tests/chase_test.gd
 }

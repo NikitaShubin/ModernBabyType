@@ -78,14 +78,14 @@ source .venv/bin/activate
 .venv/bin/gdparse game/scripts/balance.gd game/scripts/save.gd game/scripts/main.gd \
   game/scripts/menu.gd game/tests/logic_test.gd game/tests/profiles_test.gd \
   game/tests/chase_test.gd game/tests/shot_driver.gd
-tools/docker/build-game.sh --test-only          # три теста
+tools/docker/build-game.sh --test-only          # четыре теста
 tools/docker/build-game.sh --all                # тесты + 4 платформы
 tools/docker/build-game.sh --preset Android     # одна платформа
 tools/docker/build-game.sh --shot               # кадры анимации
 ```
 
 Тесты: `LOGIC_TEST` (логика ввода), `PROFILES_TEST` (меню игроков),
-`CHASE_TEST` (инвариант погони). Все три обязательны к запуску. Тест, который
+`CHASE_TEST` (инвариант погони), `UPDATE_TEST` (обновление). Все четыре обязательны к запуску. Тест, который
 ни разу не падает на сломанном коде, бесполезен: правя геометрию погони,
 сначала ломаю правило руками, убеждаюсь, что `CHASE_TEST` это ловит, и только
 потом ставлю исправленное.

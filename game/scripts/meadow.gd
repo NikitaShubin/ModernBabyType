@@ -48,6 +48,9 @@ func _apply_sky() -> void:
 
 
 func _process(dt: float) -> void:
+	# Скрытый фон стоит: облака чужого экрана не плывут.
+	if not visible:
+		return
 	_time += dt
 	_bird_cd -= dt
 	# Птицы — только днём и не толпой: максимум три, новая каждые
@@ -65,9 +68,10 @@ func _process(dt: float) -> void:
 	queue_redraw()
 
 
-## Скорость птиц в пикселях канваса за секунду.
+## Скорость птиц в пикселях канваса за секунду. Медленно (22px/c):
+## безмятежность важнее динамики.
 func _bird_speed() -> float:
-	return 55.0 * _scale()
+	return 22.0 * _scale()
 
 
 ## Новая птица: с левого или правого края, на высоте верхней трети неба.
@@ -90,24 +94,40 @@ func _spawn_bird() -> void:
 ## смотрит вниз, поэтому нижняя полусфера — это 0.5π). Снизу крылья
 ## выглядели перевёрнутыми — птица плавала кверху пузом (заметил
 ## автор на эмуляторе).
+## Чайка: крылья — безье от тела, кончики ходят вверх/вниз.
+## Внутренний конец крыла у тела, внешний — на окружности:
+## взмах виден как поворот крыльев, а не елозение всей галки
+## и не вытягивание тела каплей (обе ошибки тут уже были).
+func _bird_wing(p: Vector2, r: float, side: float, lift: float) -> PackedVector2Array:
+	var inner := p + Vector2(side * 0.15 * r, 0.0)
+	var outer := p + Vector2(side * 1.05 * r, -lift * 0.85 * r)
+	# Горб крыла следует за ходом плюс постоянный лёгкий изгиб,
+	# иначе середина цикла — мёртвая прямая.
+	var ctrl := (inner + outer) * 0.5 + Vector2(0.0, -0.30 * r * lift - 0.08 * r)
+	var pts := PackedVector2Array()
+	for i in 9:
+		var t := float(i) / 8.0
+		var a := inner.lerp(ctrl, t)
+		var b := ctrl.lerp(outer, t)
+		pts.append(a.lerp(b, t))
+	return pts
+
+
 func _draw_birds() -> void:
 	var col := Color(0.35, 0.38, 0.45, 0.85)
 	var sc := _scale()
 	for b in _birds:
 		var p: Vector2 = b[0]
 		var r: float = float(b[2])
-		var flap: float = sin(float(b[1]) + float(b[4]) * 7.0) * 0.5
-		var lift := -0.4 - flap * 0.5
-		var lo := PI * 1.15
-		var hi := PI * 1.85
-		draw_arc(
-			p + Vector2(-r * 0.9, 0), r, lo, hi - lift * 0.3, 8,
-			col, 2.5 * sc
-		)
-		draw_arc(
-			p + Vector2(r * 0.9, 0), r, lo + lift * 0.3, hi, 8,
-			col, 2.5 * sc
-		)
+		# Взмах: фаза от возраста, период ~2.1 с. Медленный, вальяжный.
+		var lift := sin(float(b[1]) + float(b[4]) * 3.0)
+		draw_polyline(_bird_wing(p, r, -1.0, lift), col, 2.5 * sc)
+		draw_polyline(_bird_wing(p, r, 1.0, lift), col, 2.5 * sc)
+		# Тельце: эллипс поверх внутренних концов крыльев, иначе
+		# два крыла висят раздельно. Трансформ сбрасываем сразу.
+		draw_set_transform(p, 0.0, Vector2(0.30 * r, 0.20 * r))
+		draw_circle(Vector2.ZERO, 1.0, col)
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 
 ## Масштаб фона под экран: облака, звёзды и птицы одного калибра.
@@ -123,12 +143,16 @@ func _draw() -> void:
 	if s.x <= 0.0 or s.y <= 0.0:
 		return
 	draw_texture_rect(_sky, Rect2(Vector2.ZERO, s), false)
-	_draw_hills(s)
 	if night:
 		_draw_stars(s)
 		_draw_moon(s)
 	else:
 		_draw_sun(s)
+	# Холмы — поверх звёзд: небо кончается там, где начинается земля,
+	# звёзды на холмах не висят. Птицы — перед холмами (они ближе),
+	# облака выше всех.
+	_draw_hills(s)
+	if not night:
 		_draw_birds()
 	_draw_clouds(s)
 
@@ -156,10 +180,13 @@ func _draw_sun(s: Vector2) -> void:
 
 
 ## Луна вместо солнца: бледный диск и пара кратеров потемнее.
+## Ореол двухслойный, как у солнца: один слабый круг на тёмном небе
+## терялся, и луна читалась «чёрной дырой».
 func _draw_moon(s: Vector2) -> void:
 	var c := Vector2(s.x * 0.87, s.y * 0.13)
 	var r := minf(s.x, s.y) * 0.045
-	draw_circle(c, r * 2.0, Color(0.85, 0.88, 1.0, 0.10))
+	draw_circle(c, r * 2.4, Color(0.90, 0.93, 1.0, 0.14))
+	draw_circle(c, r * 1.7, Color(0.92, 0.94, 1.0, 0.20))
 	draw_circle(c, r, Color("#f4f1de"))
 	draw_circle(c + Vector2(-r * 0.3, -r * 0.2), r * 0.22, Color("#d9d4bd"))
 	draw_circle(c + Vector2(r * 0.25, r * 0.3), r * 0.15, Color("#d9d4bd"))
@@ -179,13 +206,12 @@ func _draw_stars(s: Vector2) -> void:
 func _draw_clouds(s: Vector2) -> void:
 	var sc := _scale()
 	# x, y, скорость дрейфа (доля ширины экрана в секунду), фаза, размер.
-	# Дрейф ЛИНЕЙНЫЙ с закольцовкой: прежний синус с периодом 25–40 с
-	# замирал на краях, и облака выглядели неподвижными. Медленное
-	# постоянное движение читается как ветер, а не как рябь.
+	# Дрейф ЛИНЕЙНЫЙ с закольцовкой, очень медленный: безмятежность.
+	# Прежние скорости (в 2.5 раза выше) рябили.
 	var bases := [
-		[0.20, 0.12, 0.016, 0.0, 1.9],
-		[0.52, 0.20, 0.024, 2.1, 1.4],
-		[0.72, 0.09, 0.011, 4.2, 2.2],
+		[0.20, 0.12, 0.006, 0.0, 1.9],
+		[0.52, 0.20, 0.010, 2.1, 1.4],
+		[0.72, 0.09, 0.004, 4.2, 2.2],
 	]
 	# Запас за краем экрана — на ширину самого облака, иначе оно
 	# появляется из ниоткуда: круг уходит за край на m, но не исчезает.
@@ -194,8 +220,8 @@ func _draw_clouds(s: Vector2) -> void:
 	for b in bases:
 		var x := fposmod(s.x * float(b[0]) + _time * float(b[2]) * s.x, span) - m
 		# Лёгкое покачивание по вертикали: без него линейный дрейф
-		# выглядит как движущаяся калька.
-		var y := s.y * float(b[1]) + sin(_time * 0.35 + float(b[3])) * 5.0 * sc
+		# выглядит как движущаяся калька. Тоже медленное.
+		var y := s.y * float(b[1]) + sin(_time * 0.15 + float(b[3])) * 5.0 * sc
 		_cloud(Vector2(x, y), float(b[4]) * sc)
 
 

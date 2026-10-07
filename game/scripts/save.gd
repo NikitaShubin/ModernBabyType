@@ -6,8 +6,7 @@ extends RefCounted
 ##   [last]      user = "Иван"   # "" — гость, прогресс не сохраняется
 ##   [profiles]  "Иван" = { ... }
 ##
-## Поведение меню игроков перенесено из pygame-прототипа (git show
-## 1a097c0:main.py): имена до 15 символов, пустое имя и дубль отклоняются,
+## Правила имён: до 15 символов, пустое имя и дубль отклоняются,
 ## гостевой режим ничего не пишет.
 ##
 ## PATH — не константа, а static var: тесты подставляют свой файл, чтобы
@@ -39,6 +38,9 @@ static func default_profile() -> Dictionary:
 		## Взрослый режим: активны все знаки сразу, печать не тормозит
 		## из-за прогрессии. Ставится в меню игроков клавишей A.
 		"all_keys": false,
+		## Строгая ё: различать ё и е. Без галки е засчитывается за ё
+		## (для тех, кто ё не любит). Ставится там же, колонка «Ё».
+		"yo_strict": true,
 		"total_games": 0,
 		"total_wins": 0,
 		"last_played": 0,
@@ -153,13 +155,21 @@ static func load_profile(user_name: String) -> Dictionary:
 static func save_profile(user_name: String, data: Dictionary) -> void:
 	if user_name.is_empty():
 		return
-	var clean := default_profile()
-	for key in clean.keys():
-		if data.has(key):
-			clean[key] = data[key]
-	clean["last_played"] = _now()
+	# Слияние, а не замена: читаем сырую запись целиком (включая
+	# неизвестные поля будущих версий — они переживают запись),
+	# обновляем поданные известные ключи, добиваем дефолты для
+	# ключей, которых в старых сейвах ещё не было.
 	var cfg := _cfg()
-	cfg.set_value(SECTION_PROFILES, user_name, clean)
+	var stored: Dictionary = cfg.get_value(SECTION_PROFILES, user_name, {})
+	var known := default_profile()
+	for key in data.keys():
+		if known.has(key):
+			stored[key] = data[key]
+	for key in known.keys():
+		if not stored.has(key):
+			stored[key] = known[key]
+	stored["last_played"] = _now()
+	cfg.set_value(SECTION_PROFILES, user_name, stored)
 	cfg.save(PATH)
 
 
@@ -171,23 +181,25 @@ static func get_all_keys(user_name: String) -> bool:
 static func set_all_keys(user_name: String, on: bool) -> void:
 	if not user_exists(user_name):
 		return
-	var data := load_profile(user_name)
-	data["all_keys"] = on
-	var cfg := _cfg()
-	var stored := data
-	stored["last_played"] = int(stored.get("last_played", _now()))
-	cfg.set_value(SECTION_PROFILES, user_name, stored)
-	cfg.save(PATH)
+	save_profile(user_name, {"all_keys": on})
+
+
+## Строгая ё профиля: различать ё и е. По умолчанию строго (как было).
+static func get_yo_strict(user_name: String) -> bool:
+	return bool(load_profile(user_name).get("yo_strict", true))
+
+
+static func set_yo_strict(user_name: String, on: bool) -> void:
+	if not user_exists(user_name):
+		return
+	save_profile(user_name, {"yo_strict": on})
 
 
 static func touch(user_name: String) -> void:
 	if not user_exists(user_name):
 		return
-	var data := load_profile(user_name)
-	data["last_played"] = _now()
-	var cfg := _cfg()
-	cfg.set_value(SECTION_PROFILES, user_name, data)
-	cfg.save(PATH)
+	# Пустое слияние: только бамп last_played (порядок «недавних»).
+	save_profile(user_name, {})
 
 
 ## Ночной режим устройства: -1 система, 0 день, 1 ночь. Чужое чистим
