@@ -93,32 +93,35 @@ func _spawn_bird() -> void:
 ## смотрит вниз, поэтому нижняя полусфера — это 0.5π). Снизу крылья
 ## выглядели перевёрнутыми — птица плавала кверху пузом (заметил
 ## автор на эмуляторе).
+## Чайка: крылья — безье от тела, кончики ходят вверх/вниз.
+## Внутренний конец крыла у тела, внешний — на окружности:
+## взмах виден как поворот крыльев, а не елозение всей галки
+## и не вытягивание тела каплей (обе ошибки тут уже были).
+func _bird_wing(p: Vector2, r: float, side: float, lift: float) -> PackedVector2Array:
+	var inner := p + Vector2(side * 0.15 * r, 0.0)
+	var outer := p + Vector2(side * 1.05 * r, -lift * 0.85 * r)
+	# Горб крыла следует за ходом плюс постоянный лёгкий изгиб,
+	# иначе середина цикла — мёртвая прямая.
+	var ctrl := (inner + outer) * 0.5 + Vector2(0.0, -0.30 * r * lift - 0.08 * r)
+	var pts := PackedVector2Array()
+	for i in 9:
+		var t := float(i) / 8.0
+		var a := inner.lerp(ctrl, t)
+		var b := ctrl.lerp(outer, t)
+		pts.append(a.lerp(b, t))
+	return pts
+
+
 func _draw_birds() -> void:
 	var col := Color(0.35, 0.38, 0.45, 0.85)
 	var sc := _scale()
 	for b in _birds:
 		var p: Vector2 = b[0]
 		var r: float = float(b[2])
-		# Взмах — поворот крыльев целиком вокруг тела (оба крыла
-		# вверх/вниз вместе, период ~0.9 с), форма дуг почти не
-		# меняется. Прежний вариант тянул концы дуг — тело
-		# вытягивалось капелькой вниз. Базовые углы те же —
-		# дуги смотрят вверх, птица не кверху пузом.
-		var ph: float = float(b[1]) + float(b[4]) * 7.0
-		var up := sin(ph)
-		var span := PI * 0.70 + up * 0.10
-		var mid := PI * 1.5
-		var lo := mid - span * 0.5
-		var hi := mid + span * 0.5
-		var woff := up * r * 0.45
-		draw_arc(
-			p + Vector2(-r * 0.9, woff), r, lo, hi, 8,
-			col, 2.5 * sc
-		)
-		draw_arc(
-			p + Vector2(r * 0.9, woff), r, lo, hi, 8,
-			col, 2.5 * sc
-		)
+		# Взмах: фаза от возраста, период ~0.9 с.
+		var lift := sin(float(b[1]) + float(b[4]) * 7.0)
+		draw_polyline(_bird_wing(p, r, -1.0, lift), col, 2.5 * sc)
+		draw_polyline(_bird_wing(p, r, 1.0, lift), col, 2.5 * sc)
 
 
 ## Масштаб фона под экран: облака, звёзды и птицы одного калибра.
