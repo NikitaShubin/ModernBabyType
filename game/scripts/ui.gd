@@ -37,6 +37,13 @@ static func eff_h(view_h: float, kb_h: float) -> float:
 	return maxf(view_h - kb_h, EFF_MIN_H)
 
 
+## Карточка текста: тёплый картон днём, холодный ночью. Полупрозрачная
+## (0.80): небо с облаками и птицами просвечивает, а буквы (они
+## отдельными лейблами поверх) остаются полностью читаемыми.
+const CARD_DAY := Color(1.0, 0.992, 0.965, 0.80)
+const CARD_NIGHT := Color(0.137, 0.173, 0.267, 0.80)
+
+
 ## Красные метки опечаток: день и ночь (и hex для BBCode).
 const ERR_DAY := Color("#c02727")
 const ERR_NIGHT := Color("#ff7a6b")

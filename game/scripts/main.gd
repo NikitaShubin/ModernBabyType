@@ -272,7 +272,7 @@ func _ready() -> void:
 	# сами буквы живут в text_labels (z_index = -10), а _draw() рисует
 	# поверх них (z_index = 0), так что панели из _draw() текст бы
 	# перекрыли. Геометрию панелей считает _layout_card().
-	card_sb = Ui.panel_sb(Color("#fffdf6"), 20.0, Color("#e0d5bd"), 2.0, true)
+	card_sb = Ui.panel_sb(Ui.CARD_DAY, 20.0, Color("#e0d5bd"), 2.0, true)
 	pill_sb = Ui.panel_sb(Color(1, 1, 1, 0.72), 14.0, Color("#e0d5bd"), 1.5, false)
 	over_sb = Ui.panel_sb(Color("#fffdf6"), 22.0, Color("#e0d5bd"), 2.0, true)
 	cursor_sb = Ui.panel_sb(Color(1.0, 0.82, 0.25, 0.5), 8.0)
@@ -320,7 +320,7 @@ func _night_resolve() -> void:
 func _apply_night() -> void:
 	_night_resolve()
 	if night:
-		card_sb.bg_color = Color("#232c44")
+		card_sb.bg_color = Ui.CARD_NIGHT
 		card_sb.border_color = Color("#3a4a6b")
 		card_sb.shadow_color = Color(0, 0, 0, 0.35)
 		pill_sb.bg_color = Color(0.10, 0.12, 0.20, 0.80)
@@ -338,7 +338,7 @@ func _apply_night() -> void:
 			tl.add_theme_constant_override("outline_size", maxi(2, int(3.0 * k)))
 			tl.add_theme_color_override("font_outline_color", Color("#141a2c"))
 	else:
-		card_sb.bg_color = Color("#fffdf6")
+		card_sb.bg_color = Ui.CARD_DAY
 		card_sb.border_color = Color("#e0d5bd")
 		card_sb.shadow_color = Color(0.25, 0.20, 0.12, 0.18)
 		pill_sb.bg_color = Color(1, 1, 1, 0.72)

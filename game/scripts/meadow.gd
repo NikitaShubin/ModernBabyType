@@ -122,6 +122,11 @@ func _draw_birds() -> void:
 		var lift := sin(float(b[1]) + float(b[4]) * 7.0)
 		draw_polyline(_bird_wing(p, r, -1.0, lift), col, 2.5 * sc)
 		draw_polyline(_bird_wing(p, r, 1.0, lift), col, 2.5 * sc)
+		# Тельце: эллипс поверх внутренних концов крыльев, иначе
+		# два крыла висят раздельно. Трансформ сбрасываем сразу.
+		draw_set_transform(p, 0.0, Vector2(0.30 * r, 0.20 * r))
+		draw_circle(Vector2.ZERO, 1.0, col)
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 
 ## Масштаб фона под экран: облака, звёзды и птицы одного калибра.
