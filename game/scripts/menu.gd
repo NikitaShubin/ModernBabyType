@@ -708,7 +708,7 @@ func _apply_night() -> void:
 		row_idle_sb.bg_color = Color(0.10, 0.12, 0.20, 0.60)
 		box_sb.bg_color = Color("#232c44")
 		box_sb.border_color = Color("#8b93a8")
-		selbox_sb.bg_color = Color("#3d5a8f")
+		selbox_sb.bg_color = Color("#8ab4e0")
 		selbox_sb.border_color = Color("#8b93a8")
 		hint_sb.bg_color = Color(0.10, 0.12, 0.20, 0.80)
 		hint_sb.border_color = Color("#3a4a6b")
@@ -800,28 +800,17 @@ func _button(r: Rect2, label: String) -> void:
 	_text(label, Vector2(r.get_center().x - w * 0.5, r.position.y + 36.0 * k), 26, _ink())
 
 
-## Кнопка день/ночь: солнце (круг + лучи) или светящийся месяц.
-## Иконка показывает, ВО ЧТО переключит: днём — месяц, ночью — солнце.
+## Кнопка день/ночь: стандартный символ из шрифта (☀/☾), а не
+## рисованная картинка. Иконка показывает, ВО ЧТО переключит:
+## днём — месяц, ночью — солнце.
 func _draw_daynight(r: Rect2) -> void:
 	draw_style_box(hint_sb, r)
 	var c := r.get_center()
-	if night:
-		var sr := 13.0 * k
-		draw_line(c + Vector2(-sr, 0), c + Vector2(sr, 0), _ink(), 3.0 * k)
-		draw_line(c + Vector2(0, -sr), c + Vector2(0, sr), _ink(), 3.0 * k)
-		var d := Vector2(sr * 0.7, sr * 0.7)
-		draw_line(c - d, c + d, _ink(), 3.0 * k)
-		draw_line(c + Vector2(-d.x, d.y), c + Vector2(d.x, -d.y), _ink(), 3.0 * k)
-		draw_circle(c, 7.0 * k, Color("#e8a13a"))
-	else:
-		# Светящийся месяц: бледный диск с тёплым ореолом и кратерами.
-		# Виден и на светлой, и на тёмной пилюле — не «чёрная дыра».
-		var mr := 10.0 * k
-		draw_circle(c, mr * 2.1, Color(1.0, 0.95, 0.75, 0.18))
-		draw_circle(c, mr * 1.5, Color(1.0, 0.96, 0.80, 0.25))
-		draw_circle(c, mr, Color("#f4f1de"))
-		draw_circle(c + Vector2(-mr * 0.3, -mr * 0.2), mr * 0.22, Color("#d9d4bd"))
-		draw_circle(c + Vector2(mr * 0.25, mr * 0.3), mr * 0.15, Color("#d9d4bd"))
+	var fs := int(30.0 * k)
+	# Ночью кнопка предлагает день (солнце), днём — ночь (месяц).
+	var glyph := "☀" if night else "☾"
+	var gw := _text_size(glyph, fs).x
+	_text(glyph, Vector2(c.x - gw * 0.5, c.y + float(fs) * 0.36), fs, _ink())
 
 
 func _draw() -> void:
@@ -904,30 +893,34 @@ func _draw() -> void:
 				yo_box = selbox_sb
 		var pcx := (cols[3] + cols[4]) * 0.5
 		draw_style_box(pro_box, Rect2(pcx - 16.0 * k, row_y - 32.0 * k, 32.0 * k, 32.0 * k))
+		# Галка на залитом боксе — тёмная всегда (заливка светлая
+		# в обеих темах), на обычном — от темы.
+		var pro_chk := INK if pro_box == selbox_sb else chk_col
 		if bool(S.load_profile(users[i]).get("all_keys", false)):
 			draw_line(
 				Vector2(pcx - 10.0 * k, row_y - 12.0 * k),
 				Vector2(pcx, row_y - 2.0 * k),
-				chk_col, 4.0 * k
+				pro_chk, 4.0 * k
 			)
 			draw_line(
 				Vector2(pcx, row_y - 2.0 * k),
 				Vector2(pcx + 16.0 * k, row_y - 26.0 * k),
-				chk_col, 4.0 * k
+				pro_chk, 4.0 * k
 			)
 		# Галочка «Ё» по центру своей колонки: тот же бокс, тот же цвет.
 		var ycx := (cols[4] + cols[5]) * 0.5
 		draw_style_box(yo_box, Rect2(ycx - 16.0 * k, row_y - 32.0 * k, 32.0 * k, 32.0 * k))
+		var yo_chk := INK if yo_box == selbox_sb else chk_col
 		if bool(S.load_profile(users[i]).get("yo_strict", true)):
 			draw_line(
 				Vector2(ycx - 10.0 * k, row_y - 12.0 * k),
 				Vector2(ycx, row_y - 2.0 * k),
-				chk_col, 4.0 * k
+				yo_chk, 4.0 * k
 			)
 			draw_line(
 				Vector2(ycx, row_y - 2.0 * k),
 				Vector2(ycx + 16.0 * k, row_y - 26.0 * k),
-				chk_col, 4.0 * k
+				yo_chk, 4.0 * k
 			)
 		# Крестик удаления по центру своей колонки.
 		var dcx := (cols[5] + cols[6]) * 0.5
@@ -944,27 +937,29 @@ func _draw() -> void:
 		var ychk_col := Color("#f2ede0") if night else INK
 		var pro_box0 := selbox_sb if sel_col == 0 else box_sb
 		draw_style_box(pro_box0, Rect2(60.0 * k, cy - 32.0 * k, 32.0 * k, 32.0 * k))
+		var pro_chk0 := INK if sel_col == 0 else ychk_col
 		if _check_on():
 			draw_line(
 				Vector2(66.0 * k, cy - 12.0 * k), Vector2(76.0 * k, cy - 2.0 * k),
-				ychk_col, 4.0 * k
+				pro_chk0, 4.0 * k
 			)
 			draw_line(
 				Vector2(76.0 * k, cy - 2.0 * k), Vector2(92.0 * k, cy - 26.0 * k),
-				ychk_col, 4.0 * k
+				pro_chk0, 4.0 * k
 			)
 		_text("Про", Vector2(104.0 * k, cy), FONT_ROW, _ink())
 		var yob := 210.0 * k
 		var yo_box0 := selbox_sb if sel_col == 1 else box_sb
 		draw_style_box(yo_box0, Rect2(yob, cy - 32.0 * k, 32.0 * k, 32.0 * k))
+		var yo_chk0 := INK if sel_col == 1 else ychk_col
 		if input_yo_strict:
 			draw_line(
 				Vector2(yob + 6.0 * k, cy - 12.0 * k), Vector2(yob + 16.0 * k, cy - 2.0 * k),
-				ychk_col, 4.0 * k
+				yo_chk0, 4.0 * k
 			)
 			draw_line(
 				Vector2(yob + 16.0 * k, cy - 2.0 * k), Vector2(yob + 32.0 * k, cy - 26.0 * k),
-				ychk_col, 4.0 * k
+				yo_chk0, 4.0 * k
 			)
 		_text("Ё", Vector2(yob + 44.0 * k, cy), FONT_ROW, _ink())
 	# Поле ввода нового имени. Рамка — только когда активно, а тыкается
