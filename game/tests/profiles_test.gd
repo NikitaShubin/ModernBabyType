@@ -56,6 +56,7 @@ func _process(_dt: float) -> bool:
 	_part12_soft_keyboard()
 	_part13_touch()
 	_part14_night()
+	_part15_update()
 	_report()
 	return true
 
@@ -826,6 +827,57 @@ func _part14_night() -> void:
 	_menu.call("_input", _tap(_menu.call("_night_tap_rect").get_center()))
 	_check(not _menu.night, "third flip returns to day")
 	_check(S.get_night_mode() == 0, "day persists after the full circle")
+
+
+## Самообновление: кнопка, состояния и модалка. Тап по кнопке шлёт
+## настоящий запрос (асинхронный, тест его не ждёт), приёмники дёргаем
+## напрямую. Чистые функции — в update_test.
+func _part15_update() -> void:
+	_menu.visible = true
+	_menu.confirm_name = ""
+	# Кнопка на экране, карточка влезает, Да/Нет не пересекаются.
+	var ub := Rect2(_menu.call("_upd_button_rect"))
+	_check(ub.position.x >= 0.0 and ub.end.x <= _menu.view_w, "update button fits")
+	_menu._upd_tag = "v0.0.10"
+	_menu._upd_notes = ["a", "b"] as Array[String]
+	var card := Rect2(_menu.call("_upd_card_rect"))
+	_check(
+		card.position.x >= 0.0 and card.end.x <= _menu.view_w,
+		"update card fits"
+	)
+	_check(
+		card.position.y >= 0.0 and card.end.y <= _menu.view_h,
+		"update card fits vertically"
+	)
+	var yes := Rect2(_menu.call("_upd_yes_rect"))
+	var no := Rect2(_menu.call("_upd_no_rect"))
+	_check(not yes.intersects(no), "update buttons do not overlap")
+	_check(
+		yes.position.y >= card.position.y and yes.end.y <= card.end.y,
+		"update buttons sit inside the card"
+	)
+	# Тап по кнопке — проверка (сеть не трогаем: дальше вызываем
+	# приёмники напрямую).
+	_menu.call("_input", _tap(ub.get_center()))
+	_check(String(_menu._upd_state) == "checking", "update tap starts checking")
+	_check(String(_menu._upd_msg) != "", "checking shows a status")
+	# Свежее — строкой, модалки нет.
+	_menu.call("_on_upd_checked", false, "v0.0.9", "", "")
+	_check(not bool(_menu._upd_open), "latest opens no modal")
+	_check(String(_menu._upd_msg).find("последняя") >= 0, "latest says so")
+	# Есть новее — модалка с тегом и заметками.
+	_menu.call("_on_upd_checked", true, "v0.0.10", "a\nb", "http://x")
+	_check(bool(_menu._upd_open), "available opens the modal")
+	_check(String(_menu._upd_tag) == "v0.0.10", "modal carries the tag")
+	# «Позже» гасит модалку.
+	_menu.call("_input", _tap(yes.get_center()))
+	_check(String(_menu._upd_state) == "error", "yes without URL fails loudly")
+	_menu.call("_on_upd_checked", true, "v0.0.10", "a\nb", "http://x")
+	_menu.call("_input", _tap(no.get_center()))
+	_check(not bool(_menu._upd_open), "no button closes the modal")
+	# Ошибка сети — строкой.
+	_menu.call("_on_upd_failed", "нет сети")
+	_check(String(_menu._upd_msg) == "нет сети", "error shows the reason")
 
 
 func _letters_on_screen() -> int:

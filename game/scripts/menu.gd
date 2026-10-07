@@ -43,6 +43,17 @@ var input_text := ""
 var input_all_keys := false
 ## То же для строгой ё (колонка «Ё»): ждёт создания профиля.
 var input_yo_strict := true
+## Самообновление с GitHub: только по кнопке (никакой фоновой магии).
+## Состояния: "" покой, "checking" проверка, "latest" всё свежее,
+## "error" ошибка с текстом, "downloading" качаем. Модалка «Вышла X?»
+## — флагом _upd_open (только Да/Нет, как подтверждение удаления).
+var _upd: Updater = null
+var _upd_state := ""
+var _upd_msg := ""
+var _upd_tag := ""
+var _upd_url := ""
+var _upd_notes: Array[String] = []
+var _upd_open := false
 ## Выбранная колонка флагов: 0 — «Про», 1 — «Ё». Стрелки ←/→ двигают,
 ## пробел переключает. Видна подсветкой заголовка.
 var sel_col := 0
@@ -181,6 +192,16 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			_cancel_confirm()
 		_eaten()
 		return
+	# Модалка обновления: Enter — «Скачать», остальное мимо
+	# (Esc — выход из игры, как везде, модалку не дергаем).
+	if _upd_open:
+		if (
+			ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER
+			or ke.unicode == 10 or ke.unicode == 13
+		):
+			_upd_yes()
+		_eaten()
+		return
 	# F2 — вернуться в игру тем же игроком, кого открыли меню.
 	if ke.keycode == KEY_F2:
 		chosen.emit(resume_user)
@@ -289,6 +310,15 @@ func _input(event: InputEvent) -> void:
 			_cancel_confirm()
 			get_viewport().set_input_as_handled()
 		return
+	# Модалка обновления — только свои две кнопки (удаление первее).
+	if _upd_open:
+		if _upd_yes_rect().has_point(pos):
+			_upd_yes()
+			get_viewport().set_input_as_handled()
+		elif _upd_no_rect().has_point(pos):
+			_upd_no()
+			get_viewport().set_input_as_handled()
+		return
 	# Прямоугольники — из тех же хелперов, что рисует _draw: единый
 	# источник геометрии, работает и без отрисовки (тесты headless).
 	# Внутри строки сначала точечные цели (галочка, крестик), потом
@@ -321,6 +351,11 @@ func _input(event: InputEvent) -> void:
 	if not users.is_empty() and _yo_head_rect().has_point(pos):
 		hint_header = "" if hint_header == "yo" else "yo"
 		queue_redraw()
+		get_viewport().set_input_as_handled()
+		return
+	# Кнопка обновлений: проверить релизы на GitHub.
+	if _upd_button_rect().has_point(pos):
+		_upd_check()
 		get_viewport().set_input_as_handled()
 		return
 	if users.is_empty() and _check_tap_rect().has_point(pos):
@@ -438,6 +473,75 @@ func _cancel_confirm() -> void:
 	queue_redraw()
 
 
+## Ленивый узел проверки обновлений + сигналы в состояние меню.
+func _upd_ensure() -> void:
+	if _upd != null:
+		return
+	_upd = Updater.new()
+	add_child(_upd)
+	_upd.checked.connect(_on_upd_checked)
+	_upd.failed.connect(_on_upd_failed)
+	_upd.downloaded.connect(_on_upd_downloaded)
+
+
+## Кнопка «Обновления»: спросить GitHub.
+func _upd_check() -> void:
+	_upd_ensure()
+	_upd_state = "checking"
+	_upd_msg = "Проверяю…"
+	_upd_open = false
+	queue_redraw()
+	_upd.check()
+
+
+func _on_upd_checked(has: bool, tag: String, notes: String, _url: String) -> void:
+	if has:
+		_upd_tag = tag
+		_upd_notes.clear()
+		for ln in notes.split("\n"):
+			_upd_notes.append(ln)
+		_upd_state = ""
+		_upd_msg = ""
+		_upd_open = true
+	else:
+		_upd_state = "latest"
+		_upd_msg = "У вас последняя (%s)" % tag
+		_upd_open = false
+	queue_redraw()
+
+
+func _on_upd_failed(what: String) -> void:
+	_upd_state = "error"
+	_upd_msg = what
+	_upd_open = false
+	queue_redraw()
+
+
+## «Скачать»: качаем, дальше — дело платформы (см. update.gd).
+func _upd_yes() -> void:
+	_upd_open = false
+	_upd_state = "downloading"
+	_upd_msg = "Качаю…"
+	queue_redraw()
+	_upd.download()
+
+
+## «Позже»: модалка гаснет, проверка сброшена.
+func _upd_no() -> void:
+	_upd_open = false
+	_upd_state = ""
+	_upd_msg = ""
+	queue_redraw()
+
+
+func _on_upd_downloaded(_path: String) -> void:
+	# Платформа забрала файл (установщик / перезапуск): меню молчит.
+	_upd_state = ""
+	_upd_msg = ""
+	_upd_open = false
+	queue_redraw()
+
+
 func _toggle_all_keys() -> void:
 	if users.is_empty():
 		# Пустой список (первый запуск): переключаем флаг для вводимого
@@ -535,11 +639,17 @@ func _table_cols() -> Array[float]:
 ## разъезжается (имена до 15 знаков).
 func _short_name(name: String) -> String:
 	var cols := _table_cols()
-	var cap := cols[1] - cols[0] - 8.0 * k
-	if _text_size(name, FONT_ROW).x <= cap:
-		return name
-	var out := name
-	while out.length() > 1 and _text_size(out + "…", FONT_ROW).x > cap:
+	return _clip(name, FONT_ROW, cols[1] - cols[0] - 8.0 * k)
+
+
+## Обрезать строку по ширине, с многоточием. Нужна для чужих строк
+## (длинная ссылка из changelog иначе вылезает за карточку) и для
+## имени профиля.
+func _clip(txt: String, size_px: int, cap: float) -> String:
+	if _text_size(txt, size_px).x <= cap:
+		return txt
+	var out := txt
+	while out.length() > 1 and _text_size(out + "…", size_px).x > cap:
 		out = out.left(out.length() - 1)
 	return out + "…"
 
@@ -670,6 +780,40 @@ func _yo_head_rect() -> Rect2:
 	var cx := (cols[4] + cols[5]) * 0.5
 	var y := _rows_top() - 44.0 * k
 	return Rect2(cx - 48.0 * k, y - 28.0 * k, 96.0 * k, 40.0 * k)
+
+
+## Кнопка проверки обновлений (слева вверху) и строка состояния.
+## Замер — тем же кеглем, каким рисует _button (26, не FONT_SMALL).
+func _upd_button_rect() -> Rect2:
+	var w := _text_size("Обновления", 26).x + 36.0 * k
+	return Rect2(16.0 * k, 16.0 * k, w, 44.0 * k)
+
+
+## Карточка «Вышла версия?»: заголовок + заметки + две кнопки.
+## Ширина — по самому длинному тексту, кнопки всегда внизу.
+func _upd_card_rect() -> Rect2:
+	var w := _text_size("Вышла " + _upd_tag, FONT_ROW).x + 96.0 * k
+	for ln in _upd_notes:
+		w = maxf(w, _text_size(ln, FONT_SMALL).x + 96.0 * k)
+	w = clampf(w, 420.0 * k, view_w - 64.0 * k)
+	var h := 200.0 * k + 30.0 * k * float(_upd_notes.size())
+	return Rect2((view_w - w) * 0.5, (view_h - h) * 0.5, w, h)
+
+
+func _upd_yes_rect() -> Rect2:
+	var card := _upd_card_rect()
+	return Rect2(
+		Vector2(card.get_center().x - 190.0 * k, card.position.y + card.size.y - 80.0 * k),
+		Vector2(170.0 * k, 56.0 * k)
+	)
+
+
+func _upd_no_rect() -> Rect2:
+	var card := _upd_card_rect()
+	return Rect2(
+		Vector2(card.get_center().x + 20.0 * k, card.position.y + card.size.y - 80.0 * k),
+		Vector2(170.0 * k, 56.0 * k)
+	)
 
 
 ## Рамка поля ввода (рисуется только когда активно, тыкается всегда).
@@ -1030,6 +1174,40 @@ func _draw() -> void:
 				expl[li], Vector2(view_w * 0.5 - lw * 0.5, ey + 30.0 * k * float(li)),
 				FONT_SMALL, _uitext()
 			)
+	# Кнопка проверки обновлений слева вверху + строка состояния.
+	# На десктопе и телефоне одинаково: проверка — обычный HTTP.
+	var ub := _upd_button_rect()
+	_button(ub, "Обновления")
+	if _upd_msg != "":
+		_text(
+			_upd_msg, Vector2(16.0 * k, ub.position.y + ub.size.y + 30.0 * k),
+			FONT_SMALL, _uitext()
+		)
+	# Модалка «Вышла версия?» — поверх всего, кроме удаления
+	# (удаление первее: его ветка ввода раньше).
+	if _upd_open:
+		var dimmer := Color(0.05, 0.05, 0.08, 0.55)
+		draw_rect(Rect2(Vector2.ZERO, Vector2(view_w, view_h)), dimmer)
+		var ucard := _upd_card_rect()
+		draw_style_box(box_sb, ucard)
+		var ut := "Вышла %s" % _upd_tag
+		var uw := _text_size(ut, FONT_ROW).x
+		_text(
+			ut,
+			Vector2(ucard.get_center().x - uw * 0.5, ucard.position.y + 62.0 * k),
+			FONT_ROW, _ink()
+		)
+		var notecap := ucard.size.x - 48.0 * k
+		for li in _upd_notes.size():
+			var ln := _clip(_upd_notes[li], FONT_SMALL, notecap)
+			var lw := _text_size(ln, FONT_SMALL).x
+			_text(
+				ln,
+				Vector2(ucard.get_center().x - lw * 0.5, ucard.position.y + 110.0 * k + 30.0 * k * float(li)),
+				FONT_SMALL, _uitext()
+			)
+		_button(_upd_yes_rect(), "Скачать")
+		_button(_upd_no_rect(), "Позже")
 	# Модалка подтверждения удаления — поверх всего.
 	if confirm_name != "":
 		var dimmer := Color(0.05, 0.05, 0.08, 0.55)

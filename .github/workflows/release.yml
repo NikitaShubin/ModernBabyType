@@ -22,8 +22,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Стабильный ключ подписи APK: иначе каждый CI-релиз подписан
+      # новым ключом и Android отказывает в обновлении поверх
+      # (INSTALL_FAILED_UPDATE_INCOMPATIBLE). Файл ключа в репозиторий
+      # не кладём — только секрет; без секрета (форки) сборка идёт
+      # на debug-ключе образа, как раньше.
+      - name: Ключ подписи
+        run: |
+          if [ -n "${{ secrets.MBT_KEYSTORE_B64 }}" ]; then
+            mkdir -p tools/keys
+            echo "${{ secrets.MBT_KEYSTORE_B64 }}" | base64 -d > tools/keys/ci.keystore
+            {
+              echo "MBT_KEYSTORE=/work/tools/keys/ci.keystore"
+              echo "MBT_KEY_ALIAS=modernbabytype"
+              echo "MBT_KEY_PASS=${{ secrets.MBT_KEYSTORE_PASS }}"
+            } >> "$GITHUB_ENV"
+          fi
+
       # Тесты и экспорт в одном шаге не случайно: build-game.sh --all
-      # сначала гоняет все три теста и только потом экспортирует. Релиз
+      # сначала гоняет все четыре теста и только потом экспортирует. Релиз
       # нельзя собрать на сломанной механике, отдельный шаг с тестами
       # этому не мешал бы, только заставил бы прогонять chase_test
       # (около пяти минут) дважды.
