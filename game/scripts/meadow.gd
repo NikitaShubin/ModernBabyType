@@ -99,23 +99,24 @@ func _draw_birds() -> void:
 	for b in _birds:
 		var p: Vector2 = b[0]
 		var r: float = float(b[2])
-		# Взмах: фаза от возраста, период ~0.9 с. Размах концов дуг
-		# почти в радиан и вертикальное подпрыгивание: прежние 0.05–0.2
-		# рад глаз не ловил, и птица «висела» (п.1). Базовые углы те же —
+		# Взмах — поворот крыльев целиком вокруг тела (оба крыла
+		# вверх/вниз вместе, период ~0.9 с), форма дуг почти не
+		# меняется. Прежний вариант тянул концы дуг — тело
+		# вытягивалось капелькой вниз. Базовые углы те же —
 		# дуги смотрят вверх, птица не кверху пузом.
 		var ph: float = float(b[1]) + float(b[4]) * 7.0
-		var flap := sin(ph) * 0.5
-		var lift := -0.4 - flap * 0.9
-		var bob := sin(ph) * 3.0 * sc
-		var lo := PI * 1.15
-		var hi := PI * 1.85
-		var pc := p + Vector2(0.0, bob)
+		var up := sin(ph)
+		var span := PI * 0.70 + up * 0.10
+		var mid := PI * 1.5
+		var lo := mid - span * 0.5
+		var hi := mid + span * 0.5
+		var woff := up * r * 0.45
 		draw_arc(
-			pc + Vector2(-r * 0.9, 0), r, lo, hi - lift * 0.9, 8,
+			p + Vector2(-r * 0.9, woff), r, lo, hi, 8,
 			col, 2.5 * sc
 		)
 		draw_arc(
-			pc + Vector2(r * 0.9, 0), r, lo + lift * 0.9, hi, 8,
+			p + Vector2(r * 0.9, woff), r, lo, hi, 8,
 			col, 2.5 * sc
 		)
 

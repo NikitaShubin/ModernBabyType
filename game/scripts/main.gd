@@ -439,7 +439,12 @@ func _open_menu() -> void:
 		menu.chosen.connect(_menu_chosen)
 		# Сиблинг под корнем, а не ребёнок игры: экраны рядом,
 		# а не вложены. Порядок детей даёт меню верх и первый ввод.
-		get_parent().add_child(menu)
+		# Отложенно: _open_menu зовут и из _ready (стартовый роутинг),
+		# где родитель ещё монтирует детей и прямой add_child падает.
+		if get_parent().is_node_ready():
+			get_parent().add_child(menu)
+		else:
+			get_parent().add_child.call_deferred(menu)
 	menu.open(profile_name, kb_h)
 	menu_open = true
 	_players_hover = false
