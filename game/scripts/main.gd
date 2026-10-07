@@ -854,11 +854,15 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		# Остальные клавиши обрабатывает меню.
 		return
 	if state == "won" or state == "lost":
-		# Модалка: дальше — любая незарезервированная клавиша.
-		# Зарезервированные разобраны выше (F2 — меню, Esc — выход,
-		# F3/F4/F11 — дебаг, Alt+Enter — полноэкранный): сюда они
-		# не доходят. Отдельный Enter не нужен — он тоже «любая».
-		_new_level()
+		# Дальше — только видимый символ (буква, цифра, знак, пробел)
+		# или Enter. Вспомогательные и функциональные клавиши
+		# (модификаторы, стрелки, Tab, Backspace, Delete, F-клавиши)
+		# модалку не листают: случайный задев не перелистывает дальше.
+		var code := ke.unicode
+		if ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER:
+			code = 13
+		if code == 10 or code == 13 or (code >= 32 and code != 127):
+			_new_level()
 		return
 	if state != "playing":
 		return

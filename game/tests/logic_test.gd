@@ -735,6 +735,14 @@ func _run_part2() -> void:
 	_check(stars_line == "★★☆", "missing star is hollow")
 	# Дальше по тесту идёт ввод букв — вернуть партию.
 	_main._new_level()
+	# Модалку листают только видимые символы и Enter; служебные нет.
+	_main._finish(true)
+	_check(_main.state == "won", "setup: won for key filtering")
+	for kc in [KEY_CTRL, KEY_ALT, KEY_SHIFT, KEY_TAB, KEY_BACKSPACE, KEY_DELETE, KEY_UP, KEY_F1]:
+		_main.call("_unhandled_key_input", _key(kc))
+		_check(_main.state == "won", "aux key does not advance past the modal")
+	_main.call("_unhandled_key_input", _softkey(32))
+	_check(_main.state == "playing", "space advances past the modal")
 
 	# --- Бейдж, заголовок, склонения, десктоп-кнопка (п.2 автора). ---
 	_main.difficulty = 2
@@ -940,6 +948,14 @@ func _cell_key(l: int, p: int) -> String:
 func _softkey(code: int) -> InputEventKey:
 	var ev := InputEventKey.new()
 	ev.unicode = code
+	ev.pressed = true
+	return ev
+
+
+## Клавиша по коду (без символа): модификаторы, стрелки, F-клавиши.
+func _key(code: int) -> InputEventKey:
+	var ev := InputEventKey.new()
+	ev.keycode = code
 	ev.pressed = true
 	return ev
 
