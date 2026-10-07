@@ -546,7 +546,8 @@ func _relayout() -> void:
 		_players_rect = Rect2(view_w - 72.0 * k, 84.0 * k, 56.0 * k, 48.0 * k)
 	_layout_card()
 	_layout_pills()
-	_layout_overlay_panel()
+	# Панель модалки обновляется в _layout_text_lines (каждый кадр),
+	# не здесь: см. комментарий там.
 	# Меню живёт своей геометрией, но высоту клавиатуры берёт у игры:
 	# иначе поле ввода и кнопки на телефоне уезжают под Gboard.
 	if menu != null:
@@ -602,6 +603,12 @@ func _layout_text_lines() -> void:
 	overlay_label.position = Vector2((view_w - ow) * 0.5, text_y + float(vis) * line_h + 24.0 * k)
 	overlay_label.size = Vector2(ow, 150.0 * k)
 	overlay_label.add_theme_font_size_override("font_size", ofs)
+	# Панель модалки — здесь же, каждый кадр, а не в релэяуте: иначе
+	# при скролле лейбл уезжает, а панель (и подсказка звёздочек,
+	# которая считается от панели) остаётся и ложится на текст.
+	over_p.position = overlay_label.position + Vector2(-24.0 * k, -16.0 * k)
+	over_p.size = overlay_label.size + Vector2(48.0 * k, 32.0 * k)
+	over_p.visible = overlay_label.visible
 	for i in text_labels.size():
 		if i < display_lines.size() and i >= first and i < first + vis:
 			text_labels[i].position = Vector2(margin, _line_y(i))
@@ -651,12 +658,6 @@ func _toggle_fullscreen() -> void:
 ## области или любая незарезервированная клавиша (см. _input,
 ## _unhandled_key_input). Зарезервированы: меню (F2), выход (Esc),
 ## дебаг (F3/F4/F11) и полноэкранный (Alt+Enter).
-func _layout_overlay_panel() -> void:
-	over_p.position = overlay_label.position + Vector2(-24.0 * k, -16.0 * k)
-	over_p.size = overlay_label.size + Vector2(48.0 * k, 32.0 * k)
-	over_p.visible = overlay_label.visible
-
-
 func _key(l: int, p: int) -> String:
 	return "%d:%d" % [l, p]
 
@@ -1440,16 +1441,21 @@ static func _star_tip_text(i: int) -> String:
 
 
 ## Рисуем подсказку звёздочки под модалкой (только победа — только
-## там есть звёзды).
+## там есть звёзды). Со своей пилюлей: без неё текст сливался с фоном.
 func _draw_star_tip() -> void:
 	if not over_p.visible or state != "won" or _star_tip < 1 or _star_tip > 3:
 		return
 	var fs := int(20.0 * k)
 	var t := _star_tip_text(_star_tip)
 	var tw := mono.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x
+	var ty := over_p.position.y + over_p.size.y + 30.0 * k
+	draw_style_box(
+		pill_sb,
+		Rect2(view_w * 0.5 - tw * 0.5 - 18.0 * k, ty - float(fs) - 12.0 * k, tw + 36.0 * k, float(fs) + 26.0 * k)
+	)
 	draw_string(
 		mono,
-		Vector2(view_w * 0.5 - tw * 0.5, over_p.position.y + over_p.size.y + 30.0 * k),
+		Vector2(view_w * 0.5 - tw * 0.5, ty),
 		t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs, _ui_ink()
 	)
 ## Рисуем подсказку по центру низа: текст словами, кнопки — в рамках.
