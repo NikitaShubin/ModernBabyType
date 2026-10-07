@@ -1,7 +1,7 @@
 extends Node2D
 ## Меню игроков: список профилей, поле ввода имени, гостевой режим.
 ##
-## Поведение перенесено из pygame-прототипа (git show 1a097c0:main.py):
+## Управление:
 ##   ↑ / ↓      прокрутка списка, с перехватом через конец
 ##   Enter      в поле ввода — создать профиль (или войти, если имя есть),
 ##              без поля — войти выбранным
@@ -89,11 +89,11 @@ func _ready() -> void:
 		var fallback := SystemFont.new()
 		fallback.font_names = PackedStringArray(["monospace"])
 		mono = fallback
-	row_sb = _panel_sb(Color("#f0d98a"), 12.0)
-	row_idle_sb = _panel_sb(Color(1, 1, 1, 0.45), 12.0)
-	box_sb = _panel_sb(Color("#ffffff"), 10.0, INK, 2.0, false)
-	selbox_sb = _panel_sb(Color("#a9c6ec"), 10.0, INK, 2.0, false)
-	hint_sb = _panel_sb(Color(1, 1, 1, 0.72), 14.0, Color("#e0d5bd"), 1.5, false)
+	row_sb = Ui.panel_sb(Color("#f0d98a"), 12.0)
+	row_idle_sb = Ui.panel_sb(Color(1, 1, 1, 0.45), 12.0)
+	box_sb = Ui.panel_sb(Color("#ffffff"), 10.0, INK, 2.0, false)
+	selbox_sb = Ui.panel_sb(Color("#a9c6ec"), 10.0, INK, 2.0, false)
+	hint_sb = Ui.panel_sb(Color(1, 1, 1, 0.72), 14.0, Color("#e0d5bd"), 1.5, false)
 	_meadow = Meadow.new()
 	add_child(_meadow)
 	nmode = S.get_night_mode()
@@ -112,6 +112,26 @@ func _relayout() -> void:
 	# Масштаб — от эффективной высоты (минус клавиатура), как в игре:
 	# иначе в альбомной с клавиатурой блок меню не влезает над ней.
 	k = clampf(minf(view_w / BASE_W, _menu_eff_h() / BASE_H), 0.5, 2.5)
+	queue_redraw()
+
+
+## Открыть меню поверх игры. Видимость и процесс — только здесь:
+## скрытое меню глухо и слепо архитектурно (process выключен),
+## а не только проверками visible.
+func open(resume: String, kb: float) -> void:
+	resume_user = resume
+	kb_h = kb
+	visible = true
+	process_mode = Node.PROCESS_MODE_INHERIT
+	_apply_night()
+	_reload()
+	queue_redraw()
+
+
+## Закрыть меню: скрыть и заглушить процесс до следующего open().
+func close() -> void:
+	visible = false
+	process_mode = Node.PROCESS_MODE_DISABLED
 	queue_redraw()
 
 
@@ -204,7 +224,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		_eaten()
 		return
 	if ke.keycode == KEY_ESCAPE:
-		_guest()
+		# Esc в меню — выход из игры, а не гость. Гость — только
+		# кнопкой «Без профиля» (тап или Enter по пустому списку).
+		get_tree().quit()
 		_eaten()
 		return
 	if ke.keycode == KEY_BACKSPACE or ke.unicode == 8:
@@ -330,7 +352,7 @@ func _input(event: InputEvent) -> void:
 		return
 	# Кнопка ⌨ — только там, где есть системная клавиатура (телефон):
 	# на десктопе она ничего не делала и только путала.
-	if not _is_desktop() and _mkb_tap_rect().has_point(pos):
+	if not Ui.is_desktop() and _mkb_tap_rect().has_point(pos):
 		if not input_active:
 			_toggle_input()
 		_kb_show()
@@ -347,10 +369,6 @@ func _kb_show() -> void:
 
 ## Десктоп — там, где нет системной клавиатуры: кнопка ⌨ там
 ## ничего не делала и только путала, поэтому её нет (и тычка тоже).
-func _is_desktop() -> bool:
-	return not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD)
-
-
 ## Буква по коду клавиши: «A» без физической раскладки (в латинице на
 ## русской раскладке KeyA тоже проходит). Ручная раскладка не важна:
 ## клавиша одна и та же.
@@ -372,21 +390,6 @@ func _toggle_input() -> void:
 	if not input_active:
 		input_text = ""
 	queue_redraw()
-
-
-## Стиль скруглённой панели (тот же приём, что в main.gd).
-func _panel_sb(bg: Color, radius: float, border := Color(0, 0, 0, 0), bw := 0.0, shadow := false) -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = bg
-	sb.set_corner_radius_all(int(radius))
-	if bw > 0.0:
-		sb.set_border_width_all(int(bw))
-		sb.border_color = border
-	if shadow:
-		sb.shadow_color = Color(0.25, 0.20, 0.12, 0.18)
-		sb.shadow_size = 6
-		sb.shadow_offset = Vector2(0, 3)
-	return sb
 
 
 func _enter() -> void:
@@ -568,7 +571,7 @@ func _field_text() -> String:
 ## Центрирование — от эффективной высоты (минус клавиатура): иначе
 ## на телефоне с выездом клавиатуры блок остаётся под ней.
 func _menu_eff_h() -> float:
-	return maxf(view_h - kb_h, 220.0)
+	return Ui.eff_h(view_h, kb_h)
 
 
 func _rows_top() -> float:
@@ -695,13 +698,7 @@ func _dim() -> Color:
 	return DIM
 
 
-## Спрайт ночью темнее и холоднее (как в игре).
-func _sprite_tint() -> Color:
-	if night:
-		return Color(0.72, 0.76, 0.90)
-	return Color.WHITE
-
-
+## Спрайт ночью темнее и холоднее — см. Ui.NIGHT_TINT.
 ## Ночь: ручной выбор из файла важнее системы.
 func _night_resolve() -> void:
 	night = S.resolve_night(nmode, true, S.system_dark())
@@ -813,24 +810,34 @@ func _button(r: Rect2, label: String) -> void:
 	_text(label, Vector2(r.get_center().x - w * 0.5, r.position.y + 36.0 * k), 26, _ink())
 
 
-## Кнопка день/ночь/авто: стандартный символ из шрифта, а не рисованная
-## картинка. Показывает ТЕКУЩИЙ режим: ☀ — день, залитый месяц — ночь,
-## ◐ (тёмная/светлая) — авто, как в системе. Залитого месяца в шрифте
-## нет (только контурный ☾), поэтому месяц компонуем: диск чернилами
-## плюс вырез цветом пилюли со сдвигом. Кнопка — маленький квадрат,
-## значок вписан с полями, а не вылезает.
+## Кнопка день/ночь/авто: показывает ТЕКУЩИЙ режим. Все три значка —
+## векторный композит с явными границами (строго внутри кнопки):
+## солнце — диск с лучами, ночь — залитый месяц (диск + вырез),
+## авто — полдиска (тёмная/светлая, как системная авто-тема).
+## Шрифтовые ☀/◐ вылезали за кнопку, а эмоджи-лун в DejaVu нет
+## вовсе (проверено по cmap — тофу на половине платформ).
 func _draw_daynight(r: Rect2) -> void:
 	draw_style_box(hint_sb, r)
 	var c := r.get_center()
+	var bg := hint_sb.bg_color
 	if nmode == S.NIGHT_ON:
+		# Залитый месяц: диск чернилами, вырез цветом кнопки со сдвигом.
 		var mr := 11.0 * k
 		draw_circle(c, mr, _ink())
-		draw_circle(c + Vector2(mr * 0.42, -mr * 0.38), mr * 0.82, hint_sb.bg_color)
-		return
-	var glyph := "◐" if nmode == S.NIGHT_AUTO else "☀"
-	var fs := int(26.0 * k)
-	var gw := _text_size(glyph, fs).x
-	_text(glyph, Vector2(c.x - gw * 0.5, c.y + float(fs) * 0.36), fs, _ink())
+		draw_circle(c + Vector2(mr * 0.42, -mr * 0.38), mr * 0.82, bg)
+	elif nmode == S.NIGHT_AUTO:
+		# Полдиска: левая чернилами, правая вырезана под кнопку.
+		var ar := 11.0 * k
+		draw_circle(c, ar, _ink())
+		draw_rect(Rect2(c + Vector2(0.0, -ar), Vector2(ar, ar * 2.0)), bg)
+	else:
+		# Солнце: диск плюс 8 лучей, всё в радиусе 15k.
+		var sr := 7.0 * k
+		draw_circle(c, sr, _ink())
+		for i in 8:
+			var a := TAU * float(i) / 8.0
+			var dir := Vector2(cos(a), sin(a))
+			draw_line(c + dir * 10.5 * k, c + dir * 15.0 * k, _ink(), 2.5 * k)
 
 
 func _draw() -> void:
@@ -1000,7 +1007,7 @@ func _draw() -> void:
 	_draw_daynight(_night_tap_rect())
 	# Кнопка ⌨ справа вверху: вызвать системную клавиатуру.
 	# На десктопе её нет (см. _input): нечего и рисовать.
-	if not _is_desktop():
+	if not Ui.is_desktop():
 		draw_style_box(hint_sb, _mkb_tap_rect())
 		for ix in 3:
 			for iy in 2:
@@ -1044,5 +1051,5 @@ func _draw() -> void:
 func _draw_bunny(c: Vector2) -> void:
 	var s := 76.0 * k / HERO_TEX.get_height()
 	draw_set_transform(c, 0.0, Vector2(s, s))
-	draw_texture(HERO_TEX, -HERO_TEX.get_size() * 0.5, _sprite_tint())
+	draw_texture(HERO_TEX, -HERO_TEX.get_size() * 0.5, (Ui.NIGHT_TINT if night else Color.WHITE))
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)

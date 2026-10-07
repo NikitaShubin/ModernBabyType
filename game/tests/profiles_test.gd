@@ -392,9 +392,11 @@ func _part9_main_game() -> void:
 		)
 	menu.call("_reload")
 	menu.input_active = false
-	# Именно клавиша Esc, а не прямой вызов _guest(): проверяем всю
-	# проводку от клавиатуры до сигнала chosen.
-	menu.call("_unhandled_key_input", _key(KEY_ESCAPE))
+	# Esc в меню — больше не гость, а выход (quit в тесте не зовём —
+	# убьёт прогон). Гость — только кнопкой «Без профиля»: вся
+	# проводка от тапа до сигнала chosen.
+	_picked = ""
+	menu.call("_input", _tap(menu.call("_guest_tap_rect").get_center()))
 	_check(not _main.menu_open, "guest choice closes the menu")
 	_check(_main.profile_name == S.GUEST, "guest choice switches to guest")
 	_check(_main.state == "playing", "guest choice starts the game")
@@ -464,7 +466,7 @@ func _part9_main_game() -> void:
 	_main._menu_chosen("Петя")
 	_check(_main.profile_all_keys, "profile all_keys reaches the game")
 	_check(_main._all_keys(), "all_keys mode is on in the game")
-	_check(_main.exact_case, "all_keys mode is case-sensitive")
+	_check(_main._exact(), "all_keys mode is case-sensitive")
 	_check(
 		int(_main.active.size()) == _letters_on_screen(),
 		"all_keys mode activates every letter on screen"
@@ -475,7 +477,7 @@ func _part9_main_game() -> void:
 	_main._menu_chosen("Петя")
 	_check(not _main.profile_all_keys, "profile all_keys off reaches the game")
 	_check(not _main._all_keys(), "progression mode is off in the game")
-	_check(not _main.exact_case, "progression mode ignores case")
+	_check(not _main._exact(), "progression mode ignores case")
 	_check(
 		int(_main.active.size()) == B.INITIAL_ACTIVE_COUNT,
 		"progression mode starts with a few active letters, not all"
@@ -826,8 +828,6 @@ func _part14_night() -> void:
 	_check(S.get_night_mode() == 0, "day persists after the full circle")
 
 
-## RU-клавиатура: печатать русское с латинской (стенд, хромбуки).
-## Глобально, как ночь. Тап по галочке и клавиша R при неактивном поле.
 func _letters_on_screen() -> int:
 	var letters := {}
 	for line in _main.display_lines:

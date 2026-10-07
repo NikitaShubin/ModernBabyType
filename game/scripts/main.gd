@@ -61,11 +61,7 @@ const BASE_H := 650.0
 const START_DELAY := 3.0
 const TEXT_CHUNK_LINES := 3
 
-const PAPER := Color("#f7f3e8")
 const INK := Color("#1c1a16")
-const GREY_PASSED := Color("#b7b0a1")
-const GREY_IDLE := Color("#8d8778")
-const RED := Color("#c02727")
 const UI_TEXT := Color("#4a4438")
 const GREEN := Color("#1e7a34")
 const DARK_RED := Color("#b02323")
@@ -78,7 +74,11 @@ var cursor_line := 0
 var cursor_pos := 0
 var state := "playing"
 # Точное сравнение с учётом регистра (взрослый режим, _all_keys).
-var exact_case := false
+## Регистр важен тогда и только тогда, когда взрослый режим.
+## Было хранимым флагом — сносилось _new_level и врало читателю;
+## теперь чистая функция от _all_keys().
+func _exact() -> bool:
+	return _all_keys()
 
 var difficulty := 0
 var wins_in_row := 0
@@ -264,7 +264,7 @@ func _ready() -> void:
 	overlay_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	overlay_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	overlay_label.visible = false
-	# Модалка и табло — выше букв (теперь буквы z = 1).
+	# Модалка и табло — выше букв (буквы z=-10, панели z=-15, лейблы z=2).
 	overlay_label.z_index = 2
 	add_child(overlay_label)
 
@@ -272,14 +272,14 @@ func _ready() -> void:
 	# сами буквы живут в text_labels (z_index = -10), а _draw() рисует
 	# поверх них (z_index = 0), так что панели из _draw() текст бы
 	# перекрыли. Геометрию панелей считает _layout_card().
-	card_sb = _panel_sb(Color("#fffdf6"), 20.0, Color("#e0d5bd"), 2.0, true)
-	pill_sb = _panel_sb(Color(1, 1, 1, 0.72), 14.0, Color("#e0d5bd"), 1.5, false)
-	over_sb = _panel_sb(Color("#fffdf6"), 22.0, Color("#e0d5bd"), 2.0, true)
-	cursor_sb = _panel_sb(Color(1.0, 0.82, 0.25, 0.5), 8.0)
-	badge_sb = _panel_sb(Color("#7fb069"), 12.0, Color("#6a955a"), 2.0, false)
-	cap_sb = _panel_sb(Color("#fffdf6"), 10.0, Color("#4a4438"), 2.0, false)
-	bar_track_sb = _panel_sb(Color("#e6dcc4"), 5.0)
-	bar_fill_sb = _panel_sb(Color("#7fb069"), 5.0)
+	card_sb = Ui.panel_sb(Color("#fffdf6"), 20.0, Color("#e0d5bd"), 2.0, true)
+	pill_sb = Ui.panel_sb(Color(1, 1, 1, 0.72), 14.0, Color("#e0d5bd"), 1.5, false)
+	over_sb = Ui.panel_sb(Color("#fffdf6"), 22.0, Color("#e0d5bd"), 2.0, true)
+	cursor_sb = Ui.panel_sb(Color(1.0, 0.82, 0.25, 0.5), 8.0)
+	badge_sb = Ui.panel_sb(Color("#7fb069"), 12.0, Color("#6a955a"), 2.0, false)
+	cap_sb = Ui.panel_sb(Color("#fffdf6"), 10.0, Color("#4a4438"), 2.0, false)
+	bar_track_sb = Ui.panel_sb(Color("#e6dcc4"), 5.0)
+	bar_fill_sb = Ui.panel_sb(Color("#7fb069"), 5.0)
 	card_p = _panel_node(card_sb)
 	hud_p = _panel_node(pill_sb)
 	hint_p = _panel_node(pill_sb)
@@ -360,29 +360,8 @@ func _apply_night() -> void:
 	queue_redraw()
 
 
-## Модуляция героев ночью: притемнить и охладить, чтобы светлый мех
-## не светился на тёмном фоне. Спрайты те же, перерисовки нет.
-func _hero_tint() -> Color:
-	if night:
-		return Color(0.72, 0.76, 0.90)
-	return Color.WHITE
-## Стиль скруглённой панели. Тень — только у больших карточек: у
-## мелких пилюль она даёт грязь вместо глубины. Радиусы в пикселях, не
-## в k: на большом окне чуть менее кругло, зато без пересоздания
-## стилей при каждом ресайзе.
-func _panel_sb(bg: Color, radius: float, border := Color(0, 0, 0, 0), bw := 0.0, shadow := false) -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = bg
-	sb.set_corner_radius_all(int(radius))
-	if bw > 0.0:
-		sb.set_border_width_all(int(bw))
-		sb.border_color = border
-	if shadow:
-		sb.shadow_color = Color(0.25, 0.20, 0.12, 0.18)
-		sb.shadow_size = 6
-		sb.shadow_offset = Vector2(0, 3)
-	return sb
-
+## Модуляция героев ночью — см. Ui.NIGHT_TINT: светлый мех
+## не должен светиться на тёмном фоне. Спрайты те же, перерисовки нет.
 
 ## Панель-подложка: видна, только когда её покажет раскладка.
 func _panel_node(sb: StyleBoxFlat) -> Panel:
@@ -434,6 +413,11 @@ func _fit_to_width(raw: Array[String]) -> Array[String]:
 
 
 func _start_game() -> void:
+	# Профиль могли снести, пока меню было открыто (или resume протух):
+	# призраков не воскрешаем — играем гостем.
+	if profile_name != S.GUEST and not S.user_exists(profile_name):
+		profile_name = S.GUEST
+		S.set_last_user(S.GUEST)
 	# Метрики (k, char_w, margin) должны быть посчитаны ДО разбивки
 	# строк: _fit_to_width режет по ним.
 	_relayout()
@@ -453,25 +437,18 @@ func _open_menu() -> void:
 	if menu == null:
 		menu = MENU_SCENE.instantiate()
 		menu.chosen.connect(_menu_chosen)
-		add_child(menu)
-	menu.visible = true
+		# Сиблинг под корнем, а не ребёнок игры: экраны рядом,
+		# а не вложены. Порядок детей даёт меню верх и первый ввод.
+		get_parent().add_child(menu)
+	menu.open(profile_name, kb_h)
 	menu_open = true
 	_players_hover = false
 	_set_play_ui(false)
-	# Свежая высота клавиатуры — в меню сразу, не дожидаясь релэяута.
-	menu.set("kb_h", kb_h)
-	menu.queue_redraw()
-	# F2 из меню возвращает в игру тем же игроком, кого открыли.
-	menu.resume_user = profile_name
-	# Ночь могла переключить в меню: забираем свежую.
-	menu.set("night", night)
-	menu.call("_apply_night")
-	menu.call("_reload")
 
 
 func _close_menu() -> void:
 	if menu != null:
-		menu.visible = false
+		menu.close()
 	menu_open = false
 	_set_play_ui(true)
 
@@ -482,6 +459,12 @@ func _close_menu() -> void:
 ## Порядок важен: сначала пересчёт (_layout_text_lines включает буквы
 ## обратно), и только потом гашение. Иначе меню открывается поверх
 ## полупогашенного слоя — каша.
+## Граница слоёв «игра/меню»: всё игровое (текст, герои, модалка,
+## кнопки, табло-дебаг) принадлежит игре и гаснет целиком, когда
+## открыто меню. Меню рисует только своё поверх вуали. Правило одно:
+## видимостью игрового слоя владеет только эта функция — иначе
+## модалка победы просвечивает сквозь меню (так и было: over_p
+## здесь не гасили).
 func _set_play_ui(on: bool) -> void:
 	_layout_text_lines()
 	_refresh_hud()
@@ -490,6 +473,8 @@ func _set_play_ui(on: bool) -> void:
 	card_p.visible = on and not display_lines.is_empty()
 	hud_label.visible = on
 	hud_p.visible = on
+	over_p.visible = on and (state == "won" or state == "lost")
+	overlay_label.visible = over_p.visible
 	# Подсказка рисуется в _draw каждый кадр и сама решает, видна ли:
 	# здесь только гасим пилюлю, следующий кадр всё расставит.
 	hint_p.visible = false
@@ -740,15 +725,15 @@ func _new_level() -> void:
 		line_base.append(acc)
 		acc += float(line.length())
 	level_total = int(acc)
+	# Взрослый режим: набирается всё, что видно. Регистр важен —
+	# но это вывод из _all_keys() (см. _exact()), а не состояние:
+	# хранить его отдельно значило бы рассинхрон.
 	if _all_keys():
-		# Взрослый режим: набирается всё, что видно, регистр важен.
-		exact_case = true
 		active.clear()
 		for line in display_lines:
 			for i in line.length():
 				active[line.substr(i, 1)] = true
 	else:
-		exact_case = false
 		active = B.active_chars(difficulty)
 	passed.clear()
 	errors.clear()
@@ -786,7 +771,7 @@ func _current() -> String:
 
 
 func _is_active(ch: String) -> bool:
-	return ch == " " or active.has(ch if exact_case else ch.to_lower())
+	return ch == " " or active.has(ch if _exact() else ch.to_lower())
 
 
 ## Сравнение ввода: в дебаге регистр важен, иначе — без учёта.
@@ -797,7 +782,7 @@ func _eq(a: String, b: String) -> bool:
 	if not profile_yo:
 		a = a.replace("ё", "е").replace("Ё", "е")
 		b = b.replace("ё", "е").replace("Ё", "е")
-	if exact_case:
+	if _exact():
 		return a == b
 	return a.to_lower() == b.to_lower()
 
@@ -831,14 +816,12 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		return
 	if ke.keycode == KEY_ESCAPE:
 		if menu_open:
-			# Esc в меню — гость; сюда попадаем, только если меню не
-			# забрало клавишу (страховка).
-			_menu_chosen(S.GUEST)
+			# Открыто меню — ввод его: сюда попадаем, только если меню
+			# клавишу не забрало (страховка). Там Esc тоже выход.
 			return
-		if get_tree().root.mode == Window.MODE_FULLSCREEN:
-			get_tree().root.mode = Window.MODE_WINDOWED
-		else:
-			get_tree().quit()
+		# Esc — всегда выход сразу, даже из полноэкранного.
+		# Полноэкранный переключается только Alt+Enter и F11.
+		get_tree().quit()
 		return
 	if (
 		(ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER)
@@ -888,7 +871,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	# время партии рисовал бы красную метку перевода строки.
 	if ke.unicode < 32:
 		return
-	if exact_case:
+	if _exact():
 		_caps_check(ke)
 	_type_char(String.chr(ke.unicode))
 
@@ -1077,14 +1060,16 @@ func _finish(won: bool, reason := "") -> void:
 	prof["total_games"] = int(prof.get("total_games", 0)) + 1
 	if won:
 		prof["total_wins"] = int(prof.get("total_wins", 0)) + 1
+	# Флаги — свежие из файла, а не из памяти начала уровня: их могло
+	# сменить меню (файл — источник правды, см. save.gd).
 	S.save_profile(profile_name, {
 		"difficulty": difficulty,
 		"wins_in_row": wins_in_row,
 		"ema_cpm": ema_cpm,
 		"ema_acc": ema_acc,
 		"enemy_cps": enemy_cps,
-		"all_keys": profile_all_keys,
-		"yo_strict": profile_yo,
+		"all_keys": bool(prof.get("all_keys", false)),
+		"yo_strict": bool(prof.get("yo_strict", true)),
 		"total_games": prof.get("total_games", 0),
 		"total_wins": prof.get("total_wins", 0),
 	})
@@ -1290,7 +1275,7 @@ func _kb_want() -> bool:
 ## Вся раскладка считается от неё — и в портрете с клавиатурой, и в
 ## альбоме с внешней. Пол под ногами не проваливается: минимум 220 px.
 func _eff_h() -> float:
-	return maxf(view_h - kb_h, 220.0)
+	return Ui.eff_h(view_h, kb_h)
 
 
 ## Высота системной клавиатуры в пикселях канваса: экранные пиксели
@@ -1368,7 +1353,7 @@ func _refresh() -> void:
 					shown = "[lb]"
 				elif shown == "]":
 					shown = "[rb]"
-				out += "[color=#ff7a6b]" + shown + "[/color]" if night else "[color=#c02727]" + shown + "[/color]"
+				out += "[color=" + (Ui.ERR_NIGHT_HEX if night else Ui.ERR_DAY_HEX) + "]" + shown + "[/color]"
 				continue
 			# Пройденное (съеденное или пропущенное) — серым.
 			var col := "#6f6a5e" if not night else "#7a86a0"
@@ -1392,7 +1377,7 @@ func _refresh() -> void:
 func _hint_parts() -> Array:
 	if state != "playing":
 		return []
-	if _caps_warn and exact_case:
+	if _caps_warn and _exact():
 		return [{"s": "Выключи CapsLock!", "cap": false}]
 	if not errors.is_empty():
 		return [
@@ -1405,7 +1390,7 @@ func _hint_parts() -> Array:
 		return []
 	if cur == " ":
 		return [{"s": "Жми:", "cap": false}, {"s": "Пробел", "cap": true}]
-	if exact_case and cur == cur.to_upper() and cur != cur.to_lower():
+	if _exact() and cur == cur.to_upper() and cur != cur.to_lower():
 		# Заглавная в строгом режиме одной клавишей не берётся —
 		# показываем обе части кнопками.
 		return [
@@ -1416,7 +1401,7 @@ func _hint_parts() -> Array:
 		]
 	return [
 		{"s": "Жми:", "cap": false},
-		{"s": cur if exact_case else cur.to_upper(), "cap": true},
+		{"s": cur if _exact() else cur.to_upper(), "cap": true},
 	]
 
 
@@ -1487,7 +1472,7 @@ func _draw_hint() -> void:
 		widths.append(w)
 		total += w
 	total += gap * float(maxi(parts.size() - 1, 0))
-	# Центр строки — на месте старого лейбла (низ минус 137.5k).
+	# Центр строки — на месте бывшей подсказки-лейбла (низ минус 137.5k).
 	var y_top := _eff_h() - 137.5 * k - cap_h * 0.5
 	var x := (view_w - total) * 0.5
 	hint_p.position = Vector2(x - 14.0 * k, y_top - 8.0 * k)
@@ -1517,21 +1502,6 @@ func _draw_hint() -> void:
 ## Ширина, доступная строке табло: от поля до поля.
 func _hud_avail() -> float:
 	return view_w - margin * 2.0
-
-
-## Первая строка-кандидат, которая реально влезает в avail. Раньше
-## выбор был по ширине экрана в пикселях (view_w < 700), но кегль
-## умножается на k: телефон 1080px с k=1.93 даёт 21 знак в строке и
-## при view_w = 1080 считался «широким», а строка уезжала за край.
-## Теперь меряем текст — критерий тот же, а ответ верный на любом
-## экране. Пустая строка-кандидат означает «не влезает ничего».
-func _first_fit(cands: Array[String], fs: int, avail: float) -> String:
-	for c in cands:
-		if c.is_empty():
-			return ""
-		if mono.get_string_size(c, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x <= avail:
-			return c
-	return ""
 
 
 ## Табло — только дебаг (F3): игровую статистику автор убрал,
@@ -2080,7 +2050,7 @@ func _draw_hero() -> void:
 	sq *= Vector2(1.0 - 0.03 * hop, 1.0 + 0.04 * hop)
 	var s := _spr_scale(HERO_TEX, _unit_h()) * sq
 	draw_set_transform(c, 0.0, s)
-	draw_texture(HERO_TEX, -HERO_TEX.get_size() * 0.5, _hero_tint())
+	draw_texture(HERO_TEX, -HERO_TEX.get_size() * 0.5, (Ui.NIGHT_TINT if night else Color.WHITE))
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	if blink_t > 0.0 and state != "lost":
 		# Веки — две чёрточки поперёк глаз. Рамки глаз измерены по
@@ -2156,6 +2126,6 @@ func _draw_enemy() -> void:
 	# «не попал» (жалоба автора).
 	var s := _spr_scale(HEDGE_TEX, _unit_h()) * sq
 	draw_set_transform(c, wob, s)
-	draw_texture(HEDGE_TEX, -HEDGE_TEX.get_size() * 0.5, _hero_tint())
+	draw_texture(HEDGE_TEX, -HEDGE_TEX.get_size() * 0.5, (Ui.NIGHT_TINT if night else Color.WHITE))
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	_draw_puffs()

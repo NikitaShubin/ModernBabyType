@@ -48,6 +48,9 @@ func _apply_sky() -> void:
 
 
 func _process(dt: float) -> void:
+	# Скрытый фон стоит: облака чужого экрана не плывут.
+	if not visible:
+		return
 	_time += dt
 	_bird_cd -= dt
 	# Птицы — только днём и не толпой: максимум три, новая каждые

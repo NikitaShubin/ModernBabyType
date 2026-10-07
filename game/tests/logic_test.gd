@@ -12,7 +12,6 @@ var _frame := 0
 var _main: Node = null
 var _failures: Array[String] = []
 var _d0 := 0.0
-var _ex := 0.0
 var _ex0 := 0.0
 var _hx := 0.0
 var _hx0 := 0.0
@@ -323,12 +322,12 @@ func _expected_hint(ch: String) -> String:
 		return "Жми: [Пробел]"
 	if ch == "":
 		return ""
-	if _main.exact_case and ch == ch.to_upper() and ch != ch.to_lower():
+	if _main._exact() and ch == ch.to_upper() and ch != ch.to_lower():
 		# Заглавная в строгом режиме: парой Shift + буква.
 		return "Жми: [Shift] + [" + ch + "]"
 	# В строгом режиме показываем букву как есть (регистр важен),
 	# в обычном — для удобства заглавную.
-	return "Жми: [" + (ch if _main.exact_case else ch.to_upper()) + "]"
+	return "Жми: [" + (ch if _main._exact() else ch.to_upper()) + "]"
 
 
 func _run_part1() -> void:
@@ -680,7 +679,15 @@ func _run_part2() -> void:
 	# при этом не начинается.
 	_main.call("_input", _tap(_main._players_rect.get_center()))
 	_check(_main.menu_open, "players button opens the menu")
+	_check(
+		_main.menu.process_mode == Node.PROCESS_MODE_INHERIT,
+		"open menu runs its process"
+	)
 	_main._close_menu()
+	_check(
+		_main.menu.process_mode == Node.PROCESS_MODE_DISABLED,
+		"hidden menu process is disabled"
+	)
 	_main._new_level()
 	_main._finish(true)
 	_check(_main.state == "won", "setup: level won")
@@ -711,6 +718,14 @@ func _run_part2() -> void:
 	_check(_main.state == "won", "kb tap does not advance past the modal")
 	_main._force_touch = false
 	_main._relayout()
+	# Слои: модалка принадлежит игре — с открытым меню гаснет,
+	# с закрытым возвращается (партия всё ещё выиграна).
+	_check(_main.over_p.visible, "modal is up before the menu opens")
+	_main._open_menu()
+	_check(not _main.over_p.visible, "modal hides with the open menu")
+	_check(not _main.overlay_label.visible, "modal label hides with the menu")
+	_main._close_menu()
+	_check(_main.over_p.visible, "modal returns when the menu closes")
 	# Полые звёзды: недобранный балл виден (2 из 3).
 	_main._new_level()
 	_main.typed_ok = 94
@@ -832,7 +847,8 @@ func _run_part2() -> void:
 	# --- Нeстрогая ё: е засчитывается за ё и обратно. ---
 	_main._new_level()
 	_main.grace_t = 0.0
-	_main.exact_case = false
+	_main.all_keys_override = 0
+	_main.profile_all_keys = false
 	_main.profile_yo = false
 	_main.active = {"е": true, "ё": true, "ж": true, " ": true}
 	var yo1: Array[String] = ["ёж"]
@@ -848,7 +864,8 @@ func _run_part2() -> void:
 	# И обратно: ё за е.
 	_main._new_level()
 	_main.grace_t = 0.0
-	_main.exact_case = false
+	_main.all_keys_override = 0
+	_main.profile_all_keys = false
 	_main.profile_yo = false
 	_main.active = {"е": true, "ё": true, "ж": true, " ": true}
 	var yo2: Array[String] = ["еж"]
@@ -864,7 +881,8 @@ func _run_part2() -> void:
 	# Строгая (по умолчанию): е за ё не идёт.
 	_main._new_level()
 	_main.grace_t = 0.0
-	_main.exact_case = false
+	_main.all_keys_override = 0
+	_main.profile_all_keys = false
 	_main.profile_yo = true
 	_main.active = {"е": true, "ё": true, "ж": true, " ": true}
 	var yo4: Array[String] = ["ёж"]
@@ -881,7 +899,8 @@ func _run_part2() -> void:
 	# но регистр всё равно важен).
 	_main._new_level()
 	_main.grace_t = 0.0
-	_main.exact_case = true
+	_main.all_keys_override = 1
+	_main.profile_all_keys = true
 	_main.profile_yo = false
 	_main.active = {"е": true, "Ё": true, " ": true}
 	var yo3: Array[String] = ["Ё"]
