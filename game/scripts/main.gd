@@ -122,6 +122,12 @@ var hud_label: Label
 var overlay_label: Label
 var show_dbg := false
 var _last_reason := ""
+# ВРЕМЕННАЯ диагностика ввода (стенд кириллицы, 10.2026): кольцевой буфер
+# последних key-событий. Gboard для русского пишет через composing-регион,
+# и надо видеть, что реально приходит в игру: keycode/unicode/echo.
+# Убрать, когда разберёмся. Счётчик — все сборки, буфер и print — дебаг.
+var _keylog: Array[String] = []
+var _keylog_all := 0
 
 # Сглаженная позиция героя: логика (курсор) прыгает, картинка догоняет.
 var hero_r := Vector2.ZERO
@@ -400,10 +406,83 @@ func _fit_to_width(raw: Array[String]) -> Array[String]:
 	# покрыт чистыми тестами fit_lines, интеграция тривиальна.
 	if view_w < 100.0:
 		return raw
-	var max_chars := maxi(14, int((view_w - margin * 2.0) / maxf(1.0, char_w)) - 1)
-	if max_chars >= 36:
+	if _max_chars() >= 36:
 		return raw
-	return B.fit_lines(raw, max_chars)
+	return B.fit_lines(raw, _max_chars())
+
+
+## Сколько знаков влезает в строку. Один счёт для всех: и разбивки
+## при старте уровня, и пересборки при смене ширины экрана.
+func _max_chars() -> int:
+	return maxi(14, int((view_w - margin * 2.0) / maxf(1.0, char_w)) - 1)
+
+
+## Ширина экрана может поменяться ПО ХОДУ уровня: на телефоне выезжает
+## клавиатура (окно становится ниже и уже), телефон поворачивают. Тогда
+## строки, собранные при старте, перестают влезать — текст уезжает за
+## правый край, и игрок не видит, что набирать (жалоба автора,
+## 07.10.2026: «в мобильной версии не могу закончить уровень»).
+## Пересобираем строки и переносим курсор, «пройдено» и красные метки
+## по логической оси текста (без пробелов на местах разрыва, см.
+## B.reflow): заяц остаётся на той же букве.
+func _reflow_text() -> void:
+	if display_lines.is_empty():
+		return
+	var rf: Dictionary = B.reflow(display_lines, cursor_line, cursor_pos, _max_chars())
+	var fresh: Array = rf["lines"]
+	if fresh == display_lines:
+		return  # вёрстка не изменилась — курсор и метки трогать нельзя
+	var table: Dictionary = rf["table"]
+	display_lines = fresh
+	cursor_line = int(rf["line"])
+	cursor_pos = int(rf["pos"])
+	_reindex_lines()
+	_remap_cells(passed, table, rf)
+	_remap_cells(errors, table, rf)
+	# Надписи перерисовать ЗДЕСЬ: иначе на экране остаётся старая
+	# вёрстка, обрезанная краем окна, — игрок видит не тот текст, который
+	# в игре (жалоба автора: строка «пустая», а набирать надо другое).
+	_refresh()
+	# Всё набрано, а перенос выкинул курсор за последнюю строку (смена
+	# ширины ровно на последней букве): уровень закончен.
+	if cursor_line >= display_lines.size() and state == "playing":
+		_finish(true)
+
+
+## Пересчитать смещения строк и длину уровня после сборки строк.
+func _reindex_lines() -> void:
+	line_base = B.line_bases(display_lines)
+	level_total = 0
+	if not line_base.is_empty():
+		level_total = (
+			int(line_base[line_base.size() - 1])
+			+ display_lines[display_lines.size() - 1].length()
+		)
+
+
+## Перенести отметки «пройдено»/«ошибка» на те же буквы после пересборки
+## строк: ключ «строка:позиция» меняет смысл, буква — нет. Таблица
+## переводит логическое смещение старой сборки в клетку новой.
+func _remap_cells(src: Dictionary, table: Dictionary, rf: Dictionary) -> void:
+	if src.is_empty():
+		return
+	var old_lines: Array = rf["old"]
+	var out := {}
+	for k in src.keys():
+		var parts := String(k).split(":")
+		if parts.size() != 2:
+			continue
+		var li := int(parts[0])
+		if li >= old_lines.size():
+			continue
+		var off := int(parts[1])
+		for i in li:
+			off += String(old_lines[i]).length()
+		var c: Vector2i = table.get(off, Vector2i(-1, -1))
+		if c.x >= 0:
+			out["%d:%d" % [c.x, c.y]] = src[k]
+	src.clear()
+	src.merge(out)
 
 
 func _start_game() -> void:
@@ -528,6 +607,9 @@ func _relayout() -> void:
 		tl.position = Vector2(margin, text_y)
 		tl.size = Vector2(view_w - margin * 2.0, line_h + 8.0 * k)
 		tl.add_theme_font_size_override("normal_font_size", font_size)
+	# Метрики букв поменялись — строки могут перестать влезать, а на
+	# ходу уровня их пересобирает _reflow_text (зайца не сбивает).
+	_reflow_text()
 	_layout_text_lines()
 	# Табло-дебаг якорится к низу ЭФФЕКТИВНОЙ области: иначе
 	# клавиатура его перекрывает. В обычной игре оно скрыто.
@@ -719,12 +801,7 @@ func _new_level() -> void:
 	_caps_warn = false
 	# И подсказка звёздочки: модалки больше нет.
 	_star_tip = 0
-	line_base.clear()
-	var acc := 0.0
-	for line in display_lines:
-		line_base.append(acc)
-		acc += float(line.length())
-	level_total = int(acc)
+	_reindex_lines()
 	# Взрослый режим: набирается всё, что видно. Регистр важен —
 	# но это вывод из _all_keys() (см. _exact()), а не состояние:
 	# хранить его отдельно значило бы рассинхрон.
@@ -810,9 +887,27 @@ func _skip_inactive() -> void:
 		_advance()
 
 
+func _keylog_add(ke: InputEventKey) -> void:
+	_keylog_all += 1
+	_keylog.append("kc=%d u=%d(%s)%s%s" % [
+		ke.keycode, ke.unicode,
+		String.chr(ke.unicode) if ke.unicode >= 32 else "·",
+		"" if ke.pressed else "-up",
+		"+echo" if ke.echo else "",
+	])
+	while _keylog.size() > 6:
+		_keylog.pop_front()
+	if not OS.is_debug_build():
+		return
+	print("KEYLOG kc=", ke.keycode, " u=", ke.unicode, " pressed=", ke.pressed, " echo=", ke.echo)
+
+
 func _unhandled_key_input(event: InputEvent) -> void:
 	var ke := event as InputEventKey
-	if ke == null or not ke.pressed or ke.echo:
+	if ke == null:
+		return
+	_keylog_add(ke)
+	if not ke.pressed or ke.echo:
 		return
 	if ke.keycode == KEY_ESCAPE:
 		if menu_open:
@@ -1533,6 +1628,28 @@ func _draw_hint() -> void:
 				s, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs, _ui_ink()
 			)
 		x += w + gap
+	_diag_draw(y_top + cap_h + 30.0 * k)
+
+
+## ВРЕМЕННАЯ диагностика ввода (Яндекс-клавиатура, 10.2026): последние
+## key-события прямо на экране — на телефоне нет F3, скриншот от автора
+## покажет, что реально приходит в игру. Убрать вместе с _keylog.
+const DIAG_KEYS := true
+func _diag_draw(below: float) -> void:
+	if not DIAG_KEYS:
+		return
+	var fs := int(16.0 * k)
+	var lines: Array[String] = []
+	lines.append("событий: %d" % _keylog_all)
+	for i in _keylog.size():
+		lines.append(_keylog[i])
+	var y := below
+	for ln in lines:
+		draw_string(
+			mono, Vector2(margin, y),
+			ln, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs, _ui_ink()
+		)
+		y += 24.0 * k
 
 
 ## Ширина, доступная строке табло: от поля до поля.
@@ -1562,6 +1679,8 @@ func _refresh_hud() -> void:
 		kb_h, _kb_raw, sc, view_w, view_h,
 		" FAKEKB" if _kb_fake else "",
 	]
+	if not _keylog.is_empty():
+		txt += "\n" + " ".join(_keylog)
 	hud_label.text = txt
 	# Лейблу задаём свою ширину: он не должен раздуваться под текст
 	# (clip_text), а пилюля — вылезать за поле.
