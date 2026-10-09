@@ -236,9 +236,30 @@ func _relayout() -> void:
 	# Пол на телефоне выше (0.7 против 0.5): пальцем по мелкому не попасть,
 	# а читаться должно без лупы (жалоба автора 10.2026). Влезаемость
 	# блока при поднятом поле проверяет profiles_test.
+	# На сенсорных умножаем на плотность экрана: меню считает в физических
+	# пикселях, а на телефоне они в 2–3 раза мельче — иначе весь интерфейс
+	# в портрете мелкий (жалоба автора 10.2026). Десктоп не меняется.
 	var kmin := 0.5 if Ui.is_desktop() else 0.7
-	k = clampf(minf(view_w / BASE_W, _menu_eff_h() / BASE_H), kmin, 2.5)
+	var want := minf(view_w / BASE_W, _menu_eff_h() / BASE_H) * Ui.dpr()
+	k = _fit_k(clampf(want, kmin, 2.5), kmin)
 	queue_redraw()
+
+
+## Ужать k, чтобы блок влез в эффективную высоту: с поднятой плотностью
+## контент растёт, а экран — нет. Две итерации: шаг строк с полом 64px
+## нелинеен, одной формулой не взять. Ниже kmin не уходим.
+func _fit_k(k0: float, kmin: float) -> float:
+	var kk := k0
+	for _i in 2:
+		var step := ROW_H * kk
+		if not Ui.is_desktop():
+			step = maxf(step, 64.0)
+		var top := 160.0 * kk + top_safe
+		var need := top + float(maxi(users.size(), 1)) * step + 340.0 * kk
+		if need <= _menu_eff_h() or kk <= kmin:
+			break
+		kk = maxf(kmin, kk * _menu_eff_h() / need)
+	return kk
 
 
 ## Открыть меню поверх игры. Видимость и процесс — только здесь:
@@ -976,7 +997,10 @@ func _own_shown() -> bool:
 ## Область своей клавиатуры: низ экрана.
 func _own_rect() -> Rect2:
 	var h := Kbd.height_for(view_w)
-	return Rect2(16.0, view_h - h - 16.0, view_w - 32.0, h)
+	# Низ экрана со скруглениями и жестом: клавиатуру поднимаем на
+	# безопасный отступ, иначе угловые клавиши обрезаны (жалоба 10.2026).
+	var m := 16.0 + Ui.bottom_inset(view_h)
+	return Rect2(16.0, view_h - h - m, view_w - 32.0, h)
 
 
 func _own_h() -> float:

@@ -65,6 +65,8 @@ func _process(_dt: float) -> bool:
 	_part20_upd_progress()
 	_part21_own_keyboard()
 	_part22_compose_name()
+	_part23_portrait_dense()
+	_part24_rounded_corners()
 	_report()
 	return true
 
@@ -917,6 +919,74 @@ func _part15_update() -> void:
 ## Телефонные минимумы под палец (жалоба автора 10.2026: мелко,
 ## не попасть). Кнопки действий и строки таблицы не ниже 64px высотой
 ## на телефоне; на десктопе — как было (геометрию не трогаем).
+## Портрет с плотностью телефона: масштаб растёт через DPR, а блок
+## влезает в экран (жалоба автора 10.2026: меню мелкое в вертикали).
+## _relayout в headless не вызвать с нужным размером (он берёт размер
+## вьюпорта), поэтому проверяем его части: Ui.dpr и _fit_k.
+func _part23_portrait_dense() -> void:
+	var was_dpr: float = Ui.dpr_override
+	var saved_users: Array = _menu.users.duplicate()
+	# Плотность: без переопределения в headless — 1, с ним — как скажут.
+	Ui.dpr_override = 0.0
+	_check(Ui.dpr() == 1.0, "density is 1 without an override")
+	Ui.dpr_override = 2.6
+	_check(Ui.dpr() == 2.6, "density override applies")
+	# Хотим масштаб портрета 1080x2280: без плотности — 0.98, с ней — упор.
+	_menu.view_w = 1080.0
+	_menu.view_h = 2280.0
+	_menu.top_safe = 0.0
+	var u12: Array[String] = []
+	for i in 12:
+		u12.append("Ю%d" % i)
+	_menu.users = u12
+	_menu.k = 1.0
+	var want_plain := minf(1080.0 / 1100.0, 2280.0 / 650.0)
+	var want_dense := minf(want_plain * 2.6, 2.5)
+	_check(want_dense > 2.0, "sanity: density grows the portrait scale")
+	# Много строк: полный масштаб не влезает — _fit_k ужимает, но блок
+	# остаётся на экране, а не уезжает.
+	var k_full: float = _menu.call("_fit_k", 2.5, 0.7)
+	_check(k_full < 2.5, "fit shrinks an overflowing portrait (k=%.2f)" % k_full)
+	_menu.k = k_full
+	var n: int = _menu.users.size()
+	var last_y: float = _menu.call("_rows_top") + float(n - 1) * _menu.call("_row_step")
+	_check(last_y <= _menu.view_h, "the last of 12 rows stays on screen")
+	_check(Rect2(_menu.call("_play_tap_rect")).end.y <= _menu.view_h,
+		"action buttons stay on screen after fit")
+	# Мало строк: плотность даёт крупный масштаб без ужима.
+	var u1: Array[String] = ["Ю"]
+	_menu.users = u1
+	var k_roomy: float = _menu.call("_fit_k", 2.5, 0.7)
+	_check(k_roomy >= 2.0, "a short portrait keeps a big scale (k=%.2f)" % k_roomy)
+	_menu.users = saved_users
+	Ui.dpr_override = was_dpr
+
+
+## Низ со скруглением: своя клавиатура поднимается на безопасный
+## отступ, угловые клавиши не обрезаны (жалоба автора 10.2026).
+func _part24_rounded_corners() -> void:
+	var was_override: float = Ui.bottom_override
+	_menu.view_w = 1080.0
+	_menu.view_h = 2280.0
+	Ui.bottom_override = 0.0
+	var plain: Rect2 = Rect2(_menu.call("_own_rect"))
+	Ui.bottom_override = 96.0
+	var lifted: Rect2 = Rect2(_menu.call("_own_rect"))
+	_check(
+		is_equal_approx(plain.position.y - lifted.position.y, 96.0),
+		"the keyboard rises above the rounded corners"
+	)
+	_check(
+		lifted.end.y <= _menu.view_h - 96.0 + 0.001,
+		"the keyboard bottom clears the unsafe strip"
+	)
+	_check(
+		lifted.size == plain.size,
+		"lifting does not resize the keys"
+	)
+	Ui.bottom_override = was_override
+
+
 func _part16_touch_sizes() -> void:
 	var was_desktop := Ui.is_desktop()
 	Ui.force_touch = true

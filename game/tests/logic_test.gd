@@ -1121,7 +1121,7 @@ func _run_part2() -> void:
 	if sp2 > sp1:
 		_main.cursor_line = 0
 		_main.cursor_pos = sp1
-		_main._type_char(" ", true)
+		_main._type_char(" ")
 		_check(
 			Vector2i(_main.cursor_line, _main.cursor_pos) == Vector2i(0, sp2),
 			"the first space walks the cursor to the second one"
@@ -1157,27 +1157,25 @@ func _run_part2() -> void:
 		"no input is counted after the level is over"
 	)
 
-	# --- Backspace при системной клавиатуре НЕ откатывает набранные буквы:
-	# IME пришлёт меньше, чем снято, и игрок зациклится (живой лог
-	# 10.2026: 109 набранных при 55 нужных, ёж догнал).
+	# --- Backspace отменяет последнюю набранную букву на любом вводе,
+	# включая системную клавиатуру: иначе верно набранное не стереть
+	# (жалоба автора 10.2026). Откат идёт к последней НАБРАННОЙ клетке,
+	# перепрыгивая серые автопропуски.
 	_main._new_level()
 	_main.active = BB.active_chars(0)
 	_main._type_char(_main._current())
 	var filled_before: int = _main.typed_cells.size()
-	S.set_sys_kb(true)
-	_main._backspace()
-	_check(
-		_main.typed_cells.size() == filled_before,
-		"backspace keeps typed letters while the system keyboard is on"
-	)
-	_check(true, "the skipped rollback keeps the typed letters (checked above)")
-	# А со своей клавиатурой откат работает как обычно.
+	_check(filled_before > 0, "a typed letter is recorded")
+	for kb_mode in [true, false]:
+		S.set_sys_kb(kb_mode)
+		var n0: int = _main.typed_cells.size()
+		_main._type_char(_main._current())
+		_main._backspace()
+		_check(
+			_main.typed_cells.size() == n0,
+			"backspace removes the typed letter (sys_kb=%s)" % str(kb_mode)
+		)
 	S.set_sys_kb(false)
-	_main._backspace()
-	_check(
-		_main.typed_cells.size() < filled_before,
-		"backspace still rolls back with the own keyboard"
-	)
 
 	# --- Новый уровень пере-поднимает системную клавиатуру: иначе сессия
 	# IME рвётся (уровень начат нажатием клавиши) и буквы уходят в никуда,
