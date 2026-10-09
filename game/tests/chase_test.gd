@@ -214,33 +214,18 @@ func _process(_dt: float) -> bool:
 		else:
 			_prick_same += 1
 			_pricks += 1
-			# Жалоба «при контакте заяц отбрасывается так далеко, что
-			# пара ежей целиком помещается»: на кадре укола заяц обязан
-			# стоять РОВНО на расстоянии контакта. Проверяем, когда
-			# картинка успела догнать курсор — иначе она ещё в пути за откатом,
-			# и зазор между шарами сейчас не тот, что на экране.
-			var lag: float = absf(_main.hero_r.x - _main._hero_pos().x) / _main.char_w
-			if lag < 1.0:
-				_contact_checked += 1
-				var gap: float = _main.hero_r.x - (_main.enemy_x + _main._hedge_half())
-				if gap < -_main.SNAP_CAP_CHARS * _main.char_w - 1.0:
-					_failures.append("frame %d: hare not pushed out of the hedgehog (gap=%.1f px)"
-						% [_frame, gap])
-				elif lag < 0.5 and gap > 0.5:
-					# Заяц стоит (картинка догнала курсор) — на кадре укола
-					# он обязан ровно касаться ежа. Ровно на это автор и
-					# жаловался: щель, в которую пара ежей помещается.
-					_failures.append("frame %d: settled hare not exactly at contact distance (gap=%.1f px)"
-						% [_frame, gap])
-				elif gap > 0.5 and gap <= _main.SNAP_BACK_CHARS * _main.char_w:
-					# «Дырка» между допуском детекции и капом назад: заяц
-					# должен либо встать ровно в касание, либо замереть
-					# дальше капа. Промежуточных значений быть не должно.
-					_failures.append("frame %d: dead zone between detection band and backward cap at prick (gap=%.1f px)"
-						% [_frame, gap])
-				if absf(gap) <= 0.5:
-					_touch_gap_sum += gap
-					_touch_gap_n += 1
+			# На кадре укола заяц обязан стоять РОВНО на расстоянии
+			# контакта — всегда, а не когда картинка догнала курсор:
+			# табло ставится принудительно (жалоба 10.2026: «заяц
+			# останавливается сильно до, а игре уже конец»).
+			_contact_checked += 1
+			var gap: float = _main.hero_r.x - (_main.enemy_x + _main._hedge_half())
+			if absf(gap) > 0.5:
+				_failures.append("frame %d: hare not exactly at contact distance (gap=%.1f px)"
+					% [_frame, gap])
+			else:
+				_touch_gap_sum += gap
+				_touch_gap_n += 1
 
 	if _main.state != "playing":
 		# Укол или победа — начинаем новый эпизод.
