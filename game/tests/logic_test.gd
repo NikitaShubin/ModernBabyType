@@ -781,10 +781,12 @@ func _run_part2() -> void:
 		wc = "ж"
 	_main._unhandled_key_input(_softkey(wc.unicode_at(0)))
 	_main._comp_flush()
-	_check(not _main.errors.has(_cell_key(1, pw)),
-		"a soft-letter miss is not a red mark (IME desync, not a typo)")
-	_check(_main.hints.has(_cell_key(1, pw)),
-		"a soft-letter miss flashes the cell that is needed")
+	# Промах с системной клавиатуры — тоже опечатка: красная метка и счёт.
+	# Заглушка 10.2026 («мягкий промах» без метки) прятала настоящие
+	# ошибки вместе с фантомными — так делать нельзя.
+	_check(_main.errors.has(_cell_key(1, pw)),
+		"a soft-letter miss leaves a red mark like any other typo")
+	_check(_main.typed_bad > 0, "a soft-letter miss counts the mistake")
 
 	# --- Composing-перепись IME (Яндекс/Gboard, русский): каждый тап
 	# стирает и вводит заново всё слово (серии DEL + дубли, keycode
@@ -918,13 +920,11 @@ func _run_part2() -> void:
 			var bad_pre: int = _main.typed_bad
 			_main.hints.clear()
 			_main._type_char_comp(seen[a])
+			# Не та буква там, где её не ждут: честная метка, без проглота.
+			# Узкое правило дублей глушит только повтор клавиши подряд.
 			_check(
-				int(_main.typed_ok) == ok_pre and int(_main.typed_bad) == bad_pre,
-				"a letter seen earlier is not swallowed and not counted as a typo"
-			)
-			_check(
-				not _main.hints.is_empty(),
-				"it flashes the cell that is needed instead"
+				int(_main.typed_ok) == ok_pre and int(_main.typed_bad) == bad_pre + 1,
+				"a letter seen earlier is judged, not swallowed"
 			)
 			_main._new_level()
 			_main.active = BB.active_chars(0)
@@ -1013,19 +1013,20 @@ func _run_part2() -> void:
 			"cursor stands on the space after a correct letter"
 		)
 		var bad_pre: int = _main.typed_bad
-		# Пачка от IME: неверная клавиша — не опечатка ребёнка (IME мог
-		# прислать лишнее/не то после откатов), а вспышка нужной клетки.
+		# Пачка от IME: неверная клавиша даёт ровно одну метку — и всё.
+		# Откат внутри пачки отменён, иначе одна ошибка уносила курсор
+		# и валила всю пачку каскадом.
 		_main.cursor_line = 0
 		_main.cursor_pos = gap_at
 		_main.hints.clear()
 		_main._type_char("ь", true)  # мусор: ждали пробел
 		_check(
-			_main.typed_bad == bad_pre,
-			"the wrong key in a batch is not counted as a mistake"
+			_main.typed_bad == bad_pre + 1,
+			"the wrong key in a batch makes exactly one mistake"
 		)
 		_check(
-			_main.hints.has(_cell_key(0, gap_at)),
-			"it flashes the cell the batch needs"
+			_main.errors.has(_cell_key(0, gap_at)),
+			"the batch mistake marks its own cell"
 		)
 		_check(
 			Vector2i(_main.cursor_line, _main.cursor_pos) == Vector2i(0, gap_at),
@@ -1038,8 +1039,8 @@ func _run_part2() -> void:
 			"the rest of the batch is applied in place, not as a cascade"
 		)
 		_check(
-			_main.typed_bad == bad_pre,
-			"the batch produces no mistakes at all after the space"
+			_main.typed_bad == bad_pre + 1,
+			"the batch holds exactly the one mistake, no cascade"
 		)
 		# С железной клавишей откат сохраняется: ребёнок может перебить
 		# опечатку (там одиночная клавиша, а не пачка).
