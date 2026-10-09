@@ -197,18 +197,25 @@ func download() -> void:
 		failed.emit("закачка не стартовала")
 
 
-## Идёт ли сейчас закачка.
+## Идёт ли сейчас закачка. До _ready (_dl ещё нет) — спокойно false:
+## иначе прямой вызов из теста роняет игру (падало в CI 10.2026).
 func downloading() -> bool:
+	if _dl == null:
+		return false
 	return _dl.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED
 
 
 ## Размер заказанного файла (0 — сервер не прислал).
 func total_bytes() -> int:
+	if _dl == null:
+		return 0
 	return _dl.get_body_size()
 
 
 ## Сколько уже скачано.
 func done_bytes() -> int:
+	if _dl == null:
+		return 0
 	return _dl.get_downloaded_bytes()
 
 

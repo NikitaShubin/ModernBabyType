@@ -68,6 +68,12 @@ ENV WINEDEBUG=-all
 RUN chmod a+x /root /root/.local /root/.local/share /root/.local/share/godot \
     && chmod -R a+rX /root/.local/share/godot/export_templates \
     && ls /root/.local/share/godot/export_templates/
+# Android SDK — пишемый для всех: gradle-сборка идёт от uid автора
+# (см. build-game.sh --user), а недостающие пакеты шаблона
+# (platforms;android-34, build-tools;34.0.0) gradle доставляет сам
+# через sdkmanager. В закрытый на запись /usr/lib/android-sdk он
+# падает «The SDK directory is not writable» (CI 10.2026).
+RUN chmod -R a+w /usr/lib/android-sdk 2>/dev/null || true
 # (идемпотентно) и генерирует debug-keystore для Android, если его
 # нет. И то и другое нужно любой сборке, поэтому происходит на слое
 # сборки образа, а не в скриптах CI. Ключ остаётся в образе и не

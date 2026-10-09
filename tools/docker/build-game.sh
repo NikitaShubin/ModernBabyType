@@ -109,6 +109,22 @@ ensure_android_build() {
 		echo "4.3.stable" > /work/game/android/.build_version
 		touch /work/game/android/build/.gdignore
 		find /work/game/android/build/res -name "*.import" -delete 2>/dev/null || true
+		# Недостающие пакеты шаблона (platforms;android-34,
+		# build-tools;34.0.0): в образе их нет, gradle без них падает
+		# «Failed to install the following SDK components» (CI 10.2026).
+		# Ставим заранее через sdkmanager: лицензии — yes, сеть в CI есть.
+		# SDK пишемый для всех (см. Dockerfile chmod), иначе та же
+		# ошибка уже на записи. Локально пакеты уже стоят — шаг пустой.
+		for s in /usr/lib/android-sdk /opt/android-sdk /sdk "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}"; do
+			if [ -n "$s" ] && [ -d "$s/cmdline-tools" ]; then SDK="$s"; break; fi
+		done
+		if [ -n "${SDK:-}" ]; then
+			SM="$(find "$SDK/cmdline-tools" -maxdepth 3 -name sdkmanager -type f 2>/dev/null | head -1)"
+			if [ -n "${SM:-}" ]; then
+				yes 2>/dev/null | sh "$SM" --sdk_root="$SDK" --licenses >/dev/null 2>&1 || true
+				sh "$SM" --sdk_root="$SDK" "platforms;android-34" "build-tools;34.0.0" >/dev/null 2>&1 || true
+			fi
+		fi
 	'
 }
 
