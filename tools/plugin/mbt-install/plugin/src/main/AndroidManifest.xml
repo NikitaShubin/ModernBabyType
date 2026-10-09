@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="ru.mbt.install">
+
+    <application>
+        <!-- Метка v2-плагина Godot (строго внутри application: реестр
+             читает meta-data приложения, не манифеста): имя + класс. -->
+        <meta-data
+            android:name="org.godotengine.plugin.v2.MbtInstall"
+            android:value="ru.mbt.install.MbtInstallPlugin" />
+    </application>
+
+</manifest>

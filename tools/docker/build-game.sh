@@ -32,6 +32,18 @@ mkdir -p "$ROOT/tools/home" /tmp/opencode
 docker build -t "$IMAGE" -f "$ROOT/tools/docker/Dockerfile" "$ROOT/tools/docker" 2>&1 | tail -n 4
 
 run_godot() {
+	# Локальные переопределения — только если каталоги есть: на машине
+	# автора SDK и кэш gradle лежат в tools/ (в git не входят), а в CI
+	# их нет и должны работать умолчания образа. Безусловный -e с
+	# несуществующим путём ломал бы gradle-сборку в CI.
+	local extra_env=()
+	if [ -d "$ROOT/tools/gradle-home" ]; then
+		extra_env+=(-e "GRADLE_USER_HOME=/work/tools/gradle-home")
+	fi
+	if [ -d "$ROOT/tools/emulator/sdk" ]; then
+		extra_env+=(-e "ANDROID_HOME=/work/tools/emulator/sdk")
+		extra_env+=(-e "ANDROID_SDK_ROOT=/work/tools/emulator/sdk")
+	fi
 	docker run --rm \
 		--user "$UID_GID" \
 		-v "$ROOT:/work" \
@@ -46,19 +58,70 @@ run_godot() {
 		-e MBT_KEYSTORE="${MBT_KEYSTORE:-}" \
 		-e MBT_KEY_ALIAS="${MBT_KEY_ALIAS:-}" \
 		-e MBT_KEY_PASS="${MBT_KEY_PASS:-}" \
+		"${extra_env[@]}" \
 		-w /work \
 		"$IMAGE" "$@"
 }
 
-# Все четыре теста обязательны: логика ввода, обновление,
-# профили игроков, инвариант
-# погони. Тест, который ни разу не падает на сломанном коде, бесполезен:
-# правя геометрию погони, сначала ломаем правило руками, убеждаемся, что
-# CHASE_TEST это ловит, и только потом ставим исправленное.
+# Произвольная команда в том же контейнере (без обёртки движка):
+# нужна для подготовки gradle-шаблона — Godot её не делает сам.
+run_sh() {
+	local extra_env=()
+	if [ -d "$ROOT/tools/gradle-home" ]; then
+		extra_env+=(-e "GRADLE_USER_HOME=/work/tools/gradle-home")
+	fi
+	if [ -d "$ROOT/tools/emulator/sdk" ]; then
+		extra_env+=(-e "ANDROID_HOME=/work/tools/emulator/sdk")
+		extra_env+=(-e "ANDROID_SDK_ROOT=/work/tools/emulator/sdk")
+	fi
+	docker run --rm \
+		--user "$UID_GID" \
+		-v "$ROOT:/work" \
+		-v "$ROOT/tools/home:/home/agent" \
+		-e HOME=/tmp/mbt-home \
+		-w /work \
+		--entrypoint "$1" \
+		"$IMAGE" "${@:2}"
+}
+
+# Gradle-шаблон Android (game/android/build) в репозиторий НЕ входит:
+# генерированное (90МБ godot-lib, ассеты, .import-мусор). Перед первым
+# Android-экспортом разворачиваем его из android_source.zip образа,
+# кладём наш AAR плагина MbtInstall и помечаем версию шаблона.
+# Идемпотентно: если каталог уже есть (машина автора), только
+# обновляем AAR и метки. Без этого экспорт падает «no version info»
+# или давится дублями классов из build/assets.
+ensure_android_build() {
+	run_sh sh -c '
+		set -eu
+		if [ ! -f /work/game/android/build/build.gradle ]; then
+			tpl=""
+			for d in /home/agent/.local/share/godot/export_templates /root/.local/share/godot/export_templates; do
+				if [ -f "$d/4.3.stable/android_source.zip" ]; then tpl="$d/4.3.stable/android_source.zip"; break; fi
+			done
+			if [ -z "$tpl" ]; then echo "ensure_android_build: нет android_source.zip" >&2; exit 3; fi
+			mkdir -p /work/game/android/build
+			unzip -q -o "$tpl" -d /work/game/android/build
+		fi
+		mkdir -p /work/game/android/build/libs/release /work/game/android/build/libs/debug
+		cp -f /work/tools/plugin/mbt-install/aar/MbtInstall.release.aar /work/game/android/build/libs/release/MbtInstall.aar
+		cp -f /work/tools/plugin/mbt-install/aar/MbtInstall.debug.aar /work/game/android/build/libs/debug/MbtInstall.aar
+		echo "4.3.stable" > /work/game/android/.build_version
+		touch /work/game/android/build/.gdignore
+		find /work/game/android/build/res -name "*.import" -delete 2>/dev/null || true
+	'
+}
+
+# Все пять тестов обязательны: логика ввода, обновление, проходимость
+# уровня, профили игроков, инвариант погони. Тест, который ни разу не
+# падает на сломанном коде, бесполезен: правя геометрию погони,
+# сначала ломаем правило руками, убеждаемся, что CHASE_TEST это ловит,
+# и только потом ставим исправленное.
 run_tests() {
 	run_godot --headless --path game --import
 	run_godot --headless --path game --script res://tests/logic_test.gd
 	run_godot --headless --path game --script res://tests/update_test.gd
+	run_godot --headless --path game --script res://tests/end_test.gd
 	run_godot --headless --path game --script res://tests/profiles_test.gd
 	run_godot --headless --path game --script res://tests/chase_test.gd
 }
@@ -70,6 +133,12 @@ run_exports() {
 	if [ "$#" -gt 0 ]; then
 		PRESETS=("$@")
 	fi
+	# Gradle-шаблон нужен только Android-пресетам — остальным он лишний.
+	for preset in "${PRESETS[@]}"; do
+		case "$preset" in
+		Android*) ensure_android_build; break ;;
+		esac
+	done
 	# game/dist в git не входит (см. .gitignore): на чистом раннере его
 	# нет, а Godot не создаёт каталог под файл экспорта и падает
 	# «The given export path doesn't exist».

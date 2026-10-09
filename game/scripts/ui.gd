@@ -22,12 +22,36 @@ static func panel_sb(bg: Color, radius: float, border := Color(0, 0, 0, 0), bw :
 
 
 ## Десктоп — там, где нет системной клавиатуры.
+## force_touch включает мобильную раскладку принудительно — для стенда
+## (--touch-kb) и headless-тестов: игру и меню переключает игра.
+static var force_touch := false
 static func is_desktop() -> bool:
-	return not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD)
+	return not force_touch and not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD)
 
 
 ## Затемнение героев ночью: светлый мех не светится на тёмном фоне.
 const NIGHT_TINT := Color(0.72, 0.76, 0.90)
+
+
+## Низ верхнего выреза экрана (камера-капля, требование автора 10.2026:
+## полноэкранная игра залезает под камеру, та закрывает имя игрока).
+## Чистая функция от списка вырезов — матрица в тестах; живые вырезы
+## берёт top_inset() (на десктопе их нет — всегда ноль).
+static func cutout_bottom(cutouts: Array, view_h: float) -> float:
+	var out := 0.0
+	for r in cutouts:
+		var rc := r as Rect2
+		if rc == null:
+			continue
+		if rc.position.y < view_h * 0.1:
+			out = maxf(out, rc.end.y)
+	return out
+
+
+static func top_inset(view_h: float) -> float:
+	if not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
+		return 0.0
+	return cutout_bottom(DisplayServer.get_display_cutouts(), view_h)
 
 
 ## Эффективная высота: низ, занятый клавиатурой, не наш. Пол не
@@ -48,4 +72,9 @@ const CARD_NIGHT := Color(0.137, 0.173, 0.267, 0.65)
 const ERR_DAY := Color("#c02727")
 const ERR_NIGHT := Color("#ff7a6b")
 const ERR_DAY_HEX := "#c02727"
+
+## Вспышка клетки: ответ на нажатие, которое ничего не изменило (откат
+## в серую клетку, проглоченный дубль). Видно, что игра услышала.
+const HINT_DAY_HEX := "#2f7fd0"
+const HINT_NIGHT_HEX := "#7fc0ff"
 const ERR_NIGHT_HEX := "#ff7a6b"

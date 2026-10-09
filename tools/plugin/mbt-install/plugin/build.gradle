@@ -1,0 +1,33 @@
+plugins {
+	id 'com.android.library'
+}
+
+android {
+	namespace 'ru.mbt.install'
+	compileSdk 34
+
+	defaultConfig {
+		minSdk 21
+	}
+
+	buildTypes {
+		release {
+			minifyEnabled false
+		}
+		debug {
+			minifyEnabled false
+		}
+	}
+
+	compileOptions {
+		sourceCompatibility JavaVersion.VERSION_17
+		targetCompatibility JavaVersion.VERSION_17
+	}
+}
+
+dependencies {
+	// Godot Android library (GodotPlugin, UsedByGodot) с MavenCentral.
+	implementation 'org.godotengine:godot:4.3.0.stable'
+	// FileProvider.
+	implementation 'androidx.core:core:1.12.0'
+}

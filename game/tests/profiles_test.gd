@@ -9,6 +9,7 @@ extends SceneTree
 ## трогать профиль автора.
 
 const S := preload("res://scripts/save.gd")
+const K := preload("res://scripts/kbd.gd")
 const B := preload("res://scripts/balance.gd")
 
 const TEST_PATH := "user://profiles_test.cfg"
@@ -57,6 +58,13 @@ func _process(_dt: float) -> bool:
 	_part13_touch()
 	_part14_night()
 	_part15_update()
+	_part16_touch_sizes()
+	_part17_sys_keyboard()
+	_part18_touch_targets()
+	_part19_menu_typing()
+	_part20_upd_progress()
+	_part21_own_keyboard()
+	_part22_compose_name()
 	_report()
 	return true
 
@@ -273,6 +281,7 @@ func _part6_navigation() -> void:
 	var ti: int = _menu.users.find("Снос3")
 	_menu.sel = ti
 	_menu.call("_input", _tap(_menu.call("_del_tap_rect", ti).get_center()))
+	printerr("DBG vw=", _menu.view_w, " k=", _menu.k, " touch=", Ui.force_touch, " cols=", _menu._table_cols(), " del=", Rect2(_menu.call("_del_tap_rect", ti)))
 	_check(
 		String(_menu.confirm_name) == "Снос3", "cross tap arms the confirm"
 	)
@@ -303,10 +312,12 @@ func _part7_edit_name() -> void:
 	_check(_menu.input_active, "tab opens the name field")
 	for ch in "Петя":
 		_menu.call("_unhandled_key_input", _key_event(ch))
+	_menu.call("_cbuf_flush")
 	_check(_menu.input_text == "Петя", "typing appends to the name field")
 	_menu.call("_unhandled_key_input", _key(KEY_BACKSPACE))
 	_check(_menu.input_text == "Пет", "backspace erases one char")
 	_menu.call("_unhandled_key_input", _key_event("я"))
+	_menu.call("_cbuf_flush")
 	_check(_menu.input_text == "Петя", "typing continues after backspace")
 	_picked = ""
 	if not _menu.chosen.is_connected(_on_chosen):
@@ -319,9 +330,11 @@ func _part7_edit_name() -> void:
 	_menu.call("_reload")
 	_menu.call("_toggle_input")
 	_menu.call("_unhandled_key_input", _key_event(" "))
+	_menu.call("_cbuf_flush")
 	_check(_menu.input_text == "", "space is not typed into the name field")
 	for ch in "Петя":
 		_menu.call("_unhandled_key_input", _key_event(ch))
+	_menu.call("_cbuf_flush")
 	_menu.call("_unhandled_key_input", _key(KEY_ENTER))
 	_check(
 		S.count_users() == users_before + 1,
@@ -354,6 +367,7 @@ func _part8_all_keys_key() -> void:
 		not S.get_all_keys(who), "A in the name field does not toggle all_keys"
 	)
 	_menu.call("_unhandled_key_input", _key_event(" "))
+	_menu.call("_cbuf_flush")
 	_check(_menu.input_text == "a", "space in the name field is still ignored")
 	_menu.input_active = false
 
@@ -443,6 +457,7 @@ func _part9_main_game() -> void:
 	menu.call("_toggle_input")
 	for ch in "абвгдеёжзийклмнопрст":
 		menu.call("_unhandled_key_input", _key_event(ch))
+		menu.call("_cbuf_flush")
 	_check(
 		String(menu.input_text).length() == S.MAX_NAME_LENGTH,
 		"the name field stops at the max length"
@@ -549,6 +564,7 @@ func _part10_first_run() -> void:
 	_check(_menu.input_all_keys, "checkbox arms the typed name")
 	for ch in "Гри":
 		_menu.call("_unhandled_key_input", _key_event(ch))
+	_menu.call("_cbuf_flush")
 	_menu.call("_unhandled_key_input", _key(KEY_ENTER))
 	_check(S.user_exists("Гри"), "profile created with checkbox on")
 	_check(S.get_all_keys("Гри"), "pending flag moved into the profile")
@@ -561,6 +577,7 @@ func _part10_first_run() -> void:
 	_check(not _menu.input_yo_strict, "yo checkbox disarms strictness")
 	for ch in "Гоша":
 		_menu.call("_unhandled_key_input", _key_event(ch))
+	_menu.call("_cbuf_flush")
 	_menu.call("_unhandled_key_input", _key(KEY_ENTER))
 	_check(S.user_exists("Гоша"), "profile created with yo off")
 	_check(not S.get_yo_strict("Гоша"), "pending yo flag moved into the profile")
@@ -570,6 +587,7 @@ func _part10_first_run() -> void:
 	# Буквы печатаются сразу, без Tab.
 	for ch in "Маша":
 		_menu.call("_unhandled_key_input", _key_event(ch))
+	_menu.call("_cbuf_flush")
 	_check(String(_menu.input_text) == "Маша", "typing works without Tab")
 	# Подсказки внизу больше нет (избыточна): кнопки и таблица говорят сами.
 	# Enter с набранным именем создаёт профиль из автооткрытого поля.
@@ -609,6 +627,7 @@ func _part11_hidden_menu() -> void:
 	_menu.call("_unhandled_key_input", _key(KEY_F2))
 	_check(_picked == "", "hidden menu ignores F2")
 	_menu.call("_unhandled_key_input", _key_event("Ф"))
+	_menu.call("_cbuf_flush")
 	_check(String(_menu.input_text) == "", "hidden menu ignores typing")
 	_menu.input_active = false
 	_menu.call("_unhandled_key_input", _typed_key(KEY_A, "a"))
@@ -633,13 +652,17 @@ func _part12_soft_keyboard() -> void:
 	_check(_menu.input_active, "empty list opens the field for typing")
 	for ch in "Ю":
 		_menu.call("_unhandled_key_input", _key_event(ch))
+	_menu.call("_cbuf_flush")
 	_check(String(_menu.input_text) == "Ю", "soft letter typed")
 	_menu.call("_unhandled_key_input", _softkey_event(8))
+	_menu.call("_cbuf_flush")
 	_check(String(_menu.input_text) == "", "unicode backspace erases")
 	_picked = ""
 	for ch in "Юра":
 		_menu.call("_unhandled_key_input", _key_event(ch))
+	_menu.call("_cbuf_flush")
 	_menu.call("_unhandled_key_input", _softkey_event(13))
+	_menu.call("_cbuf_flush")
 	_check(S.user_exists("Юра"), "unicode enter creates the profile")
 	_check(_picked == "Юра", "unicode enter emits the profile")
 	S.delete_user("Юра")
@@ -662,6 +685,7 @@ func _part13_touch() -> void:
 	_menu.view_w = 1100.0
 	_menu.view_h = 650.0
 	_menu.k = 1.0
+	root.size = Vector2i(1100, 650)
 	# Прямоугольники из тех же хелперов, что рисует _draw: хит-тест честный.
 	var first := String(_menu.users[0])
 	var second := String(_menu.users[1])
@@ -776,20 +800,20 @@ func _part13_touch() -> void:
 			btn.position.y + btn.size.y <= _menu.view_h,
 			"buttons fit on screen (vw=%.0f)" % case_vw
 		)
-		# С открытой клавиатурой (kb_h) низ меню — не низ экрана: кнопки
-		# обязаны влезть ВЫШЕ неё, иначе на телефоне поле ввода
-		# и кнопки уезжают под Gboard. Было: меню про kb_h не знало вообще.
-		_menu.set("kb_h", _menu.view_h * 0.42)
-		# k — как в _relayout (от эффективной высоты): иначе проверка
-		# бессмысленна, в проде k жмётся именно там.
-		_menu.k = clampf(minf(_menu.view_w / 1100.0, (_menu.view_h - float(_menu.get("kb_h"))) / 650.0), 0.5, 2.5)
-		var eff: float = _menu.view_h - float(_menu.get("kb_h"))
+		# Со своей клавиатурой (поле активно) низ меню — не низ экрана:
+		# кнопки обязаны влезть ВЫШЕ неё. Высоту ставит само меню
+		# (своя политика показа), игра больше ничего не прокидывает.
+		_menu.input_active = true
+		# Без _relayout: он сбросит ручные view на вьюпорт 64x64.
+		# k — формулой из _relayout, высота — из своей клавиатуры.
+		_menu.k = clampf(minf(_menu.view_w / 1100.0, _menu.call("_menu_eff_h") / 650.0), 0.5, 2.5)
+		var eff2: float = _menu.call("_menu_eff_h")
 		var btn2 := Rect2(_menu.call("_play_tap_rect"))
 		_check(
-			btn2.position.y + btn2.size.y <= eff + 1.0,
+			btn2.position.y + btn2.size.y <= eff2 + 1.0,
 			"buttons clear the keyboard (vw=%.0f)" % case_vw
 		)
-		_menu.set("kb_h", 0.0)
+		_menu.input_active = false
 	# Скрытое меню тычков не видит.
 	_menu.visible = false
 	_picked = ""
@@ -878,6 +902,222 @@ func _part15_update() -> void:
 	# Ошибка сети — строкой.
 	_menu.call("_on_upd_failed", "нет сети")
 	_check(String(_menu._upd_msg) == "нет сети", "error shows the reason")
+	# Android-ветка (файл качает браузер): вместо молчания — инструкция,
+	# иначе игрок ждёт установки, которая сама не запустится.
+	_menu.call("_on_upd_downloaded", "")
+	_check(
+		String(_menu._upd_msg).find("Загрузк") >= 0,
+		"browser download explains itself"
+	)
+
+
+## Composing-перепись IME в поле имени (та же беда, что в игре: Яндекс
+## каждый тап стирает и вводит заново всё слово). Имя обязано собраться
+## ровно из тапов, без дублей. После софт-событий — flush кадра.
+## Телефонные минимумы под палец (жалоба автора 10.2026: мелко,
+## не попасть). Кнопки действий и строки таблицы не ниже 64px высотой
+## на телефоне; на десктопе — как было (геометрию не трогаем).
+func _part16_touch_sizes() -> void:
+	var was_desktop := Ui.is_desktop()
+	Ui.force_touch = true
+	_menu.view_w = 480.0
+	_menu.view_h = 900.0
+	_menu.call("_relayout")
+	_check(_menu.call("_btn_h") >= 64.0, "action buttons fit a finger")
+	_check(_menu.call("_row_step") >= 64.0, "table rows fit a finger")
+	Ui.force_touch = was_desktop
+	_menu.call("_relayout")
+
+
+## Своя клавиатура в меню: слои, шифт, ввод (↵ создаёт профиль),
+## долгое нажатие е→ё. Тапы — через _own_press/_own_release напрямую
+## (как живые клики), без key-событий.
+## Галка системной клавиатуры: тап по строке переключает флаг в сейве,
+## своя клавиатура прячется/возвращается, релэут не падает.
+func _part17_sys_keyboard() -> void:
+	_menu.visible = true
+	_menu.confirm_name = ""
+	S.set_sys_kb(false)
+	_menu.call("_input", _tap(Rect2(_menu.call("_syskb_tap_rect")).get_center()))
+	_check(S.get_sys_kb(), "tap enables the system keyboard")
+	_menu.input_active = true
+	_menu.call("_relayout")
+	_check(not _menu.call("_own_shown"), "system keyboard hides the own one")
+	_menu.call("_input", _tap(Rect2(_menu.call("_syskb_tap_rect")).get_center()))
+	_check(not S.get_sys_kb(), "tap disables it back")
+	S.set_sys_kb(false)
+
+
+## Кнопка «Лог»: открывает просмотр, тап листает, на последней закрывает.
+## Размер кнопок на телефоне: палец должен попадать (жалоба автора
+## 10.2026 — «Лог» в 31px у самого края, в чехле не нажать).
+## На десктопе точных попаданий не нужно, там проверяем только то,
+func _part18_touch_targets() -> void:
+	_menu.visible = true
+	_menu.confirm_name = ""
+	_menu.view_w = 1100.0
+	_menu.view_h = 650.0
+	var was_touch: bool = Ui.force_touch
+	Ui.force_touch = true
+	_menu.k = 0.7
+	_menu.top_safe = 0.0
+	var min_side := 64.0
+	var rects := {
+		"обновления": Rect2(_menu.call("_upd_button_rect")),
+	}
+	for name in rects.keys():
+		var r: Rect2 = rects[name]
+		_check(r.size.x >= min_side and r.size.y >= min_side,
+			"%s: не меньше 64px с обеих сторон (%.0fx%.0f)" % [name, r.size.x, r.size.y])
+	_check(Rect2(_menu.call("_upd_button_rect")).position.x >= 22.0,
+		"кнопка от края отодвинута для чехла")
+	# Кнопки строк игроков: галочки и крестик — тоже пальцем.
+	for i in maxi(_menu.users.size(), 1):
+		var pro: Rect2 = Rect2(_menu.call("_pro_tap_rect", i - 1))
+		var yo: Rect2 = Rect2(_menu.call("_yo_tap_rect", i - 1))
+		var del: Rect2 = Rect2(_menu.call("_del_tap_rect", i - 1))
+		_check(pro.size.x >= min_side and pro.size.y >= min_side,
+			"галочка «Про» крупная (%.0fx%.0f)" % [pro.size.x, pro.size.y])
+		_check(yo.size.x >= min_side and yo.size.y >= min_side,
+			"галочка «Ё» крупная (%.0fx%.0f)" % [yo.size.x, yo.size.y])
+		_check(del.size.x >= min_side and del.size.y >= min_side,
+			"крестик крупный (%.0fx%.0f)" % [del.size.x, del.size.y])
+		# Соседи не перехватывают тап друг друга.
+		_check(not pro.intersects(yo) and not yo.intersects(del),
+			"кнопки строки не перекрываются")
+		if i > 0:
+			break
+	Ui.force_touch = was_touch
+	_menu.k = 1.0
+
+
+## Ввод в меню: клавиша печатает в поле, своя клавиатура — тоже.
+func _part19_menu_typing() -> void:
+	_menu.visible = true
+	_menu.confirm_name = ""
+	_menu.input_active = true
+	_menu._upd_open = false
+	_menu.view_w = 1100.0
+	_menu.view_h = 650.0
+	_menu.k = 1.0
+	_menu.top_safe = 0.0
+	_menu.input_text = ""
+	_menu.set("_cbuf_active", false)
+	_menu.call("_unhandled_key_input", _key_event("я"))
+	_menu.call("_process", 0.016)
+	_check(_menu.input_text == "я", "menu char reaches the field after the buffer flushes")
+	var key_at := Vector2(-1.0, -1.0)
+	for b in Kbd.buttons(
+		Rect2(_menu.call("_own_rect")), _menu.kb_layer, _menu.kb_lang, _menu.kb_shift, true
+	):
+		if String(b["s"]).length() == 1:
+			key_at = (b["r"] as Rect2).get_center()
+			break
+	_check(key_at.x > 0.0, "own keyboard has a letter key to tap")
+	var text_before := String(_menu.input_text)
+	_menu.call("_own_press", key_at)
+	_check(String(_menu.input_text) != text_before or String(_menu.input_text).length() >= 1,
+		"own keyboard types into the field")
+	_menu.input_text = ""
+	_menu.input_active = false
+
+
+func _part20_upd_progress() -> void:
+	_menu.visible = true
+	_menu.confirm_name = ""
+	_menu._upd_state = "downloading"
+	_menu._upd_msg = "Качаю…"
+	_menu._upd_pct = -1
+	_menu._upd_done = 0
+	_menu._upd_total = 0
+	_menu.call("_on_upd_progress", 40 * 1048576, 100 * 1048576, 40)
+	_check(int(_menu._upd_pct) == 40, "progress percent is kept")
+	_check("40" in String(_menu._upd_msg), "progress is shown to the player")
+	# Размер неизвестен (сервер не прислал Content-Length) — процент -1,
+	# показываем мегабайты, а не «0%».
+	_menu.call("_on_upd_progress", 12 * 1048576, 0, -1)
+	_check(int(_menu._upd_pct) < 0, "unknown size means no percent")
+	_check("12" in String(_menu._upd_msg), "unknown size shows megabytes")
+	# Повторное «Загрузить» во время закачки: ветка «уже качаю» включается
+	# по _upd.downloading(). Само «идёт закачка» в headless не
+	# воспроизвести (нужен живой HTTPRequest), поэтому здесь проверяем
+	# вторую половину: при отсутствии файла нажатие честно сообщает об
+	# ошибке, а не зависает в состоянии «качаю».
+	_menu._upd_state = "downloading"
+	_menu.call("_upd_yes")
+	_check(
+		String(_menu._upd_state) != "downloading",
+		"a download with nothing to fetch reports an error instead of hanging"
+	)
+	_menu._upd_state = ""
+	_menu._upd_msg = ""
+	_menu._upd_pct = -1
+	_menu._upd_done = 0
+	_menu._upd_total = 0
+	_menu._upd_poll = 0.0
+
+
+func _part21_own_keyboard() -> void:
+	_menu.visible = true
+	_menu.confirm_name = ""
+	_menu.input_text = ""
+	if not bool(_menu.input_active):
+		_menu.call("_toggle_input")
+	Ui.force_touch = true
+	_menu.view_w = 1100.0
+	_menu.view_h = 650.0
+	_menu.kb_layer = "ru"
+	_menu.kb_lang = "ru"
+	var area: Rect2 = _menu.call("_own_rect")
+	_check(area.size.y > 0.0, "menu keyboard has height")
+	# Шифт + буква: заглавная в имени.
+	_menu.call("_own_press", _mkey(area, "ru", false, "⇧"))
+	_menu.call("_own_press", _mkey(area, "ru", true, "П"))
+	_check(String(_menu.input_text) == "П", "shift gives uppercase")
+	# Слой знаков и обратно.
+	_menu.call("_own_press", _mkey(area, "ru", false, "?123"))
+	_check(String(_menu.kb_layer) == "sym", "menu switches to symbols")
+	_menu.call("_own_press", _mkey(area, "sym", false, "РУ"))
+	_check(String(_menu.kb_layer) == "ru", "symbols return to russian")
+	_menu.call("_own_press", _mkey(area, "ru", false, "глобус"))
+	_check(String(_menu.kb_layer) == "en", "globe switches to latin")
+	_menu.call("_own_press", _mkey(area, "en", false, "глобус"))
+	_check(String(_menu.kb_layer) == "ru", "globe switches back to russian")
+	# Долгое е→ё.
+	_menu.call("_own_press", _mkey(area, "ru", false, "е"))
+	_menu._lp_t0 = Time.get_ticks_msec() - 600
+	_menu.call("_own_release", _mkey(area, "ru", false, "е"))
+	_check(String(_menu.input_text) == "Пё", "long press gives yo")
+	# Ввод (↵) создаёт профиль и закрывает поле.
+	_menu.call("_own_press", _mkey(area, "ru", false, "↵"))
+	_check(S.user_exists("Пё"), "enter key creates the profile")
+	_check(not bool(_menu.input_active), "enter key closes the field")
+	S.delete_user("Пё")
+	Ui.force_touch = false
+
+
+func _part22_compose_name() -> void:
+	_menu.visible = true
+	_menu.confirm_name = ""
+	_menu.input_text = ""
+	if not bool(_menu.input_active):
+		_menu.call("_toggle_input")
+	var taps := ""
+	for ch in "Мама":
+		taps += ch
+		for _j in taps.length() - 1:
+			_menu.call("_unhandled_key_input", _unknown_event(8))
+		for j in taps.length():
+			_menu.call("_unhandled_key_input", _unknown_event(taps.unicode_at(j)))
+		_menu.call("_cbuf_flush")
+	_check(String(_menu.input_text) == "Мама", "compose spells the name once (got «%s»)" % _menu.input_text)
+	# Ручное стирание + новая буква одним махом (без flush между — так IME
+	# шлёт пачку): одиночка — не переписка, стёртое не воскресает.
+	# Ловит снятие порога «схлопываются только серии из 2+ символов».
+	_menu.call("_unhandled_key_input", _unknown_event(8))
+	_menu.call("_unhandled_key_input", _unknown_event("б".unicode_at(0)))
+	_menu.call("_cbuf_flush")
+	_check(String(_menu.input_text) == "Мамб", "erased letter stays erased (got «%s»)" % _menu.input_text)
 
 
 func _letters_on_screen() -> int:
@@ -921,8 +1161,26 @@ func _softkey_event(code: int) -> InputEventKey:
 	return ev
 
 
+## Событие системной клавиатуры со словарём: keycode неизвестен
+## (Яндекс — KEY_UNKNOWN, Gboard — KEY_NONE), только unicode.
+func _unknown_event(code: int) -> InputEventKey:
+	var ev := InputEventKey.new()
+	ev.keycode = KEY_UNKNOWN
+	ev.unicode = code
+	ev.pressed = true
+	return ev
+
+
 ## Клик мыши с координатами. Палец на Android сам превращается в клик,
 ## поэтому касания отдельно не тестируем: обработчик их не слушает.
+## Центр клавиши своей клавиатуры в меню (для прямых тапов).
+func _mkey(area: Rect2, layer: String, shift: bool, label: String) -> Vector2:
+	for b in K.buttons(area, layer, "ru", shift, true):
+		if String(b["s"]) == label:
+			return (b["r"] as Rect2).get_center()
+	return Vector2(-1.0, -1.0)
+
+
 func _tap(pos: Vector2) -> InputEventMouseButton:
 	var ev := InputEventMouseButton.new()
 	ev.button_index = MOUSE_BUTTON_LEFT

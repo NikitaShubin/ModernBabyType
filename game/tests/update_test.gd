@@ -36,6 +36,22 @@ func _initialize() -> void:
 		"notes drop the changelog link"
 	)
 	_check(U.short_notes("* пункт один") == "пункт один", "notes drop markdown stars")
+	# Диаг-сборки: максимальный номер из кучи имён.
+	# Нативный мост: на десктопе плагина нет — всегда false, откат
+	# на штатный путь (браузер/перезапуск). Живой плагин — только
+	# на устройстве (эмулятор/телефон).
+	_check(not Mbt.has_plugin(), "no plugin on desktop")
+	_check(not Mbt.install_apk("/nope.apk"), "install refuses without plugin")
+	_check(not Mbt.share_file("/nope.txt"), "share refuses without plugin")
+	# Повторное нажатие «Загрузить» во время закачки: второй запрос
+	# сбивал первый (жалоба автора 10.2026). Пока HTTPRequest занят —
+	# повтор игнорируется, закачка не перезапускается. Проверяем
+	# состояние и читаемость размеров (их берёт полоска прогресса).
+	var up := U.new()
+	_check(not up.downloading(), "no download is running at start")
+	_check(up.total_bytes() >= 0, "total size is readable")
+	_check(up.done_bytes() >= 0, "downloaded size is readable")
+
 	# Самообновление есть ровно там, где игра умеет заменить себя сама.
 	_check(
 		U.self_installs() == (OS.get_name() == "Linux" or OS.get_name() == "Windows"),

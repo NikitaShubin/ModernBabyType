@@ -21,6 +21,10 @@ const MAX_NAME_LENGTH := 15
 ## 0 — день, 1 — ночь. Ручной выбор запоминается, по умолчанию система.
 const SECTION_DISPLAY := "display"
 const KEY_NIGHT := "night_mode"
+## Системная клавиатура вместо своей (галочка в меню). По умолчанию —
+## своя: системные IME коверкают ввод composing-перепиской. Кому нужна
+## привычная — включает, борьба с автозаменой уже встроена (comp-буфер).
+const KEY_SYS_KB := "sys_kb"
 const NIGHT_AUTO := -1
 const NIGHT_DAY := 0
 const NIGHT_ON := 1
@@ -207,6 +211,17 @@ static func touch(user_name: String) -> void:
 static func get_night_mode() -> int:
 	var cfg := _cfg()
 	return clampi(int(cfg.get_value(SECTION_DISPLAY, KEY_NIGHT, NIGHT_AUTO)), NIGHT_AUTO, NIGHT_ON)
+
+
+static func get_sys_kb() -> bool:
+	var cfg := _cfg()
+	return bool(cfg.get_value(SECTION_DISPLAY, KEY_SYS_KB, false))
+
+
+static func set_sys_kb(on: bool) -> void:
+	var cfg := _cfg()
+	cfg.set_value(SECTION_DISPLAY, KEY_SYS_KB, on)
+	cfg.save(PATH)
 
 
 static func set_night_mode(mode: int) -> void:

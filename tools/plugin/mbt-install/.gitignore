@@ -1,0 +1,5 @@
+# Артефакты локальной сборки плагина: пересоздаются
+# gradle :plugin:assembleRelease/:plugin:assembleDebug.
+# Сами AAR лежат в aar/ и входят в репозиторий (см. корневой .gitignore).
+build/
+.gradle/

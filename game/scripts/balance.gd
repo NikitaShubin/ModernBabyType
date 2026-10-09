@@ -62,15 +62,39 @@ static func stars_for_result(won: bool, accuracy: float, errors: int) -> int:
 	return 1
 
 
-## Разбить длинные строки под ширину экрана (портрет телефона): режем
-## по словам, пробел-разделитель уезжает в конец куска (пробел — тоже
-## клетка, символы не теряются). Чистая функция, матрица в logic_test.
-## Тексты с одиночными пробелами (проверено grep), двойные схлопнутся.
-static func fit_lines(raw: Array[String], max_chars: int) -> Array[String]:
-	var out: Array[String] = []
+## Глобальные смещения строк по оси текста. Разрыв строки не символ:
+## конец строки — это начало следующей (см. _advance в main).
+static func line_bases(lines: Array) -> Array:
+	var out: Array = []
+	var acc := 0
+	for ln in lines:
+		out.append(acc)
+		acc += String(ln).length()
+	return out
+
+
+## Клетка по физическому смещению: первая строка, в которой смещение
+## ещё внутри. За концом текста — Vector2i(size, 0): это «уровень
+## набран» (так же считает _advance).
+static func cell_at(lines: Array, base: Array, offset: int) -> Vector2i:
+	for i in lines.size():
+		if offset < int(base[i]) + String(lines[i]).length():
+			return Vector2i(i, offset - int(base[i]))
+	return Vector2i(lines.size(), 0)
+
+
+## Разбивка строк с отметкой, сколько пробелов-разделителей ушло в
+## огрызок ДО каждого куска. Пробел на месте разрыва не клетка (см.
+## fit_lines), поэтому физические смещения после пересборки не совпадают
+## со старыми: считать надо по логической оси — без этих пробелов.
+static func fit_marked(raw: Array[String], max_chars: int) -> Dictionary:
+	var lines: Array[String] = []
+	var drops: Array[int] = []
+	var dropped := 0
 	for line in raw:
 		if line.length() <= max_chars:
-			out.append(line)
+			lines.append(line)
+			drops.append(dropped)
 			continue
 		var cur := ""
 		for w0 in line.split(" ", false):
@@ -79,16 +103,83 @@ static func fit_lines(raw: Array[String], max_chars: int) -> Array[String]:
 				# Слово-монстр (в текстах таких нет, но без страховки
 				# было бы зависание): рубим жёстко кусками.
 				if cur != "":
-					out.append(cur + " ")
+					lines.append(cur)
+					drops.append(dropped)
+					dropped += 1
 					cur = ""
-				out.append(w.left(max_chars))
+				lines.append(w.left(max_chars))
+				drops.append(dropped)
 				w = w.substr(max_chars)
 			var add := w if cur == "" else cur + " " + w
 			if add.length() > max_chars:
-				out.append(cur + " ")
+				lines.append(cur)
+				drops.append(dropped)
+				dropped += 1
 				cur = w
 			else:
 				cur = add
 		if cur != "":
-			out.append(cur)
+			lines.append(cur)
+			drops.append(dropped)
+	return {"lines": lines, "drops": drops}
+
+
+## Таблица «логическое смещение → клетка»: переживает пересборку строк.
+static func logical_cells(lines: Array, drops: Array) -> Dictionary:
+	var out := {}
+	var acc := 0
+	for i in lines.size():
+		var d := 0
+		if i < drops.size():
+			d = int(drops[i])
+		for j in String(lines[i]).length():
+			out[acc + j - d] = Vector2i(i, j)
+		acc += String(lines[i]).length()
+	return out
+
+
+## Пересобрать строки под другую ширину, не сбив курсор и отметки.
+## Курсор и отметки задаются клеткой СТАРОЙ сборки, на выходе —
+## {"lines", "line", "pos", "table"}: table переводит логическое
+## смещение старой сборки в клетку новой. Чистая функция, матрица в
+## end_test (игра проходит уровень, который посреди набора сузили).
+static func reflow(
+	raw: Array[String], line: int, pos: int, max_chars: int
+) -> Dictionary:
+	# Старые строки — эталон: их смещения и есть логические.
+	var want := pos
+	for i in mini(line, raw.size()):
+		want += String(raw[i]).length()
+	var same: Array = raw.duplicate()
+	if max_chars <= 0 or max_chars >= 36:
+		return {
+			"lines": same,
+			"line": mini(line, same.size() - 1),
+			"pos": pos,
+			"table": logical_cells(same, []),
+			"old": raw,
+		}
+	var m := fit_marked(raw, max_chars)
+	var fresh: Array = m["lines"]
+	var table := logical_cells(fresh, m["drops"])
+	var cell: Vector2i = table.get(want, Vector2i(fresh.size(), 0))
+	return {
+		"lines": fresh, "line": cell.x, "pos": cell.y,
+		"table": table, "old": raw,
+	}
+
+
+## Разбить длинные строки под ширину экрана (узкий телефон): режем по
+## словам. Пробел на месте разрыва УБИРАЕМ: он всё равно невидим — за
+## ним ничего нет, а игра ждёт нажатия. Игрок видел «строка кончилась,
+## жми, дальше пусто» и не понимал, что нажимать (жалоба автора,
+## 07.10.2026: уровень на телефоне не проходился). Разрыв строки сам
+## разделяет слова, символы не теряются.
+## Чистая функция, матрица в logic_test и end_test (игра проходит
+## уровень целиком на узких экранах).
+## Тексты с одиночными пробелами (проверено grep), двойные схлопнутся.
+static func fit_lines(raw: Array[String], max_chars: int) -> Array[String]:
+	var out: Array[String] = []
+	for piece in fit_marked(raw, max_chars)["lines"]:
+		out.append(String(piece))
 	return out

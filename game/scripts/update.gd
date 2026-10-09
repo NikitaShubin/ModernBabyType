@@ -17,6 +17,9 @@ extends Node
 signal checked(ok: bool, tag: String, notes: String, url: String)
 signal downloaded(path: String)
 signal failed(what: String)
+## Прогресс закачки: (скачано байт, всего байт, процент). Процент < 0 —
+## размер ещё неизвестен (сервер не прислал Content-Length).
+signal progress(done: int, total: int, percent: int)
 
 const REPO := "NikitaShubin/ModernBabyType"
 const API_LATEST := "https://api.github.com/repos/" + REPO + "/releases/latest"
@@ -159,22 +162,54 @@ func _on_checked(_result: int, code: int, _headers: PackedStringArray, body: Pac
 
 
 ## Качать pending-URL в user://updates/. Имя файла — из URL.
+## Android с плагином: качаем сами во внутренний каталог и зовём
+## системный установщик (флоу «Загрузить → Установить» из игры).
+## Android без плагина (старые сборки): отдаём ссылку браузеру.
 func download() -> void:
 	if _pending_url.is_empty():
 		failed.emit("нечего качать")
 		return
+	# Повторное нажатие «Загрузить» во время закачки сбивало HTTPRequest
+	# (жалоба автора 10.2026: «закачка сбоит, если нажать обновление в
+	# процессе закачки»). Второй запрос не начинаем — просто молчим.
+	if downloading():
+		progress.emit(_dl.get_downloaded_bytes(), _dl.get_body_size(), -1)
+		return
+	if OS.get_name() == "Android" and Mbt.has_plugin():
+		DirAccess.make_dir_recursive_absolute("user://updates")
+		var fname := _pending_url.get_file()
+		_dl.download_file = "user://updates/" + fname
+		var err := _dl.request(_pending_url, ["User-Agent: ModernBabyType"])
+		if err != OK:
+			failed.emit("закачка не стартовала")
+		return
 	if not self_installs():
-		# Android: качать своё бессмысленно — файл всё равно ставит
-		# система через браузер. Отдаём ссылку и молчим.
+		# Android без плагина: качать своё бессмысленно — файл всё равно
+		# ставит система через браузер. Отдаём ссылку и молчим.
 		OS.shell_open(_pending_url)
 		downloaded.emit("")
 		return
 	DirAccess.make_dir_recursive_absolute("user://updates")
-	var fname := _pending_url.get_file()
-	_dl.download_file = "user://updates/" + fname
-	var err := _dl.request(_pending_url, ["User-Agent: ModernBabyType"])
-	if err != OK:
+	var fname2 := _pending_url.get_file()
+	_dl.download_file = "user://updates/" + fname2
+	var err2 := _dl.request(_pending_url, ["User-Agent: ModernBabyType"])
+	if err2 != OK:
 		failed.emit("закачка не стартовала")
+
+
+## Идёт ли сейчас закачка.
+func downloading() -> bool:
+	return _dl.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED
+
+
+## Размер заказанного файла (0 — сервер не прислал).
+func total_bytes() -> int:
+	return _dl.get_body_size()
+
+
+## Сколько уже скачано.
+func done_bytes() -> int:
+	return _dl.get_downloaded_bytes()
 
 
 func _on_downloaded(_result: int, code: int, _headers: PackedStringArray, _body: PackedByteArray) -> void:
@@ -182,6 +217,14 @@ func _on_downloaded(_result: int, code: int, _headers: PackedStringArray, _body:
 		failed.emit("оборвалось (%d)" % code)
 		return
 	var path: String = ProjectSettings.globalize_path("user://updates/" + _pending_url.get_file())
+	if OS.get_name() == "Android" and Mbt.has_plugin():
+		# Файл скачан самими — зовём системный установщик прямо из игры.
+		# Дальше штатный диалог «Установить» (молча ставить запрещено).
+		if Mbt.install_apk(path):
+			downloaded.emit(path)
+		else:
+			failed.emit("установщик не открылся")
+		return
 	_platform_install(path)
 
 

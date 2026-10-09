@@ -5,12 +5,25 @@ __pycache__/
 progress.json
 
 # tools/: в репозитории лежат скрипты сборки (tools/docker), генератор
-# иконок (tools/icons), хелпер визуального стенда (tools/x11test.py) и
-# скрипт эмулятора (tools/emulator/run-emu.sh). Всё остальное — кэши
-# и шаблоны, которые пересоздаются: export templates (1.7 ГБ), бинарь
-# движка, SDK и образы эмулятора.
+# иконок (tools/icons), хелпер визуального стенда (tools/x11test.py),
+# скрипт эмулятора (tools/emulator/run-emu.sh) и исходники нативного
+# плагина MbtInstall (tools/plugin/mbt-install: Java-мост для установки
+# APK и шаринга файлов — без него обновление из игры невозможно).
+# Всё остальное — кэши и шаблоны, которые пересоздаются: export
+# templates (1.7 ГБ), бинарь движка, SDK и образы эмулятора, собранные
+# AAR и каталог gradle-сборки Android (game/android/build разворачивает
+# build-game.sh из шаблона образа при первом Android-экспорте).
 tools/*
 !tools/docker/
 !tools/icons/
 !tools/x11test.py
 !tools/emulator/run-emu.sh
+!tools/plugin/
+tools/plugin/*
+!tools/plugin/mbt-install/
+
+# Gradle-сборка Android: генерированное (90МБ godot-lib, ассеты,
+# .import-мусор). Наш AAR кладётся туда скриптом из
+# tools/plugin/mbt-install/aar, версия шаблона — из
+# game/android/.build_version (он закоммичен отдельно).
+game/android/build/

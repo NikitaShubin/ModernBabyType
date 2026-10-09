@@ -41,6 +41,16 @@ var input_text := ""
 ## ещё нет — применять не к кому). При создании профиля переносится
 ## в него, затем сбрасывается.
 var input_all_keys := false
+## Composing-буфер IME для поля имени — тот же механизм, что в игре
+## (см. _comp_* в main.gd): клавиатура со словарём каждый тап стирает
+## и вводит заново всё слово. Строка линейная, поэтому вместо сетки —
+## просто снятый суффикс: при переписке возвращаем его и дописываем
+## только новый хвост. Разбор — во flush в _process, задержка ≤ кадр.
+var _cbuf_active := false
+var _cbuf_dels := 0
+var _cbuf_chars := ""
+var _cbuf_region := ""
+var _cbuf_cut := ""
 ## То же для строгой ё (колонка «Ё»): ждёт создания профиля.
 var input_yo_strict := true
 ## Самообновление с GitHub: только по кнопке (никакой фоновой магии).
@@ -50,6 +60,12 @@ var input_yo_strict := true
 var _upd: Updater = null
 var _upd_state := ""
 var _upd_msg := ""
+## Прогресс закачки: процент (-1 — размер неизвестен) и сколько байт.
+var _upd_pct := -1
+var _upd_done := 0
+var _upd_total := 0
+var _upd_poll := 0.0
+const UPD_POLL := 0.2
 var _upd_tag := ""
 var _upd_url := ""
 var _upd_notes: Array[String] = []
@@ -68,13 +84,20 @@ var confirm_name := ""
 var view_w := BASE_W
 var view_h := BASE_H
 var k := 1.0
-## Высота клавиатуры в пикселях канваса (ставит игра из своего kb_h —
-## см. main._relayout/_open_menu; 0 — скрыта). Низ, занятый клавиатурой,
-## не наш: блок строк и подсказка считаются от эффективной высоты,
-## иначе поле ввода и кнопки уезжают под Gboard на живом телефоне.
-## На стенде keyboard не вызывается (гейт движка), проверяется
-## симуляцией через игру (F4 в дебажной сборке) + profiles_test.
-var kb_h := 0.0
+## Своя клавиатура (модуль Kbd): видна, когда вводится имя, на сенсорных
+## устройствах. Высоту считаем сами от view_h — игра свою высоту больше
+## не ставит (у неё своя политика показа). Слой держит kb_layer.
+## Отступ от верха под вырез камеры (как в игре, см. Ui.top_inset).
+var top_safe := 0.0
+var kb_layer := "ru"
+var kb_lang := "ru"
+var kb_shift := false
+## Высота системной клавиатуры (ставит игра своим замером, только при
+## её галке). Своя высота считается отдельно (_own_h).
+var sys_kb_h := 0.0
+var _lp_act := ""
+var _lp_t0 := 0
+var kb_key_sb: StyleBoxFlat
 ## Ручной режим ночи из настроек: 0 день, 1 ночь, -1 авто (система).
 ## Кнопка крутит по кругу день → ночь → авто.
 var nmode := -1
@@ -85,6 +108,92 @@ var mono: Font
 var row_sb: StyleBoxFlat
 var row_idle_sb: StyleBoxFlat
 var box_sb: StyleBoxFlat
+## Своя клавиатура (модуль Kbd): клавиши прямо дают символы в поле ввода,
+## без IME — composing-переписям неоткуда взяться. Слой — флип.
+## Строка системной клавиатуры: бокс-галка + подпись. Тап — везде
+## по строке (зона 64px под палец).
+func _draw_syskb() -> void:
+	var r := _syskb_tap_rect()
+	draw_style_box(box_sb, Rect2(r.position.x, r.position.y, 32.0 * k, 32.0 * k))
+	if S.get_sys_kb():
+		var cx := r.position.x + 16.0 * k
+		var cy := r.position.y + 16.0 * k
+		draw_line(
+			Vector2(cx - 10.0 * k, cy + 2.0 * k), Vector2(cx, cy + 12.0 * k),
+			_ink(), 4.0 * k
+		)
+		draw_line(
+			Vector2(cx, cy + 12.0 * k), Vector2(cx + 16.0 * k, cy - 12.0 * k),
+			_ink(), 4.0 * k
+		)
+	_text("Системная клавиатура", Vector2(r.position.x + 44.0 * k, r.position.y + 30.0 * k), FONT_ROW, _ink())
+
+
+func _draw_own_kb() -> void:
+	if not _own_shown():
+		return
+	Kbd.draw(
+		self, _own_rect(), kb_layer, kb_lang, kb_shift, true, mono,
+		int(30.0 * k), kb_key_sb, selbox_sb, _uitext()
+	)
+
+
+func _own_press(pos: Vector2) -> bool:
+	if not _own_shown() or not input_active:
+		return false
+	var act := Kbd.hit(_own_rect(), kb_layer, kb_lang, kb_shift, true, pos)
+	if act == "":
+		return false
+	_lp_act = ""
+
+	if act == "стереть":
+		input_text = input_text.left(maxi(0, input_text.length() - 1))
+	elif act == "слой":
+		# Из знаков — назад на свой язык, иначе — в знаки.
+		kb_layer = kb_lang if kb_layer == "sym" else "sym"
+	elif act == "язык":
+		kb_lang = "en" if kb_lang == "ru" else "ru"
+		kb_layer = kb_lang
+	elif act == "шифт":
+		kb_shift = not kb_shift
+	elif act == "ввод":
+		_enter()
+	elif act == "пробел":
+		pass  # в имени пробелов не бывает
+	elif Kbd.long_alt(act) != "":
+		kb_shift = false
+		if input_text.length() < S.MAX_NAME_LENGTH:
+			input_text += act
+		_lp_act = act
+		_lp_t0 = Time.get_ticks_msec()
+	else:
+		kb_shift = false
+		if input_text.length() < S.MAX_NAME_LENGTH:
+			input_text += act
+	queue_redraw()
+	get_viewport().set_input_as_handled()
+	return true
+
+
+## Отпускание после долгого нажатия на е/ь: введённую букву меняем на ё/ъ.
+func _own_release(pos: Vector2) -> bool:
+	if _lp_act == "" or not input_active:
+		_lp_act = ""
+		return false
+	var done := false
+	if Time.get_ticks_msec() - _lp_t0 >= 500:
+		var act := Kbd.hit(_own_rect(), kb_layer, kb_lang, false, true, pos)
+		if act == _lp_act and input_text.ends_with(_lp_act):
+			input_text = input_text.left(input_text.length() - 1) + Kbd.long_alt(_lp_act)
+
+			done = true
+	_lp_act = ""
+	if done:
+		queue_redraw()
+		get_viewport().set_input_as_handled()
+	return done
+
+
 ## Бокс выбранной стрелками галки: залит цветом вместо рамки.
 var selbox_sb: StyleBoxFlat
 var hint_sb: StyleBoxFlat
@@ -103,6 +212,7 @@ func _ready() -> void:
 	row_sb = Ui.panel_sb(Color("#f0d98a"), 12.0)
 	row_idle_sb = Ui.panel_sb(Color(1, 1, 1, 0.45), 12.0)
 	box_sb = Ui.panel_sb(Color("#ffffff"), 10.0, INK, 2.0, false)
+	kb_key_sb = Ui.panel_sb(Color("#ffffff"), 10.0, INK, 2.0, false)
 	selbox_sb = Ui.panel_sb(Color("#a9c6ec"), 10.0, INK, 2.0, false)
 	hint_sb = Ui.panel_sb(Color(1, 1, 1, 0.72), 14.0, Color("#e0d5bd"), 1.5, false)
 	_meadow = Meadow.new()
@@ -120,18 +230,23 @@ func _relayout() -> void:
 		return
 	view_w = s.x
 	view_h = s.y
+	top_safe = Ui.top_inset(view_h)
 	# Масштаб — от эффективной высоты (минус клавиатура), как в игре:
 	# иначе в альбомной с клавиатурой блок меню не влезает над ней.
-	k = clampf(minf(view_w / BASE_W, _menu_eff_h() / BASE_H), 0.5, 2.5)
+	# Пол на телефоне выше (0.7 против 0.5): пальцем по мелкому не попасть,
+	# а читаться должно без лупы (жалоба автора 10.2026). Влезаемость
+	# блока при поднятом поле проверяет profiles_test.
+	var kmin := 0.5 if Ui.is_desktop() else 0.7
+	k = clampf(minf(view_w / BASE_W, _menu_eff_h() / BASE_H), kmin, 2.5)
 	queue_redraw()
 
 
 ## Открыть меню поверх игры. Видимость и процесс — только здесь:
 ## скрытое меню глухо и слепо архитектурно (process выключен),
 ## а не только проверками visible.
-func open(resume: String, kb: float) -> void:
+func open(resume: String, kb := 0.0) -> void:
 	resume_user = resume
-	kb_h = kb
+	sys_kb_h = kb
 	visible = true
 	process_mode = Node.PROCESS_MODE_INHERIT
 	_apply_night()
@@ -169,7 +284,9 @@ func _reload() -> void:
 
 func _unhandled_key_input(event: InputEvent) -> void:
 	var ke := event as InputEventKey
-	if ke == null or not ke.pressed or ke.echo:
+	if ke == null:
+		return
+	if not ke.pressed or ke.echo:
 		return
 	# Скрытое меню клавиш не видит: иначе оно перехватывает ввод раньше
 	# игры (оно добавлено позже и получает _unhandled_key_input первым).
@@ -250,10 +367,31 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		get_tree().quit()
 		_eaten()
 		return
+	# ПОРЯДОК ВВОДА — тот же, что в игре: пока в буфере лежат софт-символы
+	# (Яндекс шлёт их с keycode KEY_UNKNOWN), следующий ввод ждёт очереди.
+	# Иначе пробел (у него настоящий keycode KEY_SPACE) применялся раньше
+	# буквы, нажатой за пару миллисекунд до него (живой лог 10.2026).
+	if _cbuf_active and _cbuf_chars != "":
+		if not (ke.keycode == KEY_UNKNOWN or ke.keycode == KEY_NONE):
+			_cbuf_flush()
 	if ke.keycode == KEY_BACKSPACE or ke.unicode == 8:
 		if not input_active:
 			return
-		input_text = input_text.left(maxi(0, input_text.length() - 1))
+		if ke.keycode == KEY_UNKNOWN or ke.keycode == KEY_NONE:
+			# Софт-серия (DEL + перепись региона): режем сразу, символы
+			# копятся — разберём во flush в _process.
+			if not _cbuf_active:
+				_cbuf_active = true
+				_cbuf_dels = 0
+				_cbuf_chars = ""
+				_cbuf_cut = ""
+			_cbuf_dels += 1
+			var n := input_text.length()
+			if n > 0:
+				_cbuf_cut = input_text.substr(n - 1, 1) + _cbuf_cut
+				input_text = input_text.left(n - 1)
+		else:
+			input_text = input_text.left(maxi(0, input_text.length() - 1))
 		queue_redraw()
 		_eaten()
 		return
@@ -269,9 +407,56 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	# их быть не должно, а имя всё равно обрежется по краям.
 	if ke.unicode < 32 or ch == " " or input_text.length() >= S.MAX_NAME_LENGTH:
 		return
+	if ke.keycode == KEY_UNKNOWN or ke.keycode == KEY_NONE:
+		# Софт-символ: копим до flush в _process (там же решится,
+		# переписка это или обычный ввод).
+		if not _cbuf_active:
+			_cbuf_active = true
+			_cbuf_dels = 0
+			_cbuf_chars = ""
+			_cbuf_cut = ""
+		_cbuf_chars += ch
+
+		_eaten()
+		return
 	input_text += ch
+
 	queue_redraw()
 	_eaten()
+
+
+## Разобрать накопленное софт-серии: переписка (префикс символов повторяет
+## прошлый регион) — вернуть срезанное, дописать только новый хвост.
+## Иначе дописать всё как есть. Вызывается из _process каждый кадр.
+func _cbuf_flush() -> void:
+	if not _cbuf_active:
+		return
+	_cbuf_active = false
+	var tail := _cbuf_chars
+	# Схлопывание — только для серий из 2+ символов: одиночка после ручного
+	# стирания — обычный ввод (иначе стёртое воскресало бы).
+	if (
+		_cbuf_dels > 0
+		and tail.length() >= 2
+		and tail.left(tail.length() - 1) == _cbuf_region.left(tail.length() - 1)
+	):
+		input_text += _cbuf_cut
+		tail = tail.right(1)
+
+	_cbuf_region = _cbuf_chars
+	_cbuf_dels = 0
+	_cbuf_chars = ""
+	_cbuf_cut = ""
+	for i in tail.length():
+		if input_text.length() >= S.MAX_NAME_LENGTH:
+			break
+		input_text += tail.substr(i, 1)
+	queue_redraw()
+
+
+func _process(_dt: float) -> void:
+	_cbuf_flush()
+	_poll_update()
 
 
 ## Клавиша обслужена меню: игре её не отдавать, иначе Backspace
@@ -299,8 +484,14 @@ func _input(event: InputEvent) -> void:
 		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
 			pos = mb.position
 			has_pos = true
+		elif mb.button_index == MOUSE_BUTTON_LEFT and not mb.pressed:
+			# Отпускание после долгого нажатия (е→ё, ь→ъ).
+			_own_release(mb.position)
+			return
 	if not has_pos:
 		return
+
+
 	# Модалка — только свои две кнопки, остальное мимо.
 	if confirm_name != "":
 		if _confirm_yes_rect().has_point(pos):
@@ -370,8 +561,12 @@ func _input(event: InputEvent) -> void:
 	if _field_tap_rect().has_point(pos):
 		if not input_active:
 			_toggle_input()
-		_kb_show()
+		if S.get_sys_kb():
+			_kb_show()
 		get_viewport().set_input_as_handled()
+		return
+	# Своя клавиатура: клавиши раньше остального (тап по клавише — ввод).
+	if _own_press(pos):
 		return
 	if _play_tap_rect().has_point(pos):
 		_enter()
@@ -385,26 +580,15 @@ func _input(event: InputEvent) -> void:
 		_toggle_night()
 		get_viewport().set_input_as_handled()
 		return
-	# Кнопка ⌨ — только там, где есть системная клавиатура (телефон):
-	# на десктопе она ничего не делала и только путала.
-	if not Ui.is_desktop() and _mkb_tap_rect().has_point(pos):
-		if not input_active:
-			_toggle_input()
-		_kb_show()
+	if _syskb_tap_rect().has_point(pos):
+		_toggle_sys_kb()
 		get_viewport().set_input_as_handled()
 		return
 
 
-## Показать системную клавиатуру прямо отсюда (тап по полю/кнопке ⌨):
-## ждать кадра игры незачем, а на десктопе это no-op.
-func _kb_show() -> void:
-	if DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
-		DisplayServer.virtual_keyboard_show("")
 
-
-## Десктоп — там, где нет системной клавиатуры: кнопка ⌨ там
-## ничего не делала и только путала, поэтому её нет (и тычка тоже).
-## Буква по коду клавиши: «A» без физической раскладки (в латинице на
+## Десктоп — там, где нет системной клавиатуры: поле ввода работает
+## с физической. Буква по коду клавиши: «A» без физической раскладки (в латинице на
 ## русской раскладке KeyA тоже проходит). Ручная раскладка не важна:
 ## клавиша одна и та же.
 func _letter(ke: InputEventKey) -> String:
@@ -420,10 +604,17 @@ func _nav(direction: int) -> void:
 	queue_redraw()
 
 
+## Показать системную клавиатуру (только при её галке): тап по полю.
+func _kb_show() -> void:
+	if DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
+		DisplayServer.virtual_keyboard_show("")
+
+
 func _toggle_input() -> void:
 	input_active = not input_active
 	if not input_active:
 		input_text = ""
+	_relayout()
 	queue_redraw()
 
 
@@ -482,6 +673,7 @@ func _upd_ensure() -> void:
 	_upd.checked.connect(_on_upd_checked)
 	_upd.failed.connect(_on_upd_failed)
 	_upd.downloaded.connect(_on_upd_downloaded)
+	_upd.progress.connect(_on_upd_progress)
 
 
 ## Кнопка «Обновления»: спросить GitHub.
@@ -519,8 +711,20 @@ func _on_upd_failed(what: String) -> void:
 
 ## «Скачать»: качаем, дальше — дело платформы (см. update.gd).
 func _upd_yes() -> void:
+	# Повторное нажатие во время закачки: второй запрос сбивал первый
+	# (жалоба автора 10.2026 — «сбоит, если нажать в процессе закачки»).
+	# Пока качаем — просто не начинаем заново.
+	if _upd.downloading():
+		_upd_open = false
+		_upd_state = "downloading"
+		_upd_msg = "Уже качаю…"
+		queue_redraw()
+		return
 	_upd_open = false
 	_upd_state = "downloading"
+	_upd_pct = -1
+	_upd_done = 0
+	_upd_total = 0
 	_upd_msg = "Качаю…"
 	queue_redraw()
 	_upd.download()
@@ -534,11 +738,61 @@ func _upd_no() -> void:
 	queue_redraw()
 
 
-func _on_upd_downloaded(_path: String) -> void:
+## Прогресс закачки: процент и «скачано из». Видно, что дело идёт
+## (жалоба автора 10.2026: «было бы здорово видеть прогресс»).
+func _on_upd_progress(done: int, total: int, percent: int) -> void:
+	_upd_done = done
+	_upd_total = total
+	_upd_pct = percent
+	if _upd_state == "downloading":
+		if percent >= 0:
+			_upd_msg = "Качаю… %d%%" % percent
+		elif total > 0:
+			_upd_msg = "Качаю… %d из %d МБ" % [done / 1048576, total / 1048576]
+		else:
+			_upd_msg = "Качаю… %d МБ" % (done / 1048576)
+	queue_redraw()
+
+
+## Опрос прогресса, пока идёт закачка: HTTPRequest сам событий
+## прогресса не шлёт.
+func _poll_update() -> void:
+	if _upd_state != "downloading" or not _upd.downloading():
+		return
+	_upd_poll += get_process_delta_time()
+	if _upd_poll < UPD_POLL:
+		return
+	_upd_poll = 0.0
+	var total := _upd.total_bytes()
+	var done := _upd.done_bytes()
+	var pct := -1
+	if total > 0:
+		pct = clampi(int(float(done) * 100.0 / float(total)), 0, 100)
+	_on_upd_progress(done, total, pct)
+
+
+func _on_upd_downloaded(path: String) -> void:
+	if path == "":
+		# Android: файл качает браузер в Загрузки — сам он не установится
+		# (системе запрещено ставить APK молча). Говорим, что делать:
+		# иначе игрок ждёт, а установка «не запускается» (жалоба 10.2026).
+		_upd_state = ""
+		_upd_msg = "Файл в Загрузках: откройте его и нажмите «Установить»"
+		_upd_open = false
+		queue_redraw()
+		return
 	# Платформа забрала файл (установщик / перезапуск): меню молчит.
 	_upd_state = ""
 	_upd_msg = ""
 	_upd_open = false
+	queue_redraw()
+
+
+## Переключить клавиатуру: системная вместо своей (и назад).
+## Своя высота пересчитается релэутом (клавиатура показалась/скрылась).
+func _toggle_sys_kb() -> void:
+	S.set_sys_kb(not S.get_sys_kb())
+	_relayout()
 	queue_redraw()
 
 
@@ -614,17 +868,40 @@ func _table_cols() -> Array[float]:
 	var left := 48.0 * k
 	var right := view_w - 48.0 * k
 	var gap := 12.0 * k
-	var del_w := 44.0 * k
-	var pro_w := _text_size("Про", FONT_SMALL).x + 44.0 * k
-	var yo_w := _text_size("Ё", FONT_SMALL).x + 44.0 * k
+	# Колонки-галочки: не уже пальцевых 64, иначе их не нажать,
+	# и визуально галочка сливается с заголовком.
+	var col_min := 44.0 * k if Ui.is_desktop() else 64.0
+	var del_w := maxf(44.0 * k, col_min)
+	var pro_w := maxf(_text_size("Про", FONT_SMALL).x + 44.0 * k, col_min)
+	var yo_w := maxf(_text_size("Ё", FONT_SMALL).x + 44.0 * k, col_min)
 	var lvl_w := _text_size("Ур", FONT_SMALL).x + 16.0 * k
 	var rec_w := _text_size("Победы", FONT_SMALL).x + 16.0 * k
 	for u in users:
 		var cells := _cell_texts(u)
 		lvl_w = maxf(lvl_w, _text_size(cells[0], FONT_ROW).x + 16.0 * k)
 		rec_w = maxf(rec_w, _text_size(cells[1], FONT_ROW).x + 16.0 * k)
-	var fixed := lvl_w + rec_w + pro_w + yo_w + del_w + gap * 5.0
-	var name_w := maxf(80.0 * k, right - left - fixed)
+	# Ширина имени: всё лишнее забирает себе (имя главное в таблице).
+	# Если при полных колонках-галочках места не хватает (узкий экран,
+	# мелкий k) — сжимаем их, но имя ниже минимума не отдаём: иначе
+	# таблица разъезжается, крестик уезжает за край, а любое имя
+	# режется в многоточие (проверено тестами на k=0.5 и 412px).
+	var avail := right - left
+	var min_name := 80.0 * k
+	var flag_want := lvl_w + rec_w + pro_w + yo_w + del_w + gap * 5.0
+	var name_w := maxf(min_name, avail - flag_want)
+	if name_w + flag_want > avail:
+		# Совсем тесно (тест жмёт view_w до 64): резервируем имени часть
+		# ширины и жмём остальное, иначе колонки уезжают за правый край
+		# и их ширина становится отрицательной.
+		var name_reserve := minf(min_name, avail * 0.4)
+		var squeeze := clampf((avail - name_reserve) / flag_want, 0.0, 1.0)
+		pro_w *= squeeze
+		yo_w *= squeeze
+		del_w *= squeeze
+		lvl_w *= squeeze
+		rec_w *= squeeze
+		gap *= squeeze
+		name_w = maxf(0.0, avail - (lvl_w + rec_w + pro_w + yo_w + del_w + gap * 5.0))
 	var name_x := left
 	var lvl_x := left + name_w + gap
 	var rec_x := lvl_x + lvl_w + gap
@@ -681,14 +958,40 @@ func _field_text() -> String:
 ## Центрирование — от эффективной высоты (минус клавиатура): иначе
 ## на телефоне с выездом клавиатуры блок остаётся под ней.
 func _menu_eff_h() -> float:
-	return Ui.eff_h(view_h, kb_h)
+	return Ui.eff_h(view_h, maxf(_own_h(), sys_kb_h))
+
+
+## Своя клавиатура в меню: видна, когда вводится имя, на сенсорных
+## устройствах. Высоту для раскладки считаем от неё же.
+func _own_shown() -> bool:
+	if S.get_sys_kb():
+		return false
+	if not visible:
+		return false
+	if not input_active:
+		return false
+	return not Ui.is_desktop()
+
+
+## Область своей клавиатуры: низ экрана.
+func _own_rect() -> Rect2:
+	var h := Kbd.height_for(view_w)
+	return Rect2(16.0, view_h - h - 16.0, view_w - 32.0, h)
+
+
+func _own_h() -> float:
+	if not _own_shown():
+		return 0.0
+	return _own_rect().size.y
 
 
 func _rows_top() -> float:
-	var y := 90.0 * k + 70.0 * k
+	# Весь блок едет вниз под вырез камеры (top_safe): строки, поле
+	# и кнопки — вместе, иначе шапка уедет, а поле останется под камерой.
+	var y := 90.0 * k + 70.0 * k + top_safe
 	if view_h > view_w:
 		var eff := _menu_eff_h()
-		var need := 170.0 * k + float(maxi(users.size(), 1)) * ROW_H * k + 220.0 * k
+		var need := 170.0 * k + float(maxi(users.size(), 1)) * _row_step() + 220.0 * k
 		y += maxf(0.0, (eff - need) * 0.22)
 	return y
 
@@ -699,7 +1002,7 @@ func _rows_top() -> float:
 func _field_line_y() -> float:
 	return (
 		_rows_top()
-		+ float(maxi(users.size(), 1)) * ROW_H * k
+		+ float(maxi(users.size(), 1)) * _row_step()
 		+ 34.0 * k
 	)
 
@@ -715,14 +1018,14 @@ func _check_line_y() -> float:
 func _check_tap_rect() -> Rect2:
 	var y := _check_line_y()
 	var w := _text_size("Про", FONT_ROW).x
-	return Rect2(48.0 * k, y - 36.0 * k, w + 84.0 * k, 48.0 * k)
+	return Rect2(48.0 * k, y - _tap_h(48.0 * k) * 0.5, w + 84.0 * k, _tap_h(48.0 * k))
 
 
 ## Компактная галка «Ё» на пустом списке: та же строка, правее.
 func _yocheck_tap_rect() -> Rect2:
 	var y := _check_line_y()
 	var w := _text_size("Ё", FONT_ROW).x
-	return Rect2(198.0 * k, y - 36.0 * k, w + 84.0 * k, 48.0 * k)
+	return Rect2(198.0 * k, y - _tap_h(48.0 * k) * 0.5, w + 84.0 * k, _tap_h(48.0 * k))
 
 
 ## Строка кнопок: под полем ввода, на пустом списке — под галочкой
@@ -732,39 +1035,55 @@ func _buttons_y() -> float:
 
 
 ## Чипс строки: во всю ширину таблицы. Та же геометрия, что _draw.
+## Шаг строк таблицы: на телефоне минимум под палец, иначе
+## тап по строке (игра этим игроком) мажет мимо.
+func _row_step() -> float:
+	if Ui.is_desktop():
+		return ROW_H * k
+	return maxf(ROW_H * k, 64.0)
+
+
 func _row_tap_rect(i: int) -> Rect2:
 	var cols := _table_cols()
-	var row_y := _rows_top() + float(i) * ROW_H * k
+	var row_y := _rows_top() + float(i) * _row_step()
 	return Rect2(
 		cols[0] - 16.0 * k, row_y - 38.0 * k,
-		cols[6] - cols[0] + 32.0 * k, ROW_H * k - 6.0 * k
+		cols[6] - cols[0] + 32.0 * k, _row_step() - 6.0 * k
 	)
 
 
 ## Галочка «Про» в строке: тот же переключатель, что клавиша A,
 ## но пальцем/мышью. Тап по ней не играет профилем, только флагом.
+## Тап-зона кнопки в строке: высотой — вся строка (по вертикали соседи
+## не пересекаются: центры через _row_step), шириной — своя колонка
+## (иначе перехватит тап соседа).
+func _cell_rect(cx: float, row_y: float, col_w: float) -> Rect2:
+	var h := _row_step()
+	return Rect2(cx - col_w * 0.5, row_y - h * 0.5, col_w, h)
+
+
 func _pro_tap_rect(i: int) -> Rect2:
 	var cols := _table_cols()
-	var row_y := _rows_top() + float(i) * ROW_H * k
+	var row_y := _rows_top() + float(i) * _row_step()
 	var cx := (cols[3] + cols[4]) * 0.5
-	return Rect2(cx - 26.0 * k, row_y - 26.0 * k, 52.0 * k, 52.0 * k)
+	return _cell_rect(cx, row_y, cols[4] - cols[3])
 
 
 ## Галочка «Ё» в строке: строгая ё именно этому игроку.
 ## Тап не играет профилем, только флагом.
 func _yo_tap_rect(i: int) -> Rect2:
 	var cols := _table_cols()
-	var row_y := _rows_top() + float(i) * ROW_H * k
+	var row_y := _rows_top() + float(i) * _row_step()
 	var cx := (cols[4] + cols[5]) * 0.5
-	return Rect2(cx - 26.0 * k, row_y - 26.0 * k, 52.0 * k, 52.0 * k)
+	return _cell_rect(cx, row_y, cols[5] - cols[4])
 
 
 ## Крестик удаления в строке: открывает модалку подтверждения.
 func _del_tap_rect(i: int) -> Rect2:
 	var cols := _table_cols()
-	var row_y := _rows_top() + float(i) * ROW_H * k
+	var row_y := _rows_top() + float(i) * _row_step()
 	var cx := (cols[5] + cols[6]) * 0.5
-	return Rect2(cx - 24.0 * k, row_y - 24.0 * k, 48.0 * k, 48.0 * k)
+	return _cell_rect(cx, row_y, cols[6] - cols[5])
 
 
 ## Заголовки «Про»/«Ё»: тап показывает, что за галка (hint_header).
@@ -782,11 +1101,33 @@ func _yo_head_rect() -> Rect2:
 	return Rect2(cx - 48.0 * k, y - 28.0 * k, 96.0 * k, 40.0 * k)
 
 
+## Мелочи, из-за которых кнопку не попасть пальцем, а в чехле — тем
+## более (жалоба автора 10.2026 на «Лог»):
+##   *_TAP — минимальная сторона кнопки: меньше 64px не для пальца;
+##   *_PAD — отступ от края: в чехле край экрана закрыт рукой.
+## На десктопе курсором — точность не нужна, там по к=1 всё крупное.
+const _TAP_MIN := 64.0
+const _PAD_MIN := 22.0
+
+
+## Высота угловой кнопки: минимум для пальца.
+func _tap_h(h: float) -> float:
+	return h if Ui.is_desktop() else maxf(h, _TAP_MIN)
+
+
+## Отступ от края: минимум, чтобы палец не упирался в чехол.
+func _pad(p: float) -> float:
+	return p if Ui.is_desktop() else maxf(p, _PAD_MIN)
+
+
 ## Кнопка проверки обновлений (слева вверху) и строка состояния.
 ## Замер — тем же кеглем, каким рисует _button (26, не FONT_SMALL).
+## Верхние углы едут под вырез камеры (top_safe).
 func _upd_button_rect() -> Rect2:
-	var w := _text_size("Обновления", 26).x + 36.0 * k
-	return Rect2(16.0 * k, 16.0 * k, w, 44.0 * k)
+	var pad := _pad(16.0 * k)
+	var h := _tap_h(44.0 * k)
+	var w := maxf(_text_size("Обновления", 26).x + 36.0 * k, h)
+	return Rect2(pad, top_safe + pad, w, h)
 
 
 ## Карточка «Вышла версия?»: заголовок + заметки + две кнопки.
@@ -804,7 +1145,7 @@ func _upd_yes_rect() -> Rect2:
 	var card := _upd_card_rect()
 	return Rect2(
 		Vector2(card.get_center().x - 190.0 * k, card.position.y + card.size.y - 80.0 * k),
-		Vector2(170.0 * k, 56.0 * k)
+		Vector2(170.0 * k, _tap_h(56.0 * k))
 	)
 
 
@@ -812,7 +1153,7 @@ func _upd_no_rect() -> Rect2:
 	var card := _upd_card_rect()
 	return Rect2(
 		Vector2(card.get_center().x + 20.0 * k, card.position.y + card.size.y - 80.0 * k),
-		Vector2(170.0 * k, 56.0 * k)
+		Vector2(170.0 * k, _tap_h(56.0 * k))
 	)
 
 
@@ -859,6 +1200,8 @@ func _apply_night() -> void:
 		selbox_sb.border_color = Color("#8b93a8")
 		hint_sb.bg_color = Color(0.10, 0.12, 0.20, 0.80)
 		hint_sb.border_color = Color("#3a4a6b")
+		kb_key_sb.bg_color = Color("#232c44")
+		kb_key_sb.border_color = Color("#8b93a8")
 	else:
 		row_idle_sb.bg_color = Color(1, 1, 1, 0.45)
 		box_sb.bg_color = Color("#ffffff")
@@ -867,6 +1210,8 @@ func _apply_night() -> void:
 		selbox_sb.border_color = INK
 		hint_sb.bg_color = Color(1, 1, 1, 0.72)
 		hint_sb.border_color = Color("#e0d5bd")
+		kb_key_sb.bg_color = Color("#ffffff")
+		kb_key_sb.border_color = INK
 	if _meadow != null:
 		_meadow.night = night
 		_meadow._apply_sky()
@@ -888,39 +1233,51 @@ func _toggle_night() -> void:
 
 ## Кнопки «Играть», «Без профиля» и день/ночь: тройка по центру.
 ## Ночная — маленький квадрат: значок-символ в нём, а не вокруг.
+## Высота кнопок действий: на телефоне минимум под палец (64px),
+## иначе при мелком k кнопки — полоски, в которые не попасть.
+func _btn_h() -> float:
+	if Ui.is_desktop():
+		return 52.0 * k
+	return maxf(52.0 * k, 64.0)
+
+
 func _play_tap_rect() -> Rect2:
 	var y := _buttons_y()
-	return Rect2(cx_of() - 288.0 * k, y, 230.0 * k, 52.0 * k)
+	return Rect2(cx_of() - 288.0 * k, y, 230.0 * k, _btn_h())
 
 
 func _guest_tap_rect() -> Rect2:
 	var y := _buttons_y()
-	return Rect2(cx_of() - 288.0 * k + 246.0 * k, y, 262.0 * k, 52.0 * k)
+	return Rect2(cx_of() - 288.0 * k + 246.0 * k, y, 262.0 * k, _btn_h())
+
+
+## Строка «Системная клавиатура» с галкой — под кнопками действий.
+## Галка в сейве (устройство, как ночь): системная вместо своей.
+func _syskb_tap_rect() -> Rect2:
+	var y := _buttons_y() + _btn_h() + 44.0 * k
+	return Rect2(60.0 * k, y - 32.0 * k, maxf(view_w - 120.0 * k, 64.0), 64.0)
 
 
 func _night_tap_rect() -> Rect2:
 	var y := _buttons_y()
-	return Rect2(cx_of() - 288.0 * k + 524.0 * k, y, 52.0 * k, 52.0 * k)
+	return Rect2(cx_of() - 288.0 * k + 524.0 * k, y, 52.0 * k, _btn_h())
 
 
 func cx_of() -> float:
 	return view_w * 0.5
 
 
-## Кнопка ⌨ справа вверху.
-func _mkb_tap_rect() -> Rect2:
-	return Rect2(view_w - 72.0 * k, 16.0 * k, 56.0 * k, 56.0 * k)
-
-
 ## Кнопки модалки подтверждения: «Да» и «Нет» по центру карточки.
 func _confirm_yes_rect() -> Rect2:
 	var c := _confirm_card_rect().get_center()
-	return Rect2(c + Vector2(-190.0 * k, 24.0 * k), Vector2(170.0 * k, 56.0 * k))
+	var h := _tap_h(56.0 * k)
+	return Rect2(c + Vector2(-190.0 * k, 24.0 * k), Vector2(170.0 * k, h))
 
 
 func _confirm_no_rect() -> Rect2:
 	var c := _confirm_card_rect().get_center()
-	return Rect2(c + Vector2(20.0 * k, 24.0 * k), Vector2(170.0 * k, 56.0 * k))
+	var h := _tap_h(56.0 * k)
+	return Rect2(c + Vector2(20.0 * k, 24.0 * k), Vector2(170.0 * k, h))
 
 
 ## Карточка модалки: по центру экрана, по ширине текста вопроса.
@@ -1035,7 +1392,7 @@ func _draw() -> void:
 			FONT_SMALL, _ink() if sel_col == 1 else _dim()
 		)
 	for i in users.size():
-		var row_y := y + float(i) * ROW_H * k
+		var row_y := y + float(i) * _row_step()
 		var cols := _table_cols()
 		var chip := _row_tap_rect(i)
 		draw_style_box(row_sb if i == sel else row_idle_sb, chip)
@@ -1149,16 +1506,8 @@ func _draw() -> void:
 	_button(_play_tap_rect(), "Играть")
 	_button(_guest_tap_rect(), "Без профиля")
 	_draw_daynight(_night_tap_rect())
-	# Кнопка ⌨ справа вверху: вызвать системную клавиатуру.
-	# На десктопе её нет (см. _input): нечего и рисовать.
-	if not Ui.is_desktop():
-		draw_style_box(hint_sb, _mkb_tap_rect())
-		for ix in 3:
-			for iy in 2:
-				draw_circle(
-					_mkb_tap_rect().position + Vector2((14.0 + 14.0 * float(ix)) * k, (17.0 + 12.0 * float(iy)) * k),
-					2.5 * k, _uitext()
-				)
+	_draw_syskb()
+	_draw_own_kb()
 	# Пояснение галки по тапу на заголовок — строкой под кнопками.
 	# Модалка его перекрывает (рисуется позже поверх).
 	if hint_header != "" and confirm_name == "":
@@ -1167,7 +1516,7 @@ func _draw() -> void:
 			expl = ["Про: все буквы сразу,", "важен регистр."]
 		else:
 			expl = ["Ё: без галки", "е засчитывается за ё."]
-		var ey := _buttons_y() + 52.0 * k + 30.0 * k
+		var ey := _buttons_y() + _btn_h() + 30.0 * k
 		for li in expl.size():
 			var lw := _text_size(expl[li], FONT_SMALL).x
 			_text(
@@ -1183,6 +1532,17 @@ func _draw() -> void:
 			_upd_msg, Vector2(16.0 * k, ub.position.y + ub.size.y + 30.0 * k),
 			FONT_SMALL, _uitext()
 		)
+		# Полоса прогресса закачки: видно, что дело идёт, и сколько ждать
+		# (жалоба автора 10.2026: «было бы зорово видеть прогресс»).
+		if _upd_state == "downloading" and _upd_pct >= 0:
+			var bar := Rect2(
+				16.0 * k, ub.position.y + ub.size.y + 66.0 * k,
+				view_w - 32.0 * k, 14.0 * k
+			)
+			draw_rect(bar, Color(0.18, 0.17, 0.14, 0.55))
+			var fill := bar
+			fill.size.x = bar.size.x * (float(_upd_pct) / 100.0)
+			draw_rect(fill, Color(0.35, 0.62, 0.92))
 	# Модалка «Вышла версия?» — поверх всего, кроме удаления
 	# (удаление первее: его ветка ввода раньше).
 	if _upd_open:
@@ -1206,7 +1566,9 @@ func _draw() -> void:
 				Vector2(ucard.get_center().x - lw * 0.5, ucard.position.y + 110.0 * k + 30.0 * k * float(li)),
 				FONT_SMALL, _uitext()
 			)
-		_button(_upd_yes_rect(), "Скачать")
+		# Кнопка: где игра ставит сама — «Скачать», где качает браузер
+		# (Android) — честно «Загрузить»: дальше файл открывают руками.
+		_button(_upd_yes_rect(), "Скачать" if Updater.self_installs() else "Загрузить")
 		_button(_upd_no_rect(), "Позже")
 	# Модалка подтверждения удаления — поверх всего.
 	if confirm_name != "":

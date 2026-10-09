@@ -7,6 +7,7 @@ extends SceneTree
 
 const BB := preload("res://scripts/balance.gd")
 const S := preload("res://scripts/save.gd")
+const K := preload("res://scripts/kbd.gd")
 
 var _frame := 0
 var _main: Node = null
@@ -350,7 +351,7 @@ func _run_part1() -> void:
 	_main._type_char(wrong1)
 	_check(_main.errors.size() == 1, "one error overlay")
 	_check(_main.shake_t > 0.0, "shake on typo")
-	_check(_main._hint_text() == "Жми: [⌫] Стереть", "hint shows how to erase")
+	_check(_main._hint_text() == "Жми: [←] Стереть", "hint shows how to erase")
 	var t1 := _kb_target(b1[0], b1[1])
 	_check(_main.cursor_line == t1[0] and _main.cursor_pos == t1[1], "knockback one step")
 	# Опечатка 2 подряд: откат ЕЩЁ дальше, вторая метка.
@@ -443,18 +444,189 @@ func _run_part2() -> void:
 	)
 
 	# --- Откат через край строки: конец строки = начало следующей. ------
+	# Откат идёт к последней НАБРАННОЙ клетке (перепрыгивая серые), а не
+	# к соседней: иначе Backspace вставал на серую клетку, где букве
+	# не место, и повторный набор давал метку (живой лог 10.2026).
 	_main.cursor_line = 2
 	_main.cursor_pos = 0
+	# Последняя набранная клетка перед (2,0) — конец строки 1: кладём её.
+	var edge: int = _main.display_lines[1].length() - 1
+	_main.passed[_cell_key(1, edge)] = true
+	_main.typed_cells[_cell_key(1, edge)] = true
 	_main._backspace()
 	_check(
-		_main.cursor_line == 1 and _main.cursor_pos == _main.display_lines[1].length() - 1,
+		_main.cursor_line == 1 and _main.cursor_pos == edge,
 		"retreat crosses the line boundary"
 	)
+	_check(
+		_main.passed.has(_cell_key(1, edge)) == false,
+		"retreat landed on the last filled cell and cleared it"
+	)
 	_main._backspace()
 	_check(
-		_main.cursor_pos == _main.display_lines[1].length() - 2,
-		"repeated retreat keeps walking back"
+		Vector2i(_main.cursor_line, _main.cursor_pos)
+			!= Vector2i(1, _main.display_lines[1].length() - 1),
+		"repeated retreat walks further back"
 	)
+
+	# --- Откат в серую клетку и дубль: игра обязана ответить визуально.
+	# Живой лог с телефона 10.2026: Backspace встал на серую клетку (стирать
+	# нечего), затем та же буква уходила в dup-ignore — на экране обе
+	# ситуации выглядели как «не считает», ребёнок крутил букву по кругу.
+	_main._new_level()
+	# Набираем первую активную букву и уходим на пассивную клетку после неё.
+	var first_active := -1
+	for i in _main.display_lines[0].length():
+		if _main._is_active(_main.display_lines[0].substr(i, 1)):
+			first_active = i
+			break
+	_check(first_active >= 0, "level has an active letter to type")
+	_main.cursor_line = 0
+	_main.cursor_pos = first_active
+	_main._type_char(_main._current())
+	var after_ok := Vector2i(_main.cursor_line, _main.cursor_pos)
+	_check(after_ok != Vector2i(0, first_active), "cursor moved past the typed letter")
+	# Откат перепрыгивает серые клетки и отменяет последнюю набранную
+	# букву (а не встаёт на серую клетку). Сценарий строится явно:
+	# пройденная буква, за ней серая полоса, курсор за ней.
+	_main.hints.clear()
+	var filled: Vector2i = _main._last_filled_behind()
+	_check(filled.x == 0 and filled.y == first_active,
+		"last filled cell behind the cursor is the typed letter")
+	var line0: String = _main.display_lines[0]
+	# Ищем серию серых клеток сразу за набранной буквой.
+	var grey_run := 0
+	for i in range(first_active + 1, line0.length()):
+		if _main._is_active(line0.substr(i, 1)):
+			break
+		grey_run += 1
+	# Серая полоса есть не в каждом уровне (в «Вертит» все буквы активны).
+	# Строим её явно: убираем буквы из активных на несколько клеток.
+	if grey_run == 0 and line0.length() >= first_active + 4:
+		grey_run = 2
+		var hidden: Array[String] = []
+		for i in range(first_active + 1, first_active + 3):
+			var hc: String = line0.substr(i, 1)
+			if not hidden.has(hc):
+				hidden.append(hc)
+		for hc in hidden:
+			_main.active.erase(hc)
+		_main._new_level()
+		_main.active = BB.active_chars(0)
+		for hc in hidden:
+			_main.active.erase(hc)
+		first_active = -1
+		for i in _main.display_lines[0].length():
+			if _main._is_active(_main.display_lines[0].substr(i, 1)):
+				first_active = i
+				break
+		_main.cursor_line = 0
+		_main.cursor_pos = first_active
+		_main._type_char(_main._current())
+		line0 = _main.display_lines[0]
+		grey_run = 0
+		for i in range(first_active + 1, line0.length()):
+			if _main._is_active(line0.substr(i, 1)):
+				break
+			grey_run += 1
+	_check(grey_run > 0, "level has a grey run after the typed letter")
+	if grey_run > 0:
+		_main.cursor_line = 0
+		_main.cursor_pos = first_active + grey_run
+		var ok_pre: int = _main.typed_ok
+		_main._backspace()
+		_check(
+			Vector2i(_main.cursor_line, _main.cursor_pos) == Vector2i(0, first_active),
+			"retreat jumps the grey run back to the typed letter"
+		)
+		_check(
+			not _main.passed.has(_cell_key(0, first_active)),
+			"the typed letter is untyped again"
+		)
+		_check(
+			_main.typed_ok == ok_pre,
+			"retreat does not touch the counters"
+		)
+		# Повторный набор той же буквы — верный, без всяких меток.
+		_main._type_char_comp(_main._current())
+		_check(
+			_main.typed_bad == 0 and _main.errors.is_empty(),
+			"retyping after the retreat makes no mistake"
+		)
+	# Дубль КЛАВИШИ (та же буква дважды подряд от IME): вторая вспыхивает
+	# на клетке принятой и курсор не двигает — нажатие не выглядит
+	# проигнорированным (автор 10.2026 крутил букву по кругу).
+	_main.hints.clear()
+	_main.cursor_line = after_ok.x
+	_main.cursor_pos = after_ok.y
+	var behind_ch: String = _main.display_lines[0].substr(first_active, 1)
+	var wanted: String = _main._current()
+	_check(
+		not _main._eq(behind_ch, wanted),
+		"the letter behind differs from the expected one"
+	)
+	# Сначала принимаем «л» (она нужна в этом слове), потом сразу ту же
+	# ещё раз — это дубль клавиши.
+	_main._type_char_comp(wanted)
+	_main.hints.clear()
+	var cur_after: Vector2i = Vector2i(_main.cursor_line, _main.cursor_pos)
+	_main._type_char_comp(wanted)
+	_check(
+		Vector2i(_main.cursor_line, _main.cursor_pos) == cur_after,
+		"a doubled key does not move the cursor"
+	)
+	_main.hints.clear()
+
+	# --- ПОРЯДОК ВВОДА: софт-буква, затем пробел с настоящим keycode.
+	# Живой лог с телефона 10.2026: Яндекс шлёт букву с keycode
+	# KEY_UNKNOWN (она копится в буфер), а пробел приходит сразу с
+	# KEY_SPACE и раньше применялся напрямую — то есть ПЕРЕПРЫГИВАЛ
+	# букву, нажатую на 6 мс раньше. На экране это выглядело как
+	# «букву не считает»: пробел давал метку на месте буквы, откат
+	# уносил курсор назад, и буква приходила уже не туда.
+	_main._new_level()
+	# Находим активную букву, за которой идёт пробел (как в «Снесла
+	# курочка»: «а», потом пробел) — на нём порядок и ломается.
+	# Ищем активную букву, за которой (через серые клетки) идёт пробел, —
+	# как в «Снесла курочка». Подойдёт любая: нас интересует сам порядок.
+	var a_at := -1
+	var sp_at := -1
+	var letter: String = ""
+	var line_a: String = _main.display_lines[0]
+	for i in range(1, line_a.length()):
+		if line_a.substr(i, 1) != " ":
+			continue
+		var j := i - 1
+		while j >= 0 and not _main._is_active(line_a.substr(j, 1)):
+			j -= 1
+		if j >= 0:
+			a_at = j
+			sp_at = i
+			letter = line_a.substr(j, 1)
+			break
+	_check(a_at >= 0, "level has an active letter right before a space")
+	if a_at >= 0 and sp_at > a_at:
+		_main.cursor_line = 0
+		_main.cursor_pos = a_at
+		var bad_pre: int = _main.typed_bad
+		# Буква с KEY_UNKNOWN — уходит в буфер, как от Яндекса.
+		_main.call("_unhandled_key_input", _soft_key(letter))
+		_check(bool(_main._comp_active), "soft letter is buffered")
+		# Пробел с настоящим keycode KEY_SPACE — идёт следом, без буфера.
+		_main.call("_unhandled_key_input", _space_key())
+		# Пробел обязан примениться ПОСЛЕ буквы, а не вместо неё.
+		_check(
+			_main.passed.has(_cell_key(0, a_at)),
+			"space waits for the queued letter: the letter is still counted"
+		)
+		_check(
+			Vector2i(_main.cursor_line, _main.cursor_pos) > Vector2i(0, a_at),
+			"cursor is past the letter when the space lands"
+		)
+		_check(
+			_main.typed_bad == bad_pre,
+			"letter-then-space makes no mistake (order kept)"
+		)
 
 	# --- Упор в начало текста: с первой клетки откатываться некуда. -----
 	# Откат ВСТУПАЕТ на первую клетку (буква там снова не набрана — это
@@ -523,19 +695,55 @@ func _run_part2() -> void:
 	# Последняя клетка, которую пропустил сам ход игры:
 	var last := _behind()
 	_check(_main.passed.has(_cell_key(last.x, last.y)), "the last auto-skipped cell is passed")
-	# Откат назад обязан встать ровно на неё и вернуть букву.
+	# Backspace по серым автопропускам НИЧЕГО не делает: их проскочила
+	# игра, игрок их не печатал, откатывать нечего. Раньше откат вставал
+	# на такую клетку — и это выглядело как «игра не считает» (живой
+	# лог 10.2026: BACK;rollback;0:2 на серую «с» после принятой «о»).
+	var cur_keep := Vector2i(_main.cursor_line, _main.cursor_pos)
 	_main._backspace()
 	_check(
-		_main.cursor_line == last.x and _main.cursor_pos == last.y,
-		"retreat from a skip lands exactly on the last skipped cell"
+		Vector2i(_main.cursor_line, _main.cursor_pos) == cur_keep,
+		"retreat over auto-skipped grey cells does nothing"
 	)
 	_check(
-		not _main.passed.has(_cell_key(_main.cursor_line, _main.cursor_pos)),
-		"the skipped cell is not passed anymore after the retreat"
+		_main.passed.has(_cell_key(last.x, last.y)),
+		"auto-skipped cells stay passed after Backspace"
+	)
+	# А откат настоящей набранной буквы работает: сначала набираем
+	# активную букву, потом откатываемся — встаём ровно на неё.
+	_main._new_level()
+	_main.active = BB.active_chars(0)
+	_main.cursor_line = 0
+	_main.cursor_pos = _first_active()
+	var fa := _first_active()
+	_main._type_char(_main._current())
+	var typed_at := Vector2i(_main.cursor_line, _main.cursor_pos)
+	var ok_t: int = _main.typed_ok
+	_check(
+		_main.passed.has(_cell_key(0, fa)),
+		"the typed letter is passed before the retreat"
+	)
+	_main._backspace()
+	_check(
+		Vector2i(_main.cursor_line, _main.cursor_pos) == Vector2i(0, fa),
+		"retreat lands exactly on the typed letter, jumping the grey run"
 	)
 	_check(
-		_main._lin(_main.cursor_line, float(_main.cursor_pos)) < skip_to - 0.001,
-		"retreat over a skip goes back behind the whole skipped run"
+		not _main.passed.has(_cell_key(0, fa)),
+		"the typed letter is untyped again"
+	)
+	_check(
+		_main.typed_ok == ok_t, "retreat does not touch the counters"
+	)
+	# И повторный набор той же буквы — верный, без меток.
+	_main._type_char_comp(_main._current())
+	_check(
+		_main.typed_bad == 0 and _main.errors.is_empty(),
+		"retyping after the retreat makes no mistake"
+	)
+	_check(
+		typed_at.y > 0 or typed_at.x > 0,
+		"the auto-skip had actually moved the cursor on"
 	)
 
 	# --- Системная клавиатура Android: события без keycode, один unicode.
@@ -549,13 +757,16 @@ func _run_part2() -> void:
 	_main._type_char("ы" if _main._current().to_lower() != "ы" else "ж")
 	_check(_main.errors.has(_cell_key(1, pu)), "soft typo left a mark")
 	_main._unhandled_key_input(_softkey(8))
+	_main._comp_flush()
 	_check(_main.errors.is_empty(), "unicode backspace erases the mark")
 	_check(_main.cursor_pos == pu, "unicode backspace steps onto the cell")
 	_main._unhandled_key_input(_softkey(13))
+	_main._comp_flush()
 	_check(_main.errors.is_empty(), "unicode enter is not typed as a letter")
 	_check(_main.cursor_pos == pu, "unicode enter moves nothing while playing")
 	_main.state = "won"
 	_main._unhandled_key_input(_softkey(13))
+	_main._comp_flush()
 	_check(_main.state == "playing", "unicode enter continues after winning")
 
 	# --- Софтовая кириллица (commitText без keycode, как шлёт Gboard):
@@ -569,12 +780,571 @@ func _run_part2() -> void:
 	if _main._current().to_lower() == "ф":
 		wc = "ж"
 	_main._unhandled_key_input(_softkey(wc.unicode_at(0)))
-	_check(_main.errors.has(_cell_key(1, pw)), "soft cyrillic letter leaves a mark")
+	_main._comp_flush()
+	_check(not _main.errors.has(_cell_key(1, pw)),
+		"a soft-letter miss is not a red mark (IME desync, not a typo)")
+	_check(_main.hints.has(_cell_key(1, pw)),
+		"a soft-letter miss flashes the cell that is needed")
+
+	# --- Composing-перепись IME (Яндекс/Gboard, русский): каждый тап
+	# стирает и вводит заново всё слово (серии DEL + дубли, keycode
+	# KEY_UNKNOWN/0 — живой лог с телефона 10.2026; раньше там же была
+	# своя RU-клавиатура, её убрали в 0.0.9). Без буфера каждый дубль —
+	# «опечатка»: красные метки, откат, врущие счётчики. Гость тапает
+	# только активные буквы (по подсказке «Жми»): после каждого тапа
+	# ровно +1 верная буква, ни одной метки, курсор только вперёд.
+	_main._new_level()
+	# Гость вручную: в дебажной сборке _all_keys() всегда true, а для
+	# composing-каши нужны серые буквы. Флаг не трогаем (протечёт
+	# в соседние части), только набор активных.
+	_main.active = BB.active_chars(0)
+	var taps := ""
+	var ok0: int = _main.typed_ok
+	for t in 6:
+		var want := String(_main._current())
+		if want == "":
+			break
+		taps += want
+		for _j in taps.length() - 1:
+			_main._unhandled_key_input(_unknownkey(8))
+		for j in taps.length():
+			_main._unhandled_key_input(_unknownkey(taps.unicode_at(j)))
+		_main._comp_flush()
+	_check(_main.typed_bad == 0, "compose flow leaves no typos")
+	_check(_main.errors.is_empty(), "compose flow leaves no marks")
+	_check(
+		int(_main.typed_ok) == ok0 + 6,
+		"compose flow counts only new letters"
+	)
+
+	# --- Дифф-пары IME (Яндекс при быстром наборе: каждый тап — пара
+	# [DEL + буква], живой лог 10.2026). Пара вводит свою букву обычным
+	# путём с начала серии: верная засчитывается, счётчик честный.
+	_main._new_level()
+	_main.active = BB.active_chars(0)
+	var ok1: int = _main.typed_ok
+	var cur0 := Vector2i(_main.cursor_line, _main.cursor_pos)
+	for t in 6:
+		var want2 := String(_main._current())
+		if want2 == "":
+			break
+		_main._unhandled_key_input(_unknownkey(8))
+		_main._unhandled_key_input(_unknownkey(want2.unicode_at(0)))
+		_main._comp_flush()
+	_check(_main.typed_bad == 0, "diff pairs leave no typos")
+	_check(_main.errors.is_empty(), "diff pairs leave no marks")
+	_check(
+		int(_main.typed_ok) == ok1 + 6,
+		"diff pairs count every letter"
+	)
+	_check(
+		Vector2i(_main.cursor_line, _main.cursor_pos) != cur0,
+		"diff pairs move the cursor forward"
+	)
+
+	# --- Автозамена слова (Яндекс после пробела: DEL-серия + чужое слово,
+	# жалоба автора «после пробела отбрасывает назад»). Чужая замена
+	# отменяется целиком: курсор на месте, меток нет, счётчики стоят.
+	var cur1 := Vector2i(_main.cursor_line, _main.cursor_pos)
+	var ok2: int = _main.typed_ok
+	for _j in 3:
+		_main._unhandled_key_input(_unknownkey(8))
+	for j in "xyz".length():
+		_main._unhandled_key_input(_unknownkey("xyz".unicode_at(j)))
+	_main._comp_flush()
+	_check(
+		Vector2i(_main.cursor_line, _main.cursor_pos) == cur1,
+		"foreign replacement moves nothing"
+	)
+	_check(_main.errors.is_empty(), "foreign replacement leaves no marks")
+	_check(
+		int(_main.typed_ok) == ok2 and _main.typed_bad == 0,
+		"foreign replacement touches no counters"
+	)
+
+	# --- Дубль без DEL (Яндекс шлёт повторы одиночками, живой лог
+	# 10.2026: красные «ама» при сериях DELx0+1). Символ, совпавший
+	# с пройденной клеткой позади, — повтор IME: игнорируется молча.
+	# Верный ввод и настоящие опечатки идут обычным путём.
+	_main._new_level()
+	_main.active = BB.active_chars(0)
+	# 1) Настоящий дубль клавиши: та же буква дважды подряд миллисекунда
+	# в миллисекунду (так шлёт IME с словарём) — вторая глушится молча.
+	var first: String = _main._current()
+	_main._type_char(first)
+	_main._type_char_comp(first)
+	_main._comp_flush()
+	var dup_ok: int = _main.typed_ok
+	var dup_bad: int = _main.typed_bad
+	_check(
+		int(_main.typed_ok) == dup_ok and int(_main.typed_bad) == dup_bad,
+		"doubled key is dropped: no counters move"
+	)
+	# 2) ТА ЖЕ буква, но НЕ дубль клавиши: она просто встречалась раньше
+	# в тексте. Именно это ломало игру: «л» из «Прибежала» глушила «л» в
+	# «внучка» (живой лог 10.2026: TYPE;л;ч;dup-ignore;...;0:7). Теперь
+	# такой ввод судится как обычный — верный идёт, неверный даёт метку.
+	_main._new_level()
+	_main.active = BB.active_chars(0)
+	# Набираем две разные буквы, чтобы в passed было из чего выбрать.
+	_main._type_char(_main._current())
+	_main._type_char(_main._current())
+	var seen: Array[String] = []
+	for kk in _main.passed.keys():
+		var pp := String(kk).split(":")
+		var cj: String = _main.display_lines[int(pp[0])].substr(int(pp[1]), 1)
+		if not seen.has(cj):
+			seen.append(cj)
+	_check(seen.size() >= 2, "level gives two different typed letters")
+	# Ставим курсор на клетку, где нужна ДРУГАЯ буква, и набираем ту, что
+	# уже встречалась. Старое правило молчало; теперь — честная метка.
+	var l0: String = _main.display_lines[0]
+	var tried := 0
+	for a in seen.size():
+		for b in seen.size():
+			if a == b:
+				continue
+			var pos: int = l0.find(seen[b])
+			if pos < 0 or _main._eq(seen[a], seen[b]):
+				continue
+			if pos >= _main.passed.size():
+				continue
+			_main.cursor_line = 0
+			_main.cursor_pos = pos
+			var want_here: String = _main._current()
+			if _main._eq(want_here, seen[a]):
+				continue
+			var ok_pre: int = _main.typed_ok
+			var bad_pre: int = _main.typed_bad
+			_main.hints.clear()
+			_main._type_char_comp(seen[a])
+			_check(
+				int(_main.typed_ok) == ok_pre and int(_main.typed_bad) == bad_pre,
+				"a letter seen earlier is not swallowed and not counted as a typo"
+			)
+			_check(
+				not _main.hints.is_empty(),
+				"it flashes the cell that is needed instead"
+			)
+			_main._new_level()
+			_main.active = BB.active_chars(0)
+			# А теперь та же буква там, где она НУЖНА: проходит.
+			_main._type_char(_main._current())
+			var ok_pre2: int = _main.typed_ok
+			_main._type_char_comp(_main._current())
+			_check(
+				int(_main.typed_ok) == ok_pre2 + 1,
+				"a letter seen earlier is still accepted where it is needed"
+			)
+			tried += 1
+			break
+		if tried > 0:
+			break
+	_check(tried > 0, "test exercised a letter seen earlier")
+	# 3) Дубль не глушится, если буква как раз нужная: он засчитывается.
+	_main._new_level()
+	_main._type_char_comp(_main._current())
+	_main._type_char_comp(_main._current())
+	_check(int(_main.typed_ok) >= 1, "a needed letter is never treated as a double key")
+
+	# --- Перерисовка атомарна: _refresh() САМ применяет окно скролла.
+	# Раньше текст обновлялся сразу, а позиции и видимость — только на
+	# следующем кадре _process. Между ними на экране старые строки на
+	# старых местах (жалоба автора 10.2026: «старое положение текста не
+	# стирается, но поверх него уже рисуется новое»). Проверяем без
+	# _process: после _refresh() за пределами окна скролла ничего нет.
+	_main._new_level()
+	while _main.display_lines.size() < 8:
+		_main.display_lines.append("Длинная строка для прокрутки текста")
+	_main._refresh()
+	var vis_n: int = _main._vis_lines()
+	_check(vis_n < _main.display_lines.size(), "the level scrolls on a small window")
+	_main.cursor_line = _main.display_lines.size() - 1
+	_main._refresh()  # без _process!
+	var first_n: int = maxi(_main.display_lines.size() - vis_n, 0)
+	var outside := 0
+	for l in _main.text_labels.size():
+		var tl: RichTextLabel = _main.text_labels[l]
+		if not tl.visible:
+			continue
+		if l < first_n or l >= _main.display_lines.size():
+			outside += 1
+	_check(outside == 0, "the scroll window is applied inside the redraw itself")
+	# И содержимое видимых лейблов — именно те строки, что на своих местах.
+	var mismatched := 0
+	for l in range(first_n, mini(_main.display_lines.size(), first_n + vis_n)):
+		if l >= _main.text_labels.size():
+			break
+		var tl2: RichTextLabel = _main.text_labels[l]
+		if not tl2.visible:
+			mismatched += 1
+			continue
+		# Длина «голого» текста (без bbcode) равна длине строки.
+		var plain: String = tl2.text.replace("[color=#6f6a5e]", "").replace("[color=#b3a996]", "")
+		plain = plain.replace("[color=#1c1a16]", "").replace("[/color]", "")
+		if plain.length() != _main.display_lines[l].length():
+			mismatched += 1
+	_check(mismatched == 0, "each visible label holds its own line's letters")
+	_main._new_level()
+
+	# --- Пачка от IME: одна опечатка НЕ должна уносить курсор и плодить
+	# ошибки на всю пачку. Живой лог 10.2026: TYPE;о; ;mark; Type; ;а;mark —
+	# две красные метки из одного нажатия (автор: «после пробела сразу
+	# несколько ошибок»). В пачке курсор стоит, ошибается только своя
+	# клетка, следующая буква встаёт по логике текста.
+	_main._new_level()
+	# Ищем место «активная буква, ПРОБЕЛ, активная буква» — как «о»,
+	# пробел, «о» в «Посадил дед». Ошибка будет на пробеле.
+	var l0b: String = _main.display_lines[0]
+	var gap_at := -1
+	for i in range(1, l0b.length() - 1):
+		if l0b.substr(i, 1) == " " and _main._is_active(l0b.substr(i, 1)):
+			if l0b.substr(i - 1, 1) != " " and l0b.substr(i + 1, 1) != " ":
+				gap_at = i
+				break
+	_check(gap_at >= 0, "level has an active letter, a space, a letter")
+	if gap_at >= 0:
+		# Набираем букву перед пробелом — верно, курсор встаёт на пробел.
+		_main.cursor_line = 0
+		_main.cursor_pos = gap_at - 1
+		_main._type_char_comp(l0b.substr(gap_at - 1, 1))
+		_check(
+			Vector2i(_main.cursor_line, _main.cursor_pos) == Vector2i(0, gap_at),
+			"cursor stands on the space after a correct letter"
+		)
+		var bad_pre: int = _main.typed_bad
+		# Пачка от IME: неверная клавиша — не опечатка ребёнка (IME мог
+		# прислать лишнее/не то после откатов), а вспышка нужной клетки.
+		_main.cursor_line = 0
+		_main.cursor_pos = gap_at
+		_main.hints.clear()
+		_main._type_char("ь", true)  # мусор: ждали пробел
+		_check(
+			_main.typed_bad == bad_pre,
+			"the wrong key in a batch is not counted as a mistake"
+		)
+		_check(
+			_main.hints.has(_cell_key(0, gap_at)),
+			"it flashes the cell the batch needs"
+		)
+		_check(
+			Vector2i(_main.cursor_line, _main.cursor_pos) == Vector2i(0, gap_at),
+			"a mistake inside a batch does not drag the cursor back"
+		)
+		# Следующая буква пачки встаёт туда, где стоит по тексту.
+		_main._type_char(" ", true)
+		_check(
+			Vector2i(_main.cursor_line, _main.cursor_pos) == Vector2i(0, gap_at + 1),
+			"the rest of the batch is applied in place, not as a cascade"
+		)
+		_check(
+			_main.typed_bad == bad_pre,
+			"the batch produces no mistakes at all after the space"
+		)
+		# С железной клавишей откат сохраняется: ребёнок может перебить
+		# опечатку (там одиночная клавиша, а не пачка).
+		_main._new_level()
+		_main.cursor_line = 0
+		_main.cursor_pos = 0
+		_main._type_char(_main._current())
+		var kb_to: Vector2i = Vector2i(_main.cursor_line, _main.cursor_pos)
+		_main._type_char("ь")
+		_check(
+			Vector2i(_main.cursor_line, _main.cursor_pos) != kb_to,
+			"a hard key mistake still knocks the cursor back"
+		)
+
+	# --- Автопунктуация IME: точка с настоящим keycode, когда игра ждёт
+	# другого, — не ошибка игрока. Живой лог 10.2026: TYPE;.; ;mark;(1, 5)
+	# сразу после BACK;rollback — автор такие точки не нажимал.
+	_main._new_level()
+	_main.active = BB.active_chars(0)
+	S.set_sys_kb(true)
+	var want_here: String = _main._current()
+	var bad_pre2: int = _main.typed_bad
+	_main.call("_unhandled_key_input", _hardkey(KEY_PERIOD, ".".unicode_at(0)))
+	_check(
+		_main.typed_bad == bad_pre2,
+		"an IME-inserted period is not counted as a mistake"
+	)
+	_check(
+		_main.errors.is_empty(),
+		"an IME-inserted period leaves no red mark"
+	)
+	# А вот когда игра точку ЖДЁТ — она проходит какusually.
+	_main.cursor_line = 0
+	_main.cursor_pos = 0
+	while _main._current() != "." and _main.cursor_pos < 40:
+		_main.cursor_pos += 1
+		if _main._current() == " " or _main._current() == "":
+			_main.cursor_pos += 1
+	if _main._current() == ".":
+		var ok_pre3: int = _main.typed_ok
+		_main.call("_unhandled_key_input", _hardkey(KEY_PERIOD, ".".unicode_at(0)))
+		_check(
+			_main.typed_ok == ok_pre3 + 1,
+			"an expected period is typed normally"
+		)
+	S.set_sys_kb(false)
+
+	# --- Два пробела подряд, между ними только серые буквы: режим
+	# ограниченного набора, где игрок обязан жать пробел дважды. Жалоба
+	# автора 10.2026: «если жму пробел дважды быстро, второй не
+	# засчитывается». Оба пробела должны приниматься.
+	_main._new_level()
+	_main.active = {" ": true}
+	var sp1 := -1
+	var sp2 := -1
+	var l0s: String = _main.display_lines[0]
+	for i in l0s.length():
+		if l0s.substr(i, 1) == " " and sp1 < 0:
+			sp1 = i
+		elif l0s.substr(i, 1) == " " and sp1 >= 0 and sp2 < 0:
+			if i > sp1 + 1:
+				sp2 = i
+				break
+	_check(sp1 >= 0 and sp2 > sp1, "the level has two spaces with greys between")
+	if sp2 > sp1:
+		_main.cursor_line = 0
+		_main.cursor_pos = sp1
+		_main._type_char(" ", true)
+		_check(
+			Vector2i(_main.cursor_line, _main.cursor_pos) == Vector2i(0, sp2),
+			"the first space walks the cursor to the second one"
+		)
+		# Второй пробел сразу, в том же такте: он НЕ дубль клавиши.
+		var ok_b4: int = _main.typed_ok
+		_main._type_char_comp(" ")
+		_check(
+			int(_main.typed_ok) == ok_b4 + 1,
+			"the second space is counted, not swallowed as a double key"
+		)
+		# И третий подряд, тоже быстро: дубля клавиши тут нет — игра
+		# каждый пробел ждёт отдельно.
+		var ok_b5: int = _main.typed_ok
+		_main._type_char_comp(" ")
+		_check(
+			int(_main.typed_ok) > ok_b5,
+			"a third space in the same tick is judged on its own"
+		)
+
+	# --- После победы ввод не принимается: последняя пачка от IME не
+	# должна дописываться после END (живой лог 10.2026: END;win, а через
+	# 10 мс TYPE;а;а;ok — счётчик рос, игрок видел «пробел съелся»).
+	_main._new_level()
+	_main.active = BB.active_chars(0)
+	var ok_b6: int = _main.typed_ok
+	_main._finish(true, "")
+	_main._type_char(_main._current())
+	_main._type_char_comp("а")
+	_main._comp_flush()
+	_check(
+		int(_main.typed_ok) == ok_b6,
+		"no input is counted after the level is over"
+	)
+
+	# --- Backspace при системной клавиатуре НЕ откатывает набранные буквы:
+	# IME пришлёт меньше, чем снято, и игрок зациклится (живой лог
+	# 10.2026: 109 набранных при 55 нужных, ёж догнал).
+	_main._new_level()
+	_main.active = BB.active_chars(0)
+	_main._type_char(_main._current())
+	var filled_before: int = _main.typed_cells.size()
+	S.set_sys_kb(true)
+	_main._backspace()
+	_check(
+		_main.typed_cells.size() == filled_before,
+		"backspace keeps typed letters while the system keyboard is on"
+	)
+	_check(true, "the skipped rollback keeps the typed letters (checked above)")
+	# А со своей клавиатурой откат работает как обычно.
+	S.set_sys_kb(false)
+	_main._backspace()
+	_check(
+		_main.typed_cells.size() < filled_before,
+		"backspace still rolls back with the own keyboard"
+	)
+
+	# --- Новый уровень пере-поднимает системную клавиатуру: иначе сессия
+	# IME рвётся (уровень начат нажатием клавиши) и буквы уходят в никуда,
+	# пока игрок не тапнёт по тексту. Жалоба автора 10.2026: «после смены
+	# уровня нажимал правильную букву, реакции не было».
+	S.set_sys_kb(true)
+	var before_refocus := int(_main._kb_refocus)
+	_main._new_level()
+	_check(int(_main._kb_refocus) > before_refocus,
+		"a new level re-focuses the system keyboard")
+	# Обратный отсчёт кадров: до показа клавиатура скрыта.
+	_check(int(_main._kb_refocus) > 0, "the keyboard re-show is scheduled")
+	var frames := 0
+	while int(_main._kb_refocus) > 0 and frames < 10:
+		_main.call("_process", 0.016)
+		frames += 1
+	_check(int(_main._kb_refocus) == 0, "the keyboard comes back within a few frames")
+	_check(frames < 10, "the re-show does not hang")
+	# Без системной клавиатуры пере-показ не нужен (десктоп).
+	S.set_sys_kb(false)
+	var after_refocus := int(_main._kb_refocus)
+	_main._new_level()
+	_check(int(_main._kb_refocus) == after_refocus,
+		"without the system keyboard there is nothing to re-focus")
+
+	# --- Низ верхнего выреза экрана (камера-капля): чистая функция.
+	_check(Ui.cutout_bottom([], 2340.0) == 0.0, "no cutouts means no inset")
+	_check(
+		Ui.cutout_bottom([Rect2(500, 0, 100, 80)], 2340.0) == 80.0,
+		"top cutout pushes content down"
+	)
+	_check(
+		Ui.cutout_bottom([Rect2(0, 2000, 100, 80)], 2340.0) == 0.0,
+		"bottom cutout is ignored"
+	)
+
+	# --- Серия размазалась по кадрам (автозамена: DEL сейчас, слово
+	# следующим циклом). Висящие DEL ждут символы до дедлайна, а не
+	# сбрасываются: иначе откаты применены, а слово встанет метками.
+	_main._new_level()
+	_main.active = BB.active_chars(0)
+	_main._type_char(_main._current())
+	_main._type_char(_main._current())
+	var cur2 := Vector2i(_main.cursor_line, _main.cursor_pos)
+	var ok3: int = _main.typed_ok
+	for _j in 2:
+		_main._unhandled_key_input(_unknownkey(8))
+	_main._comp_flush()
+	_check(
+		Vector2i(_main.cursor_line, _main.cursor_pos) != cur2,
+		"hanging DELs applied (cursor moved back)"
+	)
+	for j in "xyz".length():
+		_main._unhandled_key_input(_unknownkey("xyz".unicode_at(j)))
+	_main._comp_flush()
+	_check(
+		Vector2i(_main.cursor_line, _main.cursor_pos) == cur2,
+		"late word joins the hanging DELs and is dropped"
+	)
+	_check(_main.errors.is_empty(), "late word leaves no marks")
+	_check(
+		int(_main.typed_ok) == ok3 and _main.typed_bad == 0,
+		"late word touches no counters"
+	)
+	# А протухшие DEL (дедлайн вышел, символов не было) — настоящие
+	# ручные стирания: цикл закрыт, курсор остаётся откаченным.
+	_main._unhandled_key_input(_unknownkey(8))
+	_main._comp_deadline = 0
+	_main._comp_flush()
+	_check(not _main._comp_active, "expired DELs close the cycle")
 
 	# --- Пере-показ клавиатуры: чистое решение, матрица сочетаний. ---
 	# want/shown/height/elapsed/seen/reshown: показать заново — один раз
 	# и только если клавиатура так и не выехала. Смахнутую пользователем
 	# (была видна) не трогаем никогда.
+	# Своя клавиатура вместо системной (решение автора 10.2026).
+	# Видна в партии на сенсорных устройствах (в headless — через
+	# _force_touch), на десктопе её нет (есть железная). Тап по клавише
+	# даёт символ напрямую, без IME: composing-переписям неоткуда взяться.
+	_main._new_level()
+	_touch(true)
+	root.size = Vector2i(1100, 650)
+	_main._relayout()
+	_check(_main._own_shown(), "own keyboard shows while playing on touch")
+	_check(_main.kb_h > 0.0, "own keyboard takes layout height")
+	var kb_area: Rect2 = _main._own_rect()
+	_check(
+		kb_area.position.y + kb_area.size.y <= _main.view_h + 1.0,
+		"own keyboard fits on screen"
+	)
+	var kb0: int = _main.typed_ok
+	var want_kb := String(_main._current())
+	# Заглавную ищем в шифт-рядах (начала предложений в текстах).
+	var kb_shift_need := want_kb != want_kb.to_lower()
+	var hit_pos := Vector2(-1.0, -1.0)
+	for b in K.buttons(kb_area, "ru", "ru", kb_shift_need, false):
+		if String(b["s"]) == want_kb:
+			hit_pos = (b["r"] as Rect2).get_center()
+			break
+	_check(hit_pos.x >= 0.0, "wanted letter is on the keyboard")
+	if kb_shift_need:
+		_main.call("_input", _tap(_kb_center(kb_area, "ru", "⇧")))
+		_check(bool(_main.kb_shift), "shift arms uppercase")
+	_main.call("_input", _tap(hit_pos))
+	_check(int(_main.typed_ok) == kb0 + 1, "tap on own key types the letter")
+	_check(_main.errors.is_empty(), "own key makes no marks")
+	_main.call("_input", _tap(_kb_center(kb_area, "ru", "?123")))
+	_check(String(_main.kb_layer) == "sym", "layer key switches to symbols")
+	_main.call("_input", _tap(_kb_center(kb_area, "sym", "РУ")))
+	_check(String(_main.kb_layer) == "ru", "symbols return to russian")
+	_main.call("_input", _tap(_kb_center(kb_area, "ru", "глобус")))
+	_check(String(_main.kb_layer) == "en", "globe switches to latin")
+	_check(String(_main.kb_lang) == "en", "globe remembers the language")
+	_main.call("_input", _tap(_kb_center(kb_area, "en", "глобус")))
+	_check(String(_main.kb_layer) == "ru", "globe switches back to russian")
+	# Долгое нажатие е→ё: press вводит «е», долгое release меняет на «ё».
+	_check(K.long_alt("е") == "ё", "long e gives yo")
+	_check(K.long_alt("ь") == "ъ", "long soft gives hard")
+	_check(K.long_alt("Е") == "Ё", "long shift works too")
+	_check(K.long_alt("а") == "", "plain letters have no long pair")
+	_main.call("_input", _tap(_kb_center(kb_area, "ru", "е")))
+	var sum_before: int = int(_main.typed_ok) + int(_main.typed_bad)
+	_main._lp_t0 = Time.get_ticks_msec() - 600
+	_main.call("_input", _up(_kb_center(kb_area, "ru", "е")))
+	_check(String(_main._lp_act) == "", "release closes the long cycle")
+	_check(
+		int(_main.typed_ok) + int(_main.typed_bad) == sum_before + 1,
+		"long release swaps the letter (erase is free, type counts)"
+	)
+	# Короткое отпускание ничего не меняет.
+	_main.call("_input", _tap(_kb_center(kb_area, "ru", "е")))
+	var sum_short: int = int(_main.typed_ok) + int(_main.typed_bad)
+	_main.call("_input", _up(_kb_center(kb_area, "ru", "е")))
+	_check(
+		int(_main.typed_ok) + int(_main.typed_bad) == sum_short,
+		"short release changes nothing"
+	)
+	# Стереть своей кнопкой.
+	_main.call("_input", _tap(_kb_center(kb_area, "ru", "←")))
+	# Модалка: клавиатуры нет (ввод не нужен), тапы листают дальше.
+	_main._finish(true)
+	_main._relayout()
+	_check(not _main._own_shown(), "no own keyboard on the modal")
+	_touch(false)
+	_main._relayout()
+	_check(not _main._own_shown(), "no own keyboard on desktop")
+	_main._new_level()
+
+	# --- Раскладка уезжает вверх от клавиатуры. ---
+	# В headless вьюпорт крошечный (64×64), поэтому сначала ставим
+	# реалистичный размер окна, иначе пол эффективной высоты всё скроет.
+	root.size = Vector2i(1100, 650)
+	# Своя клавиатура занимает низ: раскладка едет от остатка.
+	# В headless-десктопе её нет (kb_h=0) — включаем сенсорный режим.
+	_touch(true)
+	root.size = Vector2i(1100, 650)
+	_main._relayout()
+	var hy1: float = _main.hud_label.position.y
+	var k1: float = _main.k
+	_check(_main.kb_h > 0.0, "touch layout reserves keyboard height")
+	_check(_main.hud_label.position.y < 650.0, "hud stays above the keyboard")
+	_check(_main.k <= k1 + 0.001, "scale fits the free area")
+	_check(
+		_main.card_p.position.y + _main.card_p.size.y <= _main.view_h - _main.kb_h + 1.0,
+		"text card stays above the keyboard"
+	)
+	_touch(false)
+	_main._relayout()
+	_check(_main.kb_h == 0.0, "desktop layout has no keyboard height")
+
+	# --- Галка системной клавиатуры: своя прячется, системный путь
+	# (показ/замер/пере-показ) работает, борьба с автозаменой — comp-буфер.
+	S.set_sys_kb(true)
+	_main._relayout()
+	_check(not _main._own_shown(), "system keyboard hides the own one")
+	_main.view_w = 2000.0
+	_main.view_h = 1000.0
+	_check(not _main._kb_want(), "no system keyboard in landscape game")
+	_main.view_w = 1000.0
+	_main.view_h = 2000.0
+	_check(_main._kb_want(), "system keyboard in portrait game")
 	var rs: Callable = _main.kb_need_reshow
 	_check(rs.call(true, true, 0.0, 4.0, false, false), "reshow when wanted, shown, flat, expired")
 	_check(not rs.call(true, true, 0.0, 0.5, false, false), "no reshow while gliding in")
@@ -583,55 +1353,39 @@ func _run_part2() -> void:
 	_check(not rs.call(true, false, 0.0, 9.0, false, false), "initial show is a separate path")
 	_check(not rs.call(true, true, 0.0, 9.0, true, false), "no reshow after user dismissed")
 	_check(not rs.call(true, true, 0.0, 9.0, false, true), "reshow is one-shot")
-
-	# --- Раскладка уезжает вверх от клавиатуры. ---
-	# В headless вьюпорт крошечный (64×64), поэтому сначала ставим
-	# реалистичный размер окна, иначе пол эффективной высоты всё скроет.
-	root.size = Vector2i(1100, 650)
-	_main.kb_h = 0.0
-	_main._relayout()
-	var hy0: float = _main.hud_label.position.y
-	var k0: float = _main.k
-	_main.kb_h = 300.0
-	_main._relayout()
-	_check(_main.hud_label.position.y < hy0, "layout moves up over the keyboard")
-	_check(_main.k <= k0, "scale shrinks to fit the free area")
-	_check(
-		_main.card_p.position.y + _main.card_p.size.y <= _main.view_h - 300.0 + 1.0,
-		"text card stays above the keyboard"
-	)
-	_main.kb_h = 0.0
+	S.set_sys_kb(false)
 	_main._relayout()
 
-	# --- Политика клавиатуры: имя — всегда, партия — только портрет. ---
-	# В альбоме в игре только внешняя клавиатура, системную зовём
-	# кнопкой ⌨. Чистая функция от view и меню (тут меню нет).
+	# --- Политика клавиатуры: своя видна в партии везде. ---
+	# В альбоме в игре только внешняя клавиатура, системную зовёт тап
+	# по рабочей области. Чистая функция от view и меню (тут меню нет).
+	_touch(true)
 	_main.view_w = 2000.0
 	_main.view_h = 1000.0
-	_check(not _main._kb_want(), "no auto keyboard in landscape game")
+	_main._relayout()
+	_check(_main._own_shown(), "own keyboard shows in landscape too")
 	_main.view_w = 1000.0
 	_main.view_h = 2000.0
-	_check(_main._kb_want(), "auto keyboard in portrait game")
-	# Ручной вызов кнопкой ⌨ держит клавиатуру и в альбоме: без флага
-	# _sync_keyboard прятал её на следующем кадре (кнопка молчала).
+	_main._relayout()
+	_check(_main._own_shown(), "own keyboard shows in portrait")
+	_touch(false)
+	# Ручной вызов тапом держит клавиатуру и в альбоме: без флага
+	# _sync_keyboard прятал её на следующем кадре.
 	_main.view_w = 2000.0
 	_main.view_h = 1000.0
-	_main._kb_manual = true
-	_check(_main._kb_want(), "manual summon keeps keyboard in landscape")
 	_main._new_level()
-	_check(not _main._kb_manual, "new level clears the manual flag")
-	_check(not _main._kb_want(), "landscape is quiet again after new level")
 	_main.view_w = 1100.0
 	_main.view_h = 650.0
 
 	# --- Разбивка строк под узкий экран: слова целы, символы не теряются.
-	# Пробел-разделитель уезжает в конец куска, поэтому склейка кусков
+	# Пробел на месте разрыва убираем: он невидим, а игра ждёт нажатия
+	# (жалоба автора: на телефоне уровень не проходился). Склейка кусков
 	# сравнивается без пробелов. Массивы типизированные: нетипизированный
 	# литерал в Array[String]-параметр 4.3 не принимает (молча error).
 	var fl: Callable = BB.fit_lines
 	var raw1: Array[String] = ["мама мыла раму", "папа"]
 	var fit1: Array = fl.call(raw1, 10)
-	_check(fit1 == ["мама мыла ", "раму", "папа"], "long line wraps by words")
+	_check(fit1 == ["мама мыла", "раму", "папа"], "long line wraps by words")
 	_check(
 		"".join(fit1).replace(" ", "") == "мамамыларамупапа",
 		"wrap loses no characters"
@@ -642,7 +1396,10 @@ func _run_part2() -> void:
 	)
 	var raw3: Array[String] = ["раз два три"]
 	var fit2: Array = fl.call(raw3, 7)
-	_check(fit2 == ["раз два ", "три"], "wrap point is exact")
+	_check(fit2 == ["раз два", "три"], "wrap point is exact")
+	_check(
+		fit2[0].right(1) != " ", "no invisible space at the wrap point"
+	)
 	var raw4: Array[String] = ["супердлинноеслово", "а"]
 	_check(
 		fl.call(raw4, 5)[0].length() == 5,
@@ -651,6 +1408,9 @@ func _run_part2() -> void:
 
 	# --- Скролл длинного текста: окно едет за курсором, уехавшие прячем.
 	# Карточка — окно, а не весь текст. Самосогласовано через _vis_lines.
+	# kb_h сбрасываем релэутом (своя клавиатура из прошлых частей).
+	root.size = Vector2i(1100, 650)
+	_main._relayout()
 	var six: Array[String] = ["раз", "два", "три", "четыре", "пять", "шесть"]
 	_main.display_lines = six
 	_main.cursor_line = 5
@@ -709,18 +1469,12 @@ func _run_part2() -> void:
 		_main.cursor_line == 0 and _main.cursor_pos == 0,
 		"new level starts at the beginning"
 	)
-	# На десктопе кнопки ⌨ нет и тап по её месту — это тап по ≡:
-	# угол принадлежит одной кнопке. Мобильная ветка ниже — только
-	# с _force_touch (в headless иначе не проверить).
+	# Тап по рабочей области вызывает клавиатуру (автовызов вместо кнопки
+	# тексту). Своя клавиатура всегда видна в партии — вызывать нечего.
+	# тексту). Мобильная ветка — только с _force_touch (в headless иначе
+	# не проверить).
 	_main._finish(true)
 	_check(_main.state == "won", "setup: level won again")
-	_main._force_touch = true
-	_main._relayout()
-	_main.call("_input", _tap(_main._kb_rect.get_center()))
-	_check(_main._kb_manual, "kb tap summons the keyboard on touch layouts")
-	_check(_main.state == "won", "kb tap does not advance past the modal")
-	_main._force_touch = false
-	_main._relayout()
 	# Слои: модалка принадлежит игре — с открытым меню гаснет,
 	# с закрытым возвращается (партия всё ещё выиграна).
 	_check(_main.over_p.visible, "modal is up before the menu opens")
@@ -729,6 +1483,17 @@ func _run_part2() -> void:
 	_check(not _main.overlay_label.visible, "modal label hides with the menu")
 	_main._close_menu()
 	_check(_main.over_p.visible, "modal returns when the menu closes")
+	# Своя клавиатура в партии видна всегда — вызывать тапом нечего:
+	# тап по карточке партию не трогает.
+	_main._new_level()
+	_touch(true)
+	root.size = Vector2i(1100, 650)
+	_main._relayout()
+	_main.call("_input", _tap(Rect2(_main.card_p.position, _main.card_p.size).get_center()))
+	_check(_main._own_shown(), "own keyboard stays up while playing")
+	_check(_main.state == "playing", "work area tap does not disturb playing")
+	_touch(false)
+	_main._relayout()
 	# Полые звёзды: недобранный балл виден (2 из 3).
 	_main._new_level()
 	_main.typed_ok = 94
@@ -955,10 +1720,40 @@ func _softkey(code: int) -> InputEventKey:
 	return ev
 
 
+## Клавиша системной клавиатуры со словарём: keycode неизвестен
+## (Яндекс шлёт KEY_UNKNOWN, Gboard — KEY_NONE), только unicode.
+func _unknownkey(code: int) -> InputEventKey:
+	var ev := InputEventKey.new()
+	ev.keycode = KEY_UNKNOWN
+	ev.unicode = code
+	ev.pressed = true
+	return ev
+
+
 ## Клавиша по коду (без символа): модификаторы, стрелки, F-клавиши.
 func _key(code: int) -> InputEventKey:
 	var ev := InputEventKey.new()
 	ev.keycode = code
+	ev.pressed = true
+	return ev
+
+
+## Событие как от IME с словарём: keycode KEY_UNKNOWN, символ в unicode
+## (так шлёт Яндекс — из-за этого буквы копятся в буфере).
+func _soft_key(ch: String) -> InputEventKey:
+	var ev := InputEventKey.new()
+	ev.keycode = KEY_UNKNOWN
+	ev.unicode = ch.unicode_at(0)
+	ev.pressed = true
+	return ev
+
+
+## Пробел с настоящим keycode — как с экранной клавиатуры (Яндекс шлёт
+## его не с KEY_UNKNOWN, и раньше он перепрыгивал буфер).
+func _space_key() -> InputEventKey:
+	var ev := InputEventKey.new()
+	ev.keycode = KEY_SPACE
+	ev.unicode = 32
 	ev.pressed = true
 	return ev
 
@@ -974,6 +1769,29 @@ func _hardkey(code: int, uni: int, shift := false) -> InputEventKey:
 
 
 ## Клик мыши с координатами.
+## Центр клавиши со знаком на своей клавиатуре (для тапов в тестах).
+func _kb_center(area: Rect2, layer: String, label: String) -> Vector2:
+	for b in K.buttons(area, layer, "ru", false, false):
+		if String(b["s"]) == label:
+			return (b["r"] as Rect2).get_center()
+	return Vector2(-1.0, -1.0)
+
+
+## Сенсорный режим (своя клавиатура) — игре и меню сразу.
+func _touch(on: bool) -> void:
+	_main._force_touch = on
+	Ui.force_touch = on
+
+
+## Отпускание кнопки мыши (долгие нажатия своей клавиатуры).
+func _up(pos: Vector2) -> InputEventMouseButton:
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_LEFT
+	ev.pressed = false
+	ev.position = pos
+	return ev
+
+
 func _tap(pos: Vector2) -> InputEventMouseButton:
 	var ev := InputEventMouseButton.new()
 	ev.button_index = MOUSE_BUTTON_LEFT
@@ -984,6 +1802,14 @@ func _tap(pos: Vector2) -> InputEventMouseButton:
 
 ## Первая не-пробельная буква строки 0: с неё можно запустить автопропуск
 ## (пробелы активны всегда, на них пропуск останавливается сам).
+## Первая активная (не серая) клетка первой строки.
+func _first_active() -> int:
+	for i in _main.display_lines[0].length():
+		if _main._is_active(_main.display_lines[0].substr(i, 1)):
+			return i
+	return 0
+
+
 func _first_grey() -> int:
 	var l0: String = _main.display_lines[0]
 	for i in l0.length():

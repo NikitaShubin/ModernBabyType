@@ -7,9 +7,10 @@
 #
 # В образе уже есть всё для экспорта на все четыре платформы:
 #   * export templates 4.3 (в $HOME/.local/share/godot/export_templates),
-#   * JDK 17 и Android SDK с build-tools/platform-tools/ndk (нужны
-#     только для генерации автозагрузки при включённом gradle build; у
-#     нас он выключен, но держим под рукой),
+#   * JDK 17 и Android SDK с build-tools/platform-tools/ndk (gradle-сборка
+#     Android включена: обновление ставится из игры через системный
+#     установщик, для него нужен нативный плагин и gradle; шаблон
+#     android/build разворачивает build-game.sh из android_source.zip),
 #   * /opt/rcedit.exe + wine64 — правка иконки и версии в .exe,
 #   * zip/unzip — macOS-экспорт собирается в .zip.
 FROM barichello/godot-ci:4.3

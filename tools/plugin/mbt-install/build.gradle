@@ -1,0 +1,18 @@
+// Top-level build file: репозитории для всех модулей.
+buildscript {
+	repositories {
+		google()
+		mavenCentral()
+		gradlePluginPortal()
+	}
+	dependencies {
+		classpath 'com.android.tools.build:gradle:8.1.4'
+	}
+}
+
+allprojects {
+	repositories {
+		google()
+		mavenCentral()
+	}
+}
