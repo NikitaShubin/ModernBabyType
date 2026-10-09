@@ -987,11 +987,10 @@ func _run_part2() -> void:
 	_check(mismatched == 0, "each visible label holds its own line's letters")
 	_main._new_level()
 
-	# --- Пачка от IME: одна опечатка НЕ должна уносить курсор и плодить
-	# ошибки на всю пачку. Живой лог 10.2026: TYPE;о; ;mark; Type; ;а;mark —
-	# две красные метки из одного нажатия (автор: «после пробела сразу
-	# несколько ошибок»). В пачке курсор стоит, ошибается только своя
-	# клетка, следующая буква встаёт по логике текста.
+	# --- Механика ошибок: метка + шаг назад за каждую неверную клавишу.
+	# Неверные копятся назад, Backspace снимает их по одной. Заглушка
+	# diag21 («в пачке без отката») ломала это на всём телефонном вводе,
+	# поэтому проверяем и железной клавишей, и через буфер IME.
 	_main._new_level()
 	# Ищем место «активная буква, ПРОБЕЛ, активная буква» — как «о»,
 	# пробел, «о» в «Посадил дед». Ошибка будет на пробеле.
@@ -1013,46 +1012,60 @@ func _run_part2() -> void:
 			"cursor stands on the space after a correct letter"
 		)
 		var bad_pre: int = _main.typed_bad
-		# Пачка от IME: неверная клавиша даёт ровно одну метку — и всё.
-		# Откат внутри пачки отменён, иначе одна ошибка уносила курсор
-		# и валила всю пачку каскадом.
+		# Неверная клавиша: метка на своей клетке + шаг назад.
 		_main.cursor_line = 0
 		_main.cursor_pos = gap_at
-		_main.hints.clear()
-		_main._type_char("ь", true)  # мусор: ждали пробел
+		_main._type_char("ь")  # мусор: ждали пробел
 		_check(
 			_main.typed_bad == bad_pre + 1,
-			"the wrong key in a batch makes exactly one mistake"
+			"the wrong key makes exactly one mistake"
 		)
 		_check(
 			_main.errors.has(_cell_key(0, gap_at)),
-			"the batch mistake marks its own cell"
+			"the mistake marks its own cell"
 		)
 		_check(
-			Vector2i(_main.cursor_line, _main.cursor_pos) == Vector2i(0, gap_at),
-			"a mistake inside a batch does not drag the cursor back"
+			Vector2i(_main.cursor_line, _main.cursor_pos) == Vector2i(0, gap_at - 1),
+			"a mistake knocks the cursor one cell back"
 		)
-		# Следующая буква пачки встаёт туда, где стоит по тексту.
-		_main._type_char(" ", true)
+		# Вторая неверная вместо Backspace: копится перед предыдущей.
+		_main._type_char("ъ")
 		_check(
-			Vector2i(_main.cursor_line, _main.cursor_pos) == Vector2i(0, gap_at + 1),
-			"the rest of the batch is applied in place, not as a cascade"
+			_main.errors.has(_cell_key(0, gap_at - 1)),
+			"the second mistake marks the cell behind"
 		)
 		_check(
-			_main.typed_bad == bad_pre + 1,
-			"the batch holds exactly the one mistake, no cascade"
+			_main.errors.has(_cell_key(0, gap_at)),
+			"the first mark survives the second mistake"
 		)
-		# С железной клавишей откат сохраняется: ребёнок может перебить
-		# опечатку (там одиночная клавиша, а не пачка).
+		# Backspace снимает по одной, в обратном порядке.
+		_main._backspace()
+		_check(
+			not _main.errors.has(_cell_key(0, gap_at - 1)),
+			"backspace removes the last mark first"
+		)
+		_check(
+			_main.errors.has(_cell_key(0, gap_at)),
+			"backspace keeps the earlier mark"
+		)
+		_main._backspace()
+		_check(
+			_main.errors.is_empty(),
+			"the second backspace clears the first mark"
+		)
+		# Та же механика через буфер IME (телефон): метка + откат.
 		_main._new_level()
 		_main.cursor_line = 0
-		_main.cursor_pos = 0
-		_main._type_char(_main._current())
-		var kb_to: Vector2i = Vector2i(_main.cursor_line, _main.cursor_pos)
-		_main._type_char("ь")
+		_main.cursor_pos = gap_at - 1
+		_main._type_char_comp(l0b.substr(gap_at - 1, 1))
+		_main.cursor_line = 0
+		_main.cursor_pos = gap_at
+		var bad_pre3: int = _main.typed_bad
+		_main._type_char_comp("ь")
 		_check(
-			Vector2i(_main.cursor_line, _main.cursor_pos) != kb_to,
-			"a hard key mistake still knocks the cursor back"
+			_main.typed_bad == bad_pre3 + 1
+			and Vector2i(_main.cursor_line, _main.cursor_pos) == Vector2i(0, gap_at - 1),
+			"a mistake through the IME buffer knocks back too"
 		)
 
 	# --- Автопунктуация IME: точка с настоящим keycode, когда игра ждёт
