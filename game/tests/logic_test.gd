@@ -15,7 +15,6 @@ var _failures: Array[String] = []
 var _d0 := 0.0
 var _ex0 := 0.0
 var _hx := 0.0
-var _hx0 := 0.0
 var _hy := 0.0
 
 
@@ -136,8 +135,8 @@ func _process(_dt: float) -> bool:
 		_check(absf(_main.hero_r.y - _main._track_cy(1)) < 0.5, "hare keeps its row")
 	elif _frame == 72:
 		# Заяц влетел в ёжа прыжком назад (ёж ровно на его правом краю).
-		# Выталкивание вперёд обязано быть коротким (кап), а не
-		# телепортом через пол-экрана.
+		# На кадре укола заяц встаёт ровно в касание — никакого зазора
+		# (жалоба 10.2026: «останавливается сильно до, а игре уже конец»).
 		_main._new_level()
 		_main.grace_t = 0.0
 		_main.enemy_cps = 0.0
@@ -146,15 +145,10 @@ func _process(_dt: float) -> bool:
 		_main.hedge_active = true
 		_main.enemy_line = 1
 		_main.enemy_x = _main.margin + 3.0 * _main.char_w
-		_hx0 = _main.hero_r.x
 	elif _frame == 74:
 		_check(_main.state == "lost", "hare jumping back onto the hedge is a prick")
-		var cap: float = _main.SNAP_CAP_CHARS * _main.char_w
-		var moved: float = _main.hero_r.x - _hx0
-		_check(moved > 0.0, "hare pushed out of the hedgehog forward")
-		_check(moved <= cap + 1.0, "push-out capped, no screen-crossing throw")
-		_check(_main.hero_r.x < _main.enemy_x + _main._hedge_half(),
-			"deep penetration not snapped to contact across half a line")
+		_check(absf(_main.hero_r.x - (_main.enemy_x + _main._hedge_half())) < 0.5,
+			"hare exactly at contact, no shortfall gap")
 		# Жалоба (дважды): ёж в КОНЦЕ строки 0, даже за её край
 		# (post-туннель +2), заяц в начале строки 1. Укола нет: строка
 		# ежа меньше строки зайца, ёжу до зайца ещё целая строка миль,
@@ -1401,14 +1395,16 @@ func _run_part2() -> void:
 	_main.view_w = 1000.0
 	_main.view_h = 2000.0
 	_check(_main._kb_want(), "system keyboard in portrait game")
+	# Фокус ввода возвращается сам, без разовых ограничений: пока
+	# клавиатура нужна, а её нет, — показывать снова (требование 10.2026).
 	var rs: Callable = _main.kb_need_reshow
-	_check(rs.call(true, true, 0.0, 4.0, false, false), "reshow when wanted, shown, flat, expired")
-	_check(not rs.call(true, true, 0.0, 0.5, false, false), "no reshow while gliding in")
-	_check(not rs.call(true, true, 120.0, 9.0, true, false), "no reshow when visible")
-	_check(not rs.call(false, true, 0.0, 9.0, false, false), "no reshow when not wanted")
-	_check(not rs.call(true, false, 0.0, 9.0, false, false), "initial show is a separate path")
-	_check(not rs.call(true, true, 0.0, 9.0, true, false), "no reshow after user dismissed")
-	_check(not rs.call(true, true, 0.0, 9.0, false, true), "reshow is one-shot")
+	_check(rs.call(true, true, 0.0, 4.0), "reshow when wanted, flat, expired")
+	_check(not rs.call(true, true, 0.0, 0.5), "no reshow while gliding in")
+	_check(not rs.call(true, true, 120.0, 9.0), "no reshow when visible")
+	_check(not rs.call(false, true, 0.0, 9.0), "no reshow when not wanted")
+	_check(not rs.call(true, false, 0.0, 9.0), "initial show is a separate path")
+	_check(rs.call(true, true, 0.0, 9.0), "reshow after a dismiss too")
+	_check(rs.call(true, true, 0.0, 99.0), "reshow repeats while still missing")
 	S.set_sys_kb(false)
 	_main._relayout()
 

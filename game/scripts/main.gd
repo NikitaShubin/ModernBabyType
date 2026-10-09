@@ -42,20 +42,6 @@ const HEDGE_BALL_FRAC := 145.0 / 160.0
 ## малым: запас — это видимая щель между шарами в момент укола, а автору
 ## нужно ровно расстояние контакта.
 const CONTACT_SLACK := 0.15
-## Кап выталкивания зайца вперёд при уколе (в символах). Выталкиваем
-## только если заяц влетел в ёжа (прыжок назад через него, откат после
-## ошибки) — это один-два символа. Кап нужен на выброс большого отката,
-## чтобы бросок не унёс зайца через пол-экрана.
-const SNAP_CAP_CHARS := 2.0
-## Кап подтягивания зайца НАЗАД к касанию (в символах). Обычно заяц уже
-## стоит вплотную и подтягивать нечего (тогда срабатывает крошечный
-## CONTACT_SLACK). Разница побольше бывает, когда логика откатилась на
-## ошибке или Backspace, а картинка ещё не доехала: это откат на символ.
-## Кап держим шире отката, иначе между ним и допуском детекции остаётся
-## дырка, где заяц замирает с щелью. Дальше капа не тянем: это уже не
-## «встать в касание», а прыжок назад. Оба капа — только на одной строке;
-## через угол строк заяц встаёт ровно в касание, без капов.
-const SNAP_BACK_CHARS := 1.5
 const BASE_W := 1100.0
 const BASE_H := 650.0
 const START_DELAY := 3.0
@@ -173,12 +159,10 @@ var kb_h := 0.0
 ## Ui.top_inset; верхняя группа (бейдж, имя, кнопка, текст) едет вниз.
 var top_safe := 0.0
 ## Системная клавиатура (галка в меню, борьба с автозаменой — comp-буфер):
-## показана прямо сейчас, момент запроса, была видна, пере-показ использован,
-## сырая высота в экранных пикселях. Живут только при включённой галке.
+## показана прямо сейчас, момент запроса, сырая высота в экранных пикселях.
+## Живут только при включённой галке.
 var _kb_shown := false
 var _kb_request_t := -100.0
-var _kb_seen := false
-var _kb_reshown := false
 var _kb_raw := 0.0
 ## Ручной вызов системной тапом по рабочей области (при её галке).
 var _kb_manual := false
@@ -1578,14 +1562,12 @@ func _process(dt: float) -> void:
 			if DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
 				DisplayServer.virtual_keyboard_hide()
 				_kb_shown = false
-				_kb_reshown = false
 				_kb_request_t = time
 		elif _kb_refocus == 0:
 			# Второй: показать заново — сессия IME встанет как надо.
 			if DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
 				DisplayServer.virtual_keyboard_show("")
 				_kb_shown = true
-				_kb_reshown = false
 				_kb_request_t = time
 	if S.get_sys_kb():
 		_sync_keyboard()
@@ -1704,15 +1686,12 @@ func _process(dt: float) -> void:
 				# ежа НЕ трогаем: он катится плавно, его координата в
 				# кадре касания и так верна.
 				if same_row:
-					# Одна строка: ровно на дистанцию контакта, с капами
-					# против прыжка через него (см. _settle_contact).
+					# Одна строка: заяц ровно на дистанцию контакта.
 					_settle_contact(cursor_line)
 				else:
 					# Откат через угол строк: табло укола показываем
-					# честное — заяц СТРОГО на строке ежа, координата
-					# ежа + Д, шары в касании. Капов здесь нет: прыжок
-					# между строками уже случился, это его честная цена.
-					_settle_contact(enemy_line, true)
+					# честное — заяц СТРОГО на строке ежа, шары в касании.
+					_settle_contact(enemy_line)
 				_finish(false, "behind")
 			if state == "playing":
 				var llen := 1.0
@@ -1802,8 +1781,6 @@ func _sync_keyboard() -> void:
 	if not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
 		return
 	_kb_request_t = time
-	_kb_seen = false
-	_kb_reshown = false
 	if want:
 		DisplayServer.virtual_keyboard_show("")
 	else:
@@ -1854,8 +1831,8 @@ func _kb_height_px() -> float:
 
 
 ## Следим за системной каждый кадр: выехала/уехала — пересчитать раскладку.
-## Смахнутую пользователем вернёт тап по тексту, по рабочей области или
-## новый контекст (разовый пере-показ — только если так и не выехала).
+## Пропавшую (смахнули, отобрала система, умерла сессия) возвращаем сами
+## пере-показом — ручная галочка не нужна.
 func _poll_keyboard() -> void:
 	if not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
 		return
@@ -1864,20 +1841,19 @@ func _poll_keyboard() -> void:
 		kb_h = kh
 
 		_relayout()
-	if kh > 0.0:
-		_kb_seen = true
 	var want := _kb_want()
-	if kb_need_reshow(want, _kb_shown, kh, time - _kb_request_t, _kb_seen, _kb_reshown):
+	if kb_need_reshow(want, _kb_shown, kh, time - _kb_request_t):
 		_kb_request_t = time
-		_kb_reshown = true
 		DisplayServer.virtual_keyboard_show("")
 
 
-## Чистое решение «пора ли пере-показать»: пере-показ разовый и только
-## если клавиатура так и не выехала (надёжность появления). Матрица в
-## logic_test.
-static func kb_need_reshow(want: bool, shown: bool, height: float, elapsed: float, seen: bool, reshown: bool) -> bool:
-	return want and shown and height <= 0.0 and elapsed > 3.0 and not seen and not reshown
+## Чистое решение «пора ли пере-показать»: клавиатура нужна, флаг показа
+## стоит, а высоты нет дольше полутора секунд — показывать снова. Без
+## разовости: смахнутую, отобранную системой или умершую сессию игра
+## возвращает сама (требование автора 10.2026: фокус ввода теряться не
+## должен, ручная галочка не нужна). Матрица в logic_test.
+static func kb_need_reshow(want: bool, shown: bool, height: float, elapsed: float) -> bool:
+	return want and shown and height <= 0.0 and elapsed > 1.5
 
 
 ## Тап по рабочей области при системной галке: показать её прямо сейчас.
@@ -1886,8 +1862,6 @@ func _kb_summon() -> void:
 	if not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
 		return
 	_kb_request_t = time
-	_kb_seen = false
-	_kb_reshown = false
 	_kb_shown = true
 	DisplayServer.virtual_keyboard_show("")
 
@@ -2255,17 +2229,14 @@ func _touch_chars() -> float:
 ## назад через него или откат после ошибки) — выталкиваем, но не дальше
 ## капа; впереди точки касания (откат логики, картинка не доехала) —
 ## подводим ровно до касания, тоже не дальше капа назад.
-func _settle_contact(row: int, exact := false) -> void:
-	var touch_x := enemy_x + _hedge_half()
-	if exact:
-		hero_r.x = touch_x
-	elif hero_r.x < touch_x:
-		hero_r.x = minf(touch_x, hero_r.x + SNAP_CAP_CHARS * char_w)
-	elif hero_r.x - touch_x <= SNAP_BACK_CHARS * char_w:
-		# Заяц впереди точки касания (откат логики, картинка не доехала).
-		# Подводим ровно до касания — но не дальше капа назад: рывок
-		# назад читается как телепорт, а заяц на уколе стоит насмерть.
-		hero_r.x = touch_x
+## Табло укола: заяц ровно в касании с ежом, всегда. Капов больше нет:
+## частичное подтягивание оставляло зазор между шарами при засчитанном
+## уколе — «заяц останавливается сильно до, а игре уже конец» (жалоба
+## автора 10.2026). И «щель на пару ежей» (та же жалоба раньше), и
+## «не долетает» — одна болезнь: любое отклонение от касания. Рывок
+## на кадре укола читается как удар, а не телепорт: дальше модалка.
+func _settle_contact(row: int) -> void:
+	hero_r.x = enemy_x + _hedge_half()
 	hero_r.y = _track_cy(row)
 	hop_ph = roundf(hop_ph / PI) * PI
 
