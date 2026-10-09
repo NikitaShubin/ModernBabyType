@@ -1110,7 +1110,14 @@ func _last_filled_behind() -> Vector2i:
 		else:
 			return Vector2i(-1, -1)
 		var k := _key(l, p)
-		if typed_cells.has(k) or errors.has(k):
+		if errors.has(k):
+			return Vector2i(l, p)
+		if (
+			typed_cells.has(k)
+			and p >= 0
+			and p < display_lines[l].length()
+			and _is_active(display_lines[l].substr(p, 1))
+		):
 			return Vector2i(l, p)
 	return Vector2i(-1, -1)
 
@@ -1956,6 +1963,13 @@ static func _is_latin(ch: String) -> bool:
 
 
 func _hint_parts() -> Array:
+	if state == "won":
+		return [{"s": "Уровень пройден! Дальше — жми:", "cap": false}, {"s": "↵", "cap": true}]
+	if state == "lost":
+		# После проигрыша буквы мертвы, дальше — только Enter. Без этой
+		# строки игрок жмёт буквы в пустоту и думает, что ввод сломался
+		# (жалоба автора 10.2026: «не реагировала, пока не нажал галочку»).
+		return [{"s": "Ёж догнал! Дальше — жми:", "cap": false}, {"s": "↵", "cap": true}]
 	if state != "playing":
 		return []
 	if _caps_warn and _exact():

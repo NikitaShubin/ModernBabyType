@@ -1177,6 +1177,50 @@ func _run_part2() -> void:
 		)
 	S.set_sys_kb(false)
 
+	# --- Подсказка после конца уровня: куда жать дальше. Без неё игрок
+	# жмёт буквы в пустоту и думает, что ввод сломался (жалоба 10.2026:
+	# «не реагировала, пока не нажал галочку» — а уровень был проигран,
+	# буквы мертвы, дальше только Enter).
+	_main._new_level()
+	_main._finish(true, "")
+	var won_hint := " ".join(_main.call("_hint_parts").map(func(p): return String(p["s"])))
+	_check("↵" in won_hint, "the win hint shows how to continue")
+	_main._new_level()
+	_main._finish(false, "хищник")
+	var lose_hint := " ".join(_main.call("_hint_parts").map(func(p): return String(p["s"])))
+	_check("↵" in lose_hint, "the loss hint shows how to continue")
+
+	# --- Откат встаёт на последнюю ПЕЧАТНУЮ клетку, серые пропускает.
+	# Жалоба 10.2026: бекспейс встал на непечатную «т» вместо набранной.
+	_main._new_level()
+	_main.active = {" ": true}
+	var l0c: String = _main.display_lines[0]
+	_check(l0c.length() >= 4, "the first line is long enough")
+	# Три «набранные» серые клетки, курсор за ними (автопропуск их не
+	# писал бы в typed_cells, здесь — явно набранные серые).
+	_main.cursor_line = 0
+	_main.cursor_pos = 3
+	for i in 3:
+		_main.passed[_cell_key(0, i)] = true
+		_main.typed_cells[_cell_key(0, i)] = true
+	_main._backspace()
+	_check(
+		Vector2i(_main.cursor_line, _main.cursor_pos) == Vector2i(0, 3),
+		"rollback skips inactive typed cells instead of landing on them"
+	)
+	_check(_main.typed_cells.size() == 3, "skipped cells stay passed")
+	# Та же клетка, но буква активна: откат встаёт ровно на неё.
+	_main.active[l0c.substr(2, 1).to_lower()] = true
+	_main._backspace()
+	_check(
+		Vector2i(_main.cursor_line, _main.cursor_pos) == Vector2i(0, 2),
+		"rollback lands on the last active typed cell"
+	)
+	_check(
+		not _main.passed.has(_cell_key(0, 2)),
+		"the landed cell is untyped again"
+	)
+
 	# --- Новый уровень пере-поднимает системную клавиатуру: иначе сессия
 	# IME рвётся (уровень начат нажатием клавиши) и буквы уходят в никуда,
 	# пока игрок не тапнёт по тексту. Жалоба автора 10.2026: «после смены
