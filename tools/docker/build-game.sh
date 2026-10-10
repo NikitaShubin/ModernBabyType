@@ -218,6 +218,44 @@ run_tests() {
 # Пресеты в том порядке, в каком они лежат в export_presets.cfg.
 PRESETS=(Windows Linux macOS Android)
 
+# Версия в артефактах. Пресеты держат СВОИ номера (Godot пишет их как
+# есть), а они с 0.0.10 не двигались: в собранном APK было
+# versionName=0.0.10 при config/version=0.0.17, и телефон показывал
+# «0.0.10» на любой сборке. Ставим версию проекта во все платформы, а
+# файл возвращаем как был — дерево остаётся чистым.
+stamp_version() {
+	local v major minor patch code backup
+	v="$(sed -n 's/^config\/version="\(.*\)"$/\1/p' game/project.godot)"
+	if [ -z "$v" ]; then
+		echo "mbt-build: в project.godot нет config/version" >&2
+		return 1
+	fi
+	major="${v%%.*}"
+	minor="$(echo "$v" | cut -d. -f2)"
+	patch="$(echo "$v" | cut -d. -f3)"
+	code=$(( major * 10000 + minor * 100 + patch ))
+	backup="$(mktemp)"
+	cp game/export_presets.cfg "$backup"
+	sed -i \
+		-e "s|^version/name=.*|version/name=\"$v\"|" \
+		-e "s|^version/code=.*|version/code=$code|" \
+		-e "s|^application/file_version=.*|application/file_version=\"$v.0\"|" \
+		-e "s|^application/product_version=.*|application/product_version=\"$v.0\"|" \
+		-e "s|^application/short_version=.*|application/short_version=\"$v\"|" \
+		-e "s|^application/version=.*|application/version=\"$v\"|" \
+		game/export_presets.cfg
+	echo "mbt-build: версия сборки $v (version/code=$code)"
+	PRESET_BACKUP="$backup"
+}
+
+restore_preset() {
+	if [ -n "${PRESET_BACKUP:-}" ] && [ -f "$PRESET_BACKUP" ]; then
+		cp "$PRESET_BACKUP" game/export_presets.cfg
+		rm -f "$PRESET_BACKUP"
+		PRESET_BACKUP=""
+	fi
+}
+
 run_exports() {
 	if [ "$#" -gt 0 ]; then
 		PRESETS=("$@")
@@ -232,6 +270,8 @@ run_exports() {
 	# нет, а Godot не создаёт каталог под файл экспорта и падает
 	# «The given export path doesn't exist».
 	mkdir -p game/dist
+	stamp_version
+	trap restore_preset EXIT
 	for preset in "${PRESETS[@]}"; do
 		echo "--- экспорт: $preset"
 		case "$preset" in
