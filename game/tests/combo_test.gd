@@ -894,6 +894,24 @@ func _case_own_kbd_fits() -> void:
 			_main._eff_h() >= _main.view_h * 0.45,
 			"%s: only %.0f px of text left on %s" % [tag, _main._eff_h(), str(wh)]
 		)
+		# Соты, как на настоящей клавиатуре: каждый ряд начинается
+		# правее верхнего примерно на полклавиши.
+		var row_x := {}
+		for b in Kbd.buttons(r, _main.kb_layer, _main.kb_lang, _main.kb_shift):
+			var kr: Rect2 = b["r"]
+			var key := int(kr.get_center().y)
+			if not row_x.has(key):
+				row_x[key] = kr.position.x
+			else:
+				row_x[key] = minf(float(row_x[key]), kr.position.x)
+		var ys := row_x.keys()
+		ys.sort()
+		for i in range(1, ys.size()):
+			_check(
+				float(row_x[ys[i]]) > float(row_x[ys[i - 1]]),
+				"%s: row %d starts at %.0f, not right of row %d (%.0f) on %s"
+					% [tag, i, float(row_x[ys[i]]), i - 1, float(row_x[ys[i - 1]]), str(wh)]
+			)
 		# Клавиши: квадратные (палец), внутри своей области, все на месте.
 		var btns := _kbd_buttons()
 		_check(btns.size() >= 40, "%s: only %d keys on %s" % [tag, btns.size(), str(wh)])
@@ -1467,8 +1485,9 @@ func _ime_frames_run(seed_v: int) -> void:
 ## Рано (игрок ещё думает сам) — пусто; после задержки HINT_IDLE нужная
 ## клавиша подсвечивается на самой клавиатуре; заглавная в строгом
 ## режиме — парой [Shift, буква]; символа нет на слое — клавишей слоя;
-## метки зовут «Стереть», капслок — выключиться: там подсвечивать
-## нечего. Задержка такая, чтобы опора на неё проигрывала: ёж идёт
+## метки зовут клавишу «стереть» на самой доске, капслок — выключить
+## текстом: там подсвечивать нечего. Задержка такая, чтобы опора на неё
+## проигрывала: ёж идёт
 ## быстрее, чем буква в ~2 секунды.
 func _case_idle_hint() -> void:
 	_fresh(1, 1)
@@ -1501,12 +1520,12 @@ func _case_idle_hint() -> void:
 	_main._type_char(cur)
 	_tick(tag)
 	_check(_main._hint_keys().is_empty(), "%s: the highlight survived a keypress" % tag)
-	# Метки зовут «Стереть», а не клавишу.
+	# Метки зовут клавишу «стереть» на самой доске, а не текст.
 	_main._type_char(_wrong())
 	_main.idle_t = _main.HINT_IDLE + 5.0
 	_tick(tag)
-	_check(_main._hint_keys().is_empty(), "%s: a letter is highlighted over the marks" % tag)
-	_check(_main._hint_text().contains("Стереть"), "%s: the erase hint is gone" % tag)
+	_check(_main._hint_keys() == ["←"], "%s: marks highlight %s, expected the erase key" % [tag, str(_main._hint_keys())])
+	_check(not _main._hint_text().contains("Стереть"), "%s: the old erase text is back (%s)" % [tag, _main._hint_text()])
 	# Символа нет на слое — подсвечивается пара [Shift, цифра].
 	_main.errors.clear()
 	_main.cursor_line = 0

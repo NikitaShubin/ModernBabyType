@@ -213,13 +213,16 @@ static func buttons(area: Rect2, layer: String, lang: String, shift: bool, enter
 	var out: Array = []
 	var gap := 8.0
 	var rh := (area.size.y - gap * float(rows.size() - 1)) / float(rows.size())
+	# Соты, как на настоящей клавиатуре: каждый ряд сдвинут на полклавиши
+	# относительно верхнего. Ширина при этом делится и на сдвиг тоже,
+	# чтобы ряд кончался ровно у правого края (решение 10.2026).
 	for ri in rows.size():
 		var row: Array = rows[ri]
 		var total_units := 0.0
 		for label in row:
 			total_units += _span(String(label))
-		var unit := (area.size.x - gap * float(row.size() - 1)) / total_units
-		var x := area.position.x
+		var unit := (area.size.x - gap * float(row.size() - 1)) / (total_units + float(ri) * 0.5)
+		var x := area.position.x + float(ri) * unit * 0.5
 		var y := area.position.y + float(ri) * (rh + gap)
 		for label in row:
 			var w := unit * _span(String(label))

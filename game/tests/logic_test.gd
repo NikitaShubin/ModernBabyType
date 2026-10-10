@@ -361,7 +361,10 @@ func _run_part1() -> void:
 	_main._type_char(wrong1)
 	_check(_main.errors.size() == 1, "one error overlay")
 	_check(_main.shake_t > 0.0, "shake on typo")
-	_check(_main._hint_text() == "Жми: [←] Стереть", "hint shows how to erase")
+	_check(_main._hint_text() == "", "no text hint over the marks")
+	_main.idle_t = _main.HINT_IDLE + 0.5
+	_check(_main._hint_keys() == ["←"], "marks highlight the erase key")
+	_main.idle_t = 0.0
 	var t1 := _kb_target(b1[0], b1[1])
 	_check(_main.cursor_line == t1[0] and _main.cursor_pos == t1[1], "knockback one step")
 	# Опечатка 2 подряд: откат ЕЩЁ дальше, вторая метка.

@@ -166,6 +166,8 @@ func _a_touch_press() -> void:
 func _a_touch_wrong() -> void:
 	var cur: String = _main._current()
 	_main._type_char("ы" if cur.to_lower() != "ы" else "ж")
+	# Простой — видно подсветку «стереть» на самой клавиатуре.
+	_main.idle_t = _main.HINT_IDLE + 5.0
 
 
 ## Долгое нажатие е→ё: ставим зайца перед «е» или «ь», жмём и отпускаем
