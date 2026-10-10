@@ -200,15 +200,22 @@ static func hit(area: Rect2, layer: String, lang: String, shift: bool, enter: bo
 ## shift_on подсвечивает шифт заливкой (второй стиль вызывателя).
 static func draw(
 	ci: CanvasItem, area: Rect2, layer: String, lang: String, shift: bool,
-	enter: bool, font: Font, fs: int, sb: StyleBox, sb_on: StyleBox, ink: Color
+	enter: bool, font: Font, fs: int, sb: StyleBox, sb_on: StyleBox, ink: Color,
+	hi: Array = [], hi_sb: StyleBox = null
 ) -> void:
+	# hi — подписи клавиш, которые игра подсвечивает после простоя
+	# (вместо текстовой подсказки «Нажми К»). hi_sb рисует их вызыватель
+	# и сам же в нём ведёт пульсацию цветом каждый кадр.
 	var gap := 8.0
 	var rh := (area.size.y - gap * 4.0) / 5.0
 	var key_fs := maxi(fs, int(rh * 0.40))
 	for b in buttons(area, layer, lang, shift, enter):
 		var r := b["r"] as Rect2
 		var s := String(b["s"])
-		ci.draw_style_box(sb_on if s == "⇧" and shift else sb, r)
+		var box := sb_on if s == "⇧" and shift else sb
+		if hi_sb != null and s in hi:
+			box = hi_sb
+		ci.draw_style_box(box, r)
 		if s == "глобус":
 			_draw_globe(ci, r.get_center(), minf(r.size.x, r.size.y) * 0.30, ink)
 			continue

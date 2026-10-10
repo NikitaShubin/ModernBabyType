@@ -76,6 +76,8 @@ func _reflow_keeps_cursor() -> void:
 	_check(String(_main.state) == "playing", "половина уровня набрана")
 	var want := String(_main._current())
 	var passed_before := int(_main.passed.size())
+	var _passed_letters_before := _passed_letters()
+	_passed_letters_before.sort()
 	# Красная метка на клетке перед курсором: после пересборки она обязана
 	# остаться на своей букве (иначе заяц упирается в чужую метку).
 	_main.errors[_main._key(_main.cursor_line, maxi(0, _main.cursor_pos - 1))] = "ъ"
@@ -100,8 +102,14 @@ func _reflow_keeps_cursor() -> void:
 		String(_main._current()) == want,
 		"заяц остался на той же букве после пересборки"
 	)
+	# Пройденный пробел, попавший ровно на разрыв, законно исчезает:
+	# такой клетки в новой сборке нет (разрыв сам разделяет слова).
+	# Поэтому сверяем не штуки, а буквы: каждая не-пробельная пройденная
+	# обязана остаться пройденной, новых браться неоткуда.
+	var kept := _passed_letters()
+	kept.sort()
 	_check(
-		int(_main.passed.size()) == passed_before,
+		kept == _passed_letters_before,
 		"пройденные буквы не потерялись при пересборке"
 	)
 	var marked := ""
@@ -264,3 +272,18 @@ func _report() -> void:
 		for f in _failures:
 			print("END_TEST: FAIL: ", f)
 	quit(1 if not _failures.is_empty() else 0)
+
+
+## Буквы пройденных клеток без пробелов: пробел на разрыве исчезает
+## вместе с клеткой (см. выше), его отсутствие — не потеря.
+func _passed_letters() -> Array:
+	var out: Array = []
+	for k in _main.passed.keys():
+		var parts := String(k).split(":")
+		var li := int(parts[0])
+		var pi := int(parts[1])
+		if li < _main.display_lines.size() and pi < String(_main.display_lines[li]).length():
+			var ch := String(_main.display_lines[li]).substr(pi, 1)
+			if ch != " ":
+				out.append(ch)
+	return out

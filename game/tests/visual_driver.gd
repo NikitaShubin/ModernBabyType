@@ -215,6 +215,19 @@ func _a_yo_hint() -> void:
 	_main._relayout()
 
 
+## Простой: клавиатура сама подсвечивает нужную клавишу (вместо
+## текстовой подсказки). Простой задаём напрямую — ждать 1.2 с
+## настоящего времени драйвер не будет.
+func _a_idle_hint() -> void:
+	_win(Vector2i(820, 1180))
+	_main._force_touch = true
+	_fresh(0, 0)
+	for i in 8:
+		_main._type_char(_main._current())
+	_main.idle_t = _main.HINT_IDLE + 5.0
+	_main._relayout()
+
+
 func _a_sym_hint() -> void:
 	_win(Vector2i(820, 1180))
 	_main._force_touch = true
@@ -226,6 +239,7 @@ func _a_sym_hint() -> void:
 func _set_text(first: String, second: String, pos: int) -> void:
 	var lines: Array[String] = [first, second]
 	_main.display_lines = lines
+	_main.line_drops = []
 	_main._reindex_lines()
 	_main.active.clear()
 	for line in _main.display_lines:
@@ -413,4 +427,6 @@ func _plan() -> void:
 		# 15. Подсказки для букв без клавиши и для символов со слоя знаков.
 		["24-yo-hint", _a_yo_hint, 30],
 		["25-sym-hint", _a_sym_hint, 30],
+		# 16. Подсветка клавиши после простоя.
+		["26-idle-hint", _a_idle_hint, 30],
 	]

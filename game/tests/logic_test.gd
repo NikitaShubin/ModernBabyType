@@ -44,6 +44,12 @@ func _process(_dt: float) -> bool:
 	if _frame == 2:
 		_run_part1()
 	elif _frame == 4:
+		# Кадры погони — в реалистичном окне: в headless-умолчании 64x64
+		# своя клавиатура (она видна везде, включая десктоп) даёт
+		# вырожденную геометрию, и правило укола проверять не на чем.
+		DisplayServer.window_set_size(Vector2i(1100, 650))
+		root.size = Vector2i(1100, 650)
+		_main._relayout()
 		# Догон сзади на одной строке: ёж вплотную за героем.
 		_main.grace_t = 0.0
 		_main.cursor_line = 0
@@ -312,17 +318,18 @@ func _kb_target(l: int, p: int) -> Array:
 	return [0, 0]
 
 
-func _expected_hint(ch: String) -> String:
-	if ch == " ":
-		return "Жми: [Пробел]"
+## Какие клавиши должна подсветить клавиатура для буквы под курсором:
+## пробел — своей клавишей, заглавная в строгом режиме — парой
+## [Shift, буква], обычная — собой. Текстовых «Нажми К» больше нет:
+## подсказка живёт на самой клавиатуре (решение 10.2026).
+func _expected_keys(ch: String) -> Array:
 	if ch == "":
-		return ""
+		return []
+	if ch == " ":
+		return ["пробел"]
 	if _main._exact() and ch == ch.to_upper() and ch != ch.to_lower():
-		# Заглавная в строгом режиме: парой Shift + буква.
-		return "Жми: [Shift] + [" + ch + "]"
-	# В строгом режиме показываем букву как есть (регистр важен),
-	# в обычном — для удобства заглавную.
-	return "Жми: [" + (ch if _main._exact() else ch.to_upper()) + "]"
+		return ["⇧", ch.to_lower()]
+	return [ch]
 
 
 func _run_part1() -> void:
@@ -330,7 +337,16 @@ func _run_part1() -> void:
 	# Старт: курсор на активной букве (фрагмент случайный — вычисляем).
 	var ch0: String = _main._current()
 	_check(ch0 != "" and _main._is_active(ch0), "cursor starts on active")
-	_check(_main._hint_text() == _expected_hint(ch0), "hint matches cursor")
+	# Текстовой подсказки для буквы нет (пусто), а после простоя нужная
+	# клавиша подсвечивается на самой клавиатуре.
+	_check(_main._hint_text() == "", "no text hint for the letter")
+	_check(_main._hint_keys().is_empty(), "no highlight before the idle delay")
+	_main.idle_t = _main.HINT_IDLE + 0.5
+	_check(
+		_main._hint_keys() == _expected_keys(ch0),
+		"the board highlights the wanted key"
+	)
+	_main.idle_t = 0.0
 	_check(_main.enemy_line == 0, "hedgehog starts on line 0")
 	_check(not _main.hedge_active, "hedgehog waits until hero leaves line 0")
 	# Верный ввод символа под курсором: клетка пройдена, курсор ушёл вперёд.
@@ -744,9 +760,8 @@ func _run_part2() -> void:
 	# В headless вьюпорт крошечный (64×64), поэтому сначала ставим
 	# реалистичный размер окна, иначе пол эффективной высоты всё скроет.
 	root.size = Vector2i(1100, 650)
-	# Своя клавиатура занимает низ: раскладка едет от остатка.
-	# В headless-десктопе её нет (kb_h=0) — включаем сенсорный режим.
-	_touch(true)
+	# Своя клавиатура занимает низ: раскладка едет от остатка. Видна
+	# везде, включая десктоп: она и есть подсказка (вместо «Нажми К»).
 	root.size = Vector2i(1100, 650)
 	_main._relayout()
 	var hy1: float = _main.hud_label.position.y
@@ -758,13 +773,15 @@ func _run_part2() -> void:
 		_main.card_p.position.y + _main.card_p.size.y <= _main.view_h - _main.kb_h + 1.0,
 		"text card stays above the keyboard"
 	)
+	# На десктопе клавиатура тоже занимает низ: она и есть подсказка.
 	_touch(false)
 	_main._relayout()
-	_check(_main.kb_h == 0.0, "desktop layout has no keyboard height")
+	_check(_main.kb_h > 0.0, "desktop layout reserves keyboard height too")
+	_check(_main._own_shown(), "desktop shows the own keyboard in game")
 
-	# --- Политика клавиатуры: своя видна в партии везде. ---
-	# В альбоме в игре только внешняя клавиатура, системную зовёт тап
-	# по рабочей области. Чистая функция от view и меню (тут меню нет).
+	# --- Политика клавиатуры: своя видна в партии везде, включая
+	# десктоп и альбом. Физическая клавиатура при этом тоже печатает:
+	# ввод один, путь один.
 	_touch(true)
 	_main.view_w = 2000.0
 	_main.view_h = 1000.0
@@ -775,7 +792,6 @@ func _run_part2() -> void:
 	_main._relayout()
 	_check(_main._own_shown(), "own keyboard shows in portrait")
 	_touch(false)
-	# Ручной вызов тапом держит клавиатуру и в альбоме: без флага
 	# Раскладка больше не прыгает сама: замеров системы нет.
 	_main.view_w = 2000.0
 	_main.view_h = 1000.0
@@ -819,6 +835,7 @@ func _run_part2() -> void:
 	_main._relayout()
 	var six: Array[String] = ["раз", "два", "три", "четыре", "пять", "шесть"]
 	_main.display_lines = six
+	_main.line_drops = []
 	_main.cursor_line = 5
 	_main.cursor_pos = 0
 	_main._layout_text_lines()
@@ -996,10 +1013,12 @@ func _run_part2() -> void:
 		_main._caps_warn = false
 		_main.cursor_line = up_l
 		_main.cursor_pos = up_p
+		_main.idle_t = _main.HINT_IDLE + 0.5
 		_check(
-			_main._hint_text() == "Жми: [Shift] + [" + _main._current() + "]",
-			"uppercase hint is shift plus the letter"
+			_main._hint_keys() == ["⇧", _main._current().to_lower()],
+			"uppercase highlights shift plus the letter"
 		)
+		_main.idle_t = 0.0
 	# Строчная под курсором: одна кнопка, и строгий режим показывает
 	# букву как есть (регистр важен), не зеркалит в верхний.
 	_main.errors.clear()
@@ -1021,10 +1040,12 @@ func _run_part2() -> void:
 	if low_l >= 0:
 		_main.cursor_line = low_l
 		_main.cursor_pos = low_p
+		_main.idle_t = _main.HINT_IDLE + 0.5
 		_check(
-			_main._hint_text() == "Жми: [" + _main._current() + "]",
-			"lowercase hint keeps its case in strict mode"
+			_main._hint_keys() == [_main._current()],
+			"lowercase highlights its own key"
 		)
+		_main.idle_t = 0.0
 
 	# --- Нeстрогая ё: е засчитывается за ё и обратно. ---
 	_main._new_level()
@@ -1035,6 +1056,7 @@ func _run_part2() -> void:
 	_main.active = {"е": true, "ё": true, "ж": true, " ": true}
 	var yo1: Array[String] = ["ёж"]
 	_main.display_lines = yo1
+	_main.line_drops = []
 	_main.cursor_line = 0
 	_main.cursor_pos = 0
 	_main.errors.clear()
@@ -1052,6 +1074,7 @@ func _run_part2() -> void:
 	_main.active = {"е": true, "ё": true, "ж": true, " ": true}
 	var yo2: Array[String] = ["еж"]
 	_main.display_lines = yo2
+	_main.line_drops = []
 	_main.cursor_line = 0
 	_main.cursor_pos = 0
 	_main.errors.clear()
@@ -1069,6 +1092,7 @@ func _run_part2() -> void:
 	_main.active = {"е": true, "ё": true, "ж": true, " ": true}
 	var yo4: Array[String] = ["ёж"]
 	_main.display_lines = yo4
+	_main.line_drops = []
 	_main.cursor_line = 0
 	_main.cursor_pos = 0
 	_main.errors.clear()
@@ -1087,6 +1111,7 @@ func _run_part2() -> void:
 	_main.active = {"е": true, "Ё": true, " ": true}
 	var yo3: Array[String] = ["Ё"]
 	_main.display_lines = yo3
+	_main.line_drops = []
 	_main.cursor_line = 0
 	_main.cursor_pos = 0
 	_main.errors.clear()

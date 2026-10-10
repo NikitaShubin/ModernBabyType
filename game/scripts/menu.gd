@@ -880,14 +880,14 @@ func _menu_eff_h() -> float:
 	return Ui.eff_h(view_h, _own_h())
 
 
-## Своя клавиатура в меню: видна, когда вводится имя, на сенсорных
-## устройствах. Высоту для раскладки считаем от неё же.
+## Своя клавиатура в меню: видна, когда вводится имя. Высоту для
+## раскладки считаем от неё же.
 func _own_shown() -> bool:
 	if not visible:
 		return false
 	if not input_active:
 		return false
-	return not Ui.is_desktop()
+	return true
 
 
 ## Область своей клавиатуры: низ экрана.

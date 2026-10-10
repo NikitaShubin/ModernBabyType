@@ -126,6 +126,11 @@ static func fit_marked(raw: Array[String], max_chars: int) -> Dictionary:
 
 ## Таблица «логическое смещение → клетка»: переживает пересборку строк.
 static func logical_cells(lines: Array, drops: Array) -> Dictionary:
+	# Таблица «логическое смещение → клетка» в пространстве «все пробелы»:
+	# выкинутые на разрывах пробелы считаются занятыми позициями. Иначе
+	# старые смещения (с пробелами) ищутся в новой таблице (без них) и
+	# всё уезжает на число выкинутых пробелов (10.2026: метки и курсор
+	# после поворота вставали не на те буквы).
 	var out := {}
 	var acc := 0
 	for i in lines.size():
@@ -133,8 +138,10 @@ static func logical_cells(lines: Array, drops: Array) -> Dictionary:
 		if i < drops.size():
 			d = int(drops[i])
 		for j in String(lines[i]).length():
-			out[acc + j - d] = Vector2i(i, j)
+			out[acc + j] = Vector2i(i, j)
 		acc += String(lines[i]).length()
+		if i + 1 < drops.size():
+			acc += int(drops[i + 1]) - d
 	return out
 
 
@@ -144,12 +151,19 @@ static func logical_cells(lines: Array, drops: Array) -> Dictionary:
 ## смещение старой сборки в клетку новой. Чистая функция, матрица в
 ## end_test (игра проходит уровень, который посреди набора сузили).
 static func reflow(
-	raw: Array[String], line: int, pos: int, max_chars: int
+	raw: Array[String], line: int, pos: int, max_chars: int,
+	old_drops: Array = []
 ) -> Dictionary:
-	# Старые строки — эталон: их смещения и есть логические.
+	# Логическое смещение — в пространстве «все пробелы»: старые строки
+	# могли потерять пробелы на разрывах (их считает old_drops), новые —
+	# теряют свои (считает таблица). Без этого курсор и метки после
+	# поворота встают не на те буквы: старые смещения искали в новой
+	# таблице как есть и уезжали на число выкинутых пробелов (10.2026).
 	var want := pos
 	for i in mini(line, raw.size()):
 		want += String(raw[i]).length()
+	if line < old_drops.size():
+		want += int(old_drops[line])
 	var same: Array = raw.duplicate()
 	if max_chars <= 0 or max_chars >= 36:
 		return {
@@ -157,6 +171,7 @@ static func reflow(
 			"line": mini(line, same.size() - 1),
 			"pos": pos,
 			"table": logical_cells(same, []),
+			"drops": [],
 			"old": raw,
 		}
 	var m := fit_marked(raw, max_chars)
@@ -165,7 +180,7 @@ static func reflow(
 	var cell: Vector2i = table.get(want, Vector2i(fresh.size(), 0))
 	return {
 		"lines": fresh, "line": cell.x, "pos": cell.y,
-		"table": table, "old": raw,
+		"table": table, "drops": m["drops"], "old": raw,
 	}
 
 

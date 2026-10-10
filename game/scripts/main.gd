@@ -53,6 +53,10 @@ const GREEN := Color("#1e7a34")
 const DARK_RED := Color("#b02323")
 
 var display_lines: Array[String] = []
+## Сколько пробелов выкинуто на разрывах ПЕРЕД каждой строкой (параллельно
+## display_lines). Нужно рефлоу: логические смещения считаются в
+## пространстве «все пробелы», иначе после поворота всё едет.
+var line_drops: Array = []
 var active: Dictionary = {}
 var passed: Dictionary = {}
 var errors: Dictionary = {}
@@ -152,6 +156,16 @@ var kb_lang := "ru"
 var kb_shift := false
 var kb_key_sb: StyleBoxFlat
 var kb_on_sb: StyleBoxFlat
+var kb_hi_sb: StyleBoxFlat
+
+
+## Простой, после которого клавиатура сама подсвечивает нужную клавишу
+## (вместо текстовой подсказки «Нажми К»). Задержка такая, чтобы игрок,
+## который ждёт подсветку на КАЖДОЙ букве, проиграл: ёж идёт быстрее
+## (1.1 знака/с против ~0.6 при ожидании). Опечатка таймер не сбрасывает:
+## паузу надо выдержать честно, а подсветка после ошибки нужнее всего.
+const HINT_IDLE := 1.2
+var idle_t := 0.0
 ## Высота своей клавиатуры в пикселях канваса (0 — скрыта). Только
 ## раскладка: всё позиционируется от эффективной высоты _eff_h().
 var kb_h := 0.0
@@ -266,6 +280,7 @@ func _ready() -> void:
 	bar_fill_sb = Ui.panel_sb(Color("#7fb069"), 5.0)
 	kb_key_sb = Ui.panel_sb(Color("#fffdf6"), 10.0, Color("#4a4438"), 2.0, false)
 	kb_on_sb = Ui.panel_sb(Color("#a9c6ec"), 10.0, Color("#4a4438"), 2.0, false)
+	kb_hi_sb = Ui.panel_sb(Color("#ffd75e"), 10.0, Color("#4a4438"), 2.0, false)
 	card_p = _panel_node(card_sb)
 	hud_p = _panel_node(pill_sb)
 	hint_p = _panel_node(pill_sb)
@@ -319,6 +334,8 @@ func _apply_night() -> void:
 		cap_sb.border_color = Color("#8b93a8")
 		kb_key_sb.bg_color = Color("#232c44")
 		kb_key_sb.border_color = Color("#8b93a8")
+		kb_hi_sb.bg_color = Color("#8a6d1f")
+		kb_hi_sb.border_color = Color("#ffd75e")
 		kb_on_sb.bg_color = Color("#8ab4e0")
 		kb_on_sb.border_color = Color("#8b93a8")
 		# Ночью буквы светлые, а заяц и ёж — белые спрайты: без контура
@@ -338,6 +355,8 @@ func _apply_night() -> void:
 		cap_sb.border_color = Color("#4a4438")
 		kb_key_sb.bg_color = Color("#fffdf6")
 		kb_key_sb.border_color = Color("#4a4438")
+		kb_hi_sb.bg_color = Color("#ffd75e")
+		kb_hi_sb.border_color = Color("#4a4438")
 		kb_on_sb.bg_color = Color("#a9c6ec")
 		kb_on_sb.border_color = Color("#4a4438")
 		# Днём буквы тёмные на светлой карточке — контур не нужен.
@@ -400,10 +419,17 @@ func _fit_to_width(raw: Array[String]) -> Array[String]:
 	# (64px или нули) — считаем широким экраном и не режем. Алгоритм
 	# покрыт чистыми тестами fit_lines, интеграция тривиальна.
 	if view_w < 100.0:
+		line_drops = []
 		return raw
 	if _max_chars() >= 36:
+		line_drops = []
 		return raw
-	return B.fit_lines(raw, _max_chars())
+	var m := B.fit_marked(raw, _max_chars())
+	var out: Array[String] = []
+	for piece in m["lines"]:
+		out.append(String(piece))
+	line_drops = (m["drops"] as Array).duplicate()
+	return out
 
 
 ## Сколько знаков влезает в строку. Один счёт для всех: и разбивки
@@ -423,7 +449,7 @@ func _max_chars() -> int:
 func _reflow_text() -> void:
 	if display_lines.is_empty():
 		return
-	var rf: Dictionary = B.reflow(display_lines, cursor_line, cursor_pos, _max_chars())
+	var rf: Dictionary = B.reflow(display_lines, cursor_line, cursor_pos, _max_chars(), line_drops)
 	var fresh: Array = rf["lines"]
 	if fresh == display_lines:
 		return  # вёрстка не изменилась — курсор и метки трогать нельзя
@@ -441,8 +467,18 @@ func _reflow_text() -> void:
 	cursor_line = int(rf["line"])
 	cursor_pos = int(rf["pos"])
 	_reindex_lines()
+	# Ремап — по СТАРЫМ drops (они ещё в line_drops), и только потом
+	# кладём новые: иначе смещения считаются не в том пространстве.
 	_remap_cells(passed, table, rf)
 	_remap_cells(errors, table, rf)
+	_remap_cells(typed_cells, table, rf)
+	line_drops = (rf["drops"] as Array).duplicate()
+	# typed_cells едут вместе со всеми: это те же клетки, что passed,
+	# только «набранные нажатием». Без переноса они указывают на старые
+	# клетки: инвариант «метка внутри набранного» врёт, а Backspace после
+	# поворота ищет набранное не там (ловил тестом menu_roundtrip: меню
+	# прячет клавиатуру → релэут → рефлоу, и метка оказывалась «вне
+	# набранного», хотя её только что поставили).
 	# Надписи перерисовать ЗДЕСЬ: иначе на экране остаётся старая
 	# вёрстка, обрезанная краем окна, — игрок видит не тот текст, который
 	# в игре (жалоба автора: строка «пустая», а набирать надо другое).
@@ -466,11 +502,14 @@ func _reindex_lines() -> void:
 
 ## Перенести отметки «пройдено»/«ошибка» на те же буквы после пересборки
 ## строк: ключ «строка:позиция» меняет смысл, буква — нет. Таблица
-## переводит логическое смещение старой сборки в клетку новой.
+## переводит логическое смещение старой сборки в клетку новой, и обе
+## стороны — в пространстве «все пробелы» (см. B.reflow): старые drops
+## берём из line_drops на момент вызова (до замены строк).
 func _remap_cells(src: Dictionary, table: Dictionary, rf: Dictionary) -> void:
 	if src.is_empty():
 		return
 	var old_lines: Array = rf["old"]
+	var old_drops: Array = line_drops.duplicate()
 	var out := {}
 	for k in src.keys():
 		var parts := String(k).split(":")
@@ -480,6 +519,8 @@ func _remap_cells(src: Dictionary, table: Dictionary, rf: Dictionary) -> void:
 		if li >= old_lines.size():
 			continue
 		var off := int(parts[1])
+		if li < old_drops.size():
+			off += int(old_drops[li])
 		for i in li:
 			off += String(old_lines[i]).length()
 		var c: Vector2i = table.get(off, Vector2i(-1, -1))
@@ -848,6 +889,9 @@ func _new_level() -> void:
 	typed_ok = 0
 	typed_bad = 0
 	elapsed = 0.0
+	idle_t = 0.0
+	if OS.get_name() != "Android":
+		print("DBGNEW new level, lines=", display_lines.size())
 	grace_t = START_DELAY
 	# Ёж выкатывается позже: когда герой уйдёт на вторую строку,
 	# ёж появится строкой выше (enemy_line = 0) и покатится по следу.
@@ -922,6 +966,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		return
 	if not ke.pressed or ke.echo:
 		return
+	idle_t = 0.0
 	if ke.keycode == KEY_ESCAPE:
 		if menu_open:
 			# Открыто меню — ввод его: сюда попадаем, только если меню
@@ -1067,6 +1112,7 @@ var typed_cells: Dictionary = {}
 func _type_char(ch: String) -> void:
 	if state != "playing":
 		return  # уровень окончен: ввод ниже не считается
+	idle_t = 0.0
 	var expected := _current()
 	if expected == "":
 		return
@@ -1103,6 +1149,8 @@ func _type_char(ch: String) -> void:
 		# снимать было нечего.
 		errors[_key(cursor_line, cursor_pos)] = ch
 		typed_cells[_key(cursor_line, cursor_pos)] = true
+		if OS.get_name() != "Android":
+			print("DBGMARK mark ", _key(cursor_line, cursor_pos), " ch=", ch, " cursor=", cursor_line, cursor_pos)
 		typed_bad += 1
 		shake_t = SHAKE_T
 		_knockback()
@@ -1153,6 +1201,7 @@ func _knockback() -> void:
 ##     Автопропуск после отката НЕ делаем: заяц обязан стоять перед той
 ##     буквой, на которую откатился, иначе откат тут же проскочит мимо.
 func _backspace() -> void:
+	idle_t = 0.0
 	var k := _key(cursor_line, cursor_pos)
 	if errors.has(k):
 		errors.erase(k)
@@ -1319,15 +1368,14 @@ const MAX_FRAME_DT := 0.1
 
 
 
-## Своя экранная клавиатура: единственный ввод на телефоне. Видна
-## в партии (скрыта под открытым меню и на модалке победы/поражения —
-## там ввод не нужен). На десктопе её нет: там печатают физической.
+## Своя экранная клавиатура: единственный ввод на телефоне и живая
+## подсказка на десктопе (вместо текстовых «Нажми К»: нужная клавиша
+## подсвечивается после простоя). Видна в партии; скрыта под открытым
+## меню и на модалке победы/поражения — там ввод не нужен.
 func _own_shown() -> bool:
 	if menu_open:
 		return false
-	if state != "playing":
-		return false
-	return not _is_desktop()
+	return true
 
 
 
@@ -1377,6 +1425,7 @@ func _eff_h() -> float:
 func _process(dt: float) -> void:
 	dt = minf(dt, MAX_FRAME_DT)
 	time += dt
+	idle_t += dt
 	# Высота раскладки — всегда своя клавиатура: система больше не
 	# участвует, замеров и подстройки нет, раскладка не прыгает сама.
 	var oh := _own_h()
@@ -1661,8 +1710,6 @@ func _hint_parts() -> Array:
 	var cur := _current()
 	if cur == "":
 		return []
-	if cur == " ":
-		return [{"s": "Жми:", "cap": false}, {"s": "Пробел", "cap": true}]
 	# Чужая раскладка: буква латиницей, а слой русский (и наоборот) —
 	# предупреждаем, как о CapsLock: иначе жмёшь не ту клавиатуру
 	# (требование автора 10.2026: взрослые тексты с латиницей).
@@ -1680,15 +1727,7 @@ func _hint_parts() -> Array:
 			{"s": "+", "cap": false},
 			{"s": cur, "cap": true},
 		]
-	if _exact() and cur == cur.to_upper() and cur != cur.to_lower():
-		# Заглавная в строгом режиме одной клавишей не берётся —
-		# показываем обе части кнопками.
-		return [
-			{"s": "Жми:", "cap": false},
-			{"s": "Shift", "cap": true},
-			{"s": "+", "cap": false},
-			{"s": cur, "cap": true},
-		]
+
 	# Буквы без отдельной клавиши на своей клавиатуре (ё, ъ — раскладка
 	# Яндекса, там это долгое нажатие). Молчаливая подсказка «Жми: ё» —
 	# ловушка: ребёнок жмёт «е» и получает метки одну за другой. С
@@ -1714,10 +1753,7 @@ func _hint_parts() -> Array:
 					{"s": "→", "cap": false},
 					{"s": cur, "cap": true},
 				]
-	return [
-		{"s": "Жми:", "cap": false},
-		{"s": cur if _exact() else cur.to_upper(), "cap": true},
-	]
+	return []
 
 
 ## Та же подсказка одной строкой: для тестов и дебага. Кнопки — в [].
@@ -2047,12 +2083,47 @@ func _draw() -> void:
 
 ## Своя клавиатура: клавиши прямо дают символы (тап → буква, без IME).
 ## Рисуется в _draw поверх всего нижнего (области не пересекаются).
+## Подписи клавиш, которые подсветить после простоя. Пусто — рано
+## (игрок ещё думает сам), либо подсказывать нечего: метки зовут
+## «Стереть», капслок — выключить, уровень кончился. Заглавная в строгом
+## режиме — парой [Shift, буква]; символа нет на слое — клавишей слоя;
+## долгое нажатие — базовой клавишей (жест объясняет текст).
+func _hint_keys() -> Array:
+	if state != "playing" or idle_t < HINT_IDLE:
+		return []
+	if not errors.is_empty() or (_caps_warn and _exact()):
+		return []
+	var cur := _current()
+	if cur == "":
+		return []
+	if cur == " ":
+		return ["пробел"]
+	if _is_latin(cur) != (kb_layer == "en"):
+		return ["глобус"]
+	if _exact() and cur == cur.to_upper() and cur != cur.to_lower():
+		return ["⇧", cur.to_lower()]
+	var base := Kbd.long_base(cur)
+	if base != "":
+		return [base]
+	if not Kbd.is_plain_letter(cur) and not Kbd.has_key(kb_layer, kb_lang, kb_shift, cur):
+		if Kbd.has_key("sym", kb_lang, kb_shift, cur):
+			return ["?123"]
+	return [cur]
+
+
 func _draw_own_kb() -> void:
 	if not _own_shown():
 		return
+	# Пульсация подсветки — цветом стиля: 0.45..0.8 мажорного жёлтого.
+	var pulse := 0.5 + 0.5 * sin(time * 5.0)
+	var hi := _hint_keys()
+	if not hi.is_empty():
+		var c: Color = kb_hi_sb.bg_color
+		c.a = 0.45 + 0.35 * pulse
+		kb_hi_sb.bg_color = c
 	Kbd.draw(
 		self, _own_rect(), kb_layer, kb_lang, kb_shift, false, mono,
-		int(30.0 * k), kb_key_sb, kb_on_sb, _ui_ink()
+		int(30.0 * k), kb_key_sb, kb_on_sb, _ui_ink(), hi, kb_hi_sb
 	)
 
 
@@ -2092,6 +2163,9 @@ func _long_swap() -> void:
 func _own_press(pos: Vector2) -> bool:
 	if not _own_shown():
 		return false
+	if state != "playing":
+		return false
+	idle_t = 0.0
 	var act := Kbd.hit(_own_rect(), kb_layer, kb_lang, kb_shift, false, pos)
 	if act == "":
 		return false
@@ -2129,6 +2203,10 @@ func _own_press(pos: Vector2) -> bool:
 ## Отпускание после долгого нажатия на е/ь: введённую букву меняем на
 ## ё/ъ (откат + ввод альтернативы). Короткое — ничего не делает.
 func _own_release(pos: Vector2) -> bool:
+	idle_t = 0.0
+	if state != "playing":
+		_lp_act = ""
+		return false
 	if _lp_act == "":
 		return false
 	var done := false

@@ -1338,6 +1338,7 @@ func _set_level_text(lines: Array) -> void:
 	for l in lines:
 		typed.append(String(l))
 	_main.display_lines = typed
+	_main.line_drops = []
 	_main._reindex_lines()
 	# Набор букв — штатный для этой сложности (не «все буквы текста»):
 	# часть сценариев проверяет именно серые клетки.
@@ -1457,6 +1458,128 @@ func _ime_frames_run(seed_v: int) -> void:
 			_finish_level(tag)
 			_advance_to(0.2)
 		_common(tag)
+
+
+## 40. Подсветка клавиши после простоя — вместо текстовых «Нажми К».
+## Рано (игрок ещё думает сам) — пусто; после задержки HINT_IDLE нужная
+## клавиша подсвечивается на самой клавиатуре; заглавная в строгом
+## режиме — парой [Shift, буква]; символа нет на слое — клавишей слоя;
+## метки зовут «Стереть», капслок — выключиться: там подсвечивать
+## нечего. Задержка такая, чтобы опора на неё проигрывала: ёж идёт
+## быстрее, чем буква в ~2 секунды.
+func _case_idle_hint() -> void:
+	_fresh(1, 1)
+	var tag := "idle hint"
+	_check(_advance_to(0.3), "%s: could not advance (coverage)" % tag)
+	# Рано — пусто.
+	_main.idle_t = 0.0
+	_check(_main._hint_keys().is_empty(), "%s: highlight before the delay" % tag)
+	_main.idle_t = _main.HINT_IDLE - 0.01
+	_check(_main._hint_keys().is_empty(), "%s: highlight just before the delay" % tag)
+	# После задержки — клавиша под курсором.
+	_main.idle_t = _main.HINT_IDLE + 0.5
+	var cur: String = _main._current()
+	var keys: Array = _main._hint_keys()
+	_check(not keys.is_empty(), "%s: no highlight after the delay" % tag)
+	if cur == cur.to_upper() and cur != cur.to_lower():
+		_check(
+			keys == ["⇧", cur.to_lower()],
+			"%s: capital highlights %s, expected shift plus the letter" % [tag, str(keys)]
+		)
+	else:
+		# Пробел — своей клавишей; остальное необычное (слой знаков,
+		# долгое нажатие) проверяется отдельными ветками ниже.
+		var want_key := "пробел" if cur == " " else cur
+		if want_key == cur and (not Kbd.is_plain_letter(cur) or Kbd.long_base(cur) != ""):
+			pass
+		else:
+			_check(keys == [want_key], "%s: highlights %s, expected [%s]" % [tag, str(keys), want_key])
+	# Любое нажатие гасит подсветку: игрок снова думает сам.
+	_main._type_char(cur)
+	_tick(tag)
+	_check(_main._hint_keys().is_empty(), "%s: the highlight survived a keypress" % tag)
+	# Метки зовут «Стереть», а не клавишу.
+	_main._type_char(_wrong())
+	_main.idle_t = _main.HINT_IDLE + 5.0
+	_tick(tag)
+	_check(_main._hint_keys().is_empty(), "%s: a letter is highlighted over the marks" % tag)
+	_check(_main._hint_text().contains("Стереть"), "%s: the erase hint is gone" % tag)
+	# Символа нет на слое — подсвечивается клавиша слоя.
+	_main.errors.clear()
+	_main.cursor_line = 0
+	for p in String(_main.display_lines[0]).length():
+		if String(_main.display_lines[0]).substr(p, 1) == ":":
+			_main.cursor_pos = p
+			break
+	if _main._current() == ":":
+		_main.kb_layer = "ru"
+		_main.hero_r = _main._hero_pos()
+		_main.idle_t = _main.HINT_IDLE + 0.5
+		_tick(tag)
+		_check(
+			_main._hint_keys() == ["?123"],
+			"%s: off-layer symbol highlights %s, expected the layer key"
+				% [tag, str(_main._hint_keys())]
+		)
+	_common(tag)
+
+
+## 41. Перенос строк везёт за собой ВСЕ клеточные множества — и typed_cells
+## тоже. Открытие меню прячет клавиатуру, смена ширины пересобирает
+## строки, а курсор, пройденное и метки едут по логической оси. Раньше
+## typed_cells оставался на старых клетках: метка, поставленная секунду
+## назад, оказывалась «вне набранного», а Backspace после поворота искал
+## набранное не там. Ловил флаки-тестом menu_roundtrip (10.2026).
+func _case_reflow_typed_cells() -> void:
+	_fresh(6, 1)
+	var tag := "reflow typed"
+	# Длинные строки: при сужении окна переносы меняются гарантированно,
+	# а не «если повезёт с фрагментом».
+	_set_level_text([
+		"Следы невиданных зверей на полях и на лесных тропинках!",
+		"Они всё видели и всё слышали в ночной тишине.",
+		"Лисица тут же придумала хитрый и коварный план.",
+	])
+	_check(_advance_to(0.3), "%s: could not advance (coverage)" % tag)
+	var letters: Array = []
+	for i in 3:
+		_main._type_char(_wrong())
+		_tick(tag)
+		# Метка ставится на клетку курсора ДО отката — фиксируем её букву.
+		# Ключи после переноса меняются, поэтому сравниваем мультимножества.
+		letters.clear()
+		for mk in _main.errors.keys():
+			var parts := String(mk).split(":")
+			letters.append(String(_main.display_lines[int(parts[0])]).substr(int(parts[1]), 1))
+		letters.sort()
+	_check(_main.errors.size() == 3, "%s: expected 3 marks, got %d" % [tag, _main.errors.size()])
+	var old_size := root.size
+	# Резкое сужение: переносы обязаны пересобраться.
+	DisplayServer.window_set_size(Vector2i(400, 900))
+	root.size = Vector2i(400, 900)
+	_main._relayout()
+	_tick(tag)
+	_common(tag)
+	# Каждая метка — на своей букве и внутри набранного.
+	var now: Array = []
+	var bad := 0
+	for mk in _main.errors.keys():
+		var parts := String(mk).split(":")
+		var li := int(parts[0])
+		var pi := int(parts[1])
+		if li >= _main.display_lines.size() or pi >= String(_main.display_lines[li]).length():
+			bad += 1
+			continue
+		now.append(String(_main.display_lines[li]).substr(pi, 1))
+	now.sort()
+	_check(bad == 0, "%s: %d marks point outside the lines" % [tag, bad])
+	_check(now == letters, "%s: marks changed letters on reflow" % tag)
+	_check(_main.errors.size() == 3, "%s: reflow ate marks (%d left)" % [tag, _main.errors.size()])
+	DisplayServer.window_set_size(old_size)
+	root.size = old_size
+	_main._relayout()
+	_tick(tag)
+	_common(tag)
 
 
 ## 18. Автопунктуация IME: точка с настоящим keycode, когда игра ждёт
@@ -1778,8 +1901,10 @@ func _process(_dt: float) -> bool:
 	_case_fast_doubles()
 	_case_long_press_then_backspace()
 	_case_ime_frames()
+	_case_idle_hint()
+	_case_reflow_typed_cells()
 	_case_chaos(1500)
-	_cases = 36
+	_cases = 38
 	_check(_steps > 1200, "the test really played (coverage: %d steps)" % _steps)
 	for f in _failures:
 		print("COMBO_TEST: FAIL: ", f)
