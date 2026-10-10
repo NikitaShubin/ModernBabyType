@@ -161,17 +161,12 @@ var top_safe := 0.0
 ## Системная клавиатура (галка в меню, борьба с автозаменой — comp-буфер):
 ## показана прямо сейчас, момент запроса, сырая высота в экранных пикселях.
 ## Живут только при включённой галке.
-var _kb_shown := false
-var _kb_request_t := -100.0
-var _kb_raw := 0.0
 ## Ручной вызов системной тапом по рабочей области (при её галке).
-var _kb_manual := false
 ## Пере-поднять системную клавиатуру после старта нового уровня: сессия
 ## IME рвётся, когда уровень начат нажатием клавиши (Godot съедает её), и
 ## буквы уходят в никуда, пока игрок не тапнёт по тексту. Живой лог
 ## 10.2026: LEVEL, затем 2.5 с тишины (только Backspace'ы), TAP — и
 ## только затем пошли EV. Обратный отсчёт кадров до показа.
-var _kb_refocus := 0
 ## Салют победы: частицы [pos, vel, age, life, color_idx]. Живут только
 ## на модалке победы, Enter гасит вместе с ней.
 var fw_parts: Array = []
@@ -393,6 +388,7 @@ func _cmdline_mode() -> void:
 			# Стенд мобильной раскладки на десктопе: своя клавиатура
 			# видна, как на телефоне (для скриншотов и проверки тапов).
 			_force_touch = true
+			Ui.force_touch = true
 
 
 ## Уместить строки уровня в ширину экрана. На широких экранах и в
@@ -444,7 +440,6 @@ func _reflow_text() -> void:
 	display_lines = fresh
 	cursor_line = int(rf["line"])
 	cursor_pos = int(rf["pos"])
-	_undo.clear()
 	_reindex_lines()
 	_remap_cells(passed, table, rf)
 	_remap_cells(errors, table, rf)
@@ -597,10 +592,7 @@ func _relayout() -> void:
 	view_h = s.y
 	top_safe = Ui.top_inset(view_h)
 	# Своя клавиатура занимает низ — раскладка едет от остатка.
-	# Высота от view_h (не от k): разрываем цикл k↔kb_h. При системной
-	# галке высоту ставит её замер (poll), здесь не трогаем.
-	if not S.get_sys_kb():
-		kb_h = _own_h()
+	kb_h = _own_h()
 	# Масштаб — от эффективной высоты (экран минус клавиатура): в портрете
 	# с выездом клавиатуры остаток альбомный, и вся сцена честно в него
 	# вписывается. На узком экране за базу ширины берём 560, а не 1100:
@@ -665,8 +657,6 @@ func _relayout() -> void:
 	# При системной галке игре отдаёт ей свой замер высоты — иначе поле
 	# ввода и кнопки уезжают под клавиатуру.
 	if menu != null:
-		if S.get_sys_kb():
-			menu.set("sys_kb_h", kb_h)
 		menu.queue_redraw()
 	queue_redraw()
 
@@ -830,7 +820,6 @@ func _new_level() -> void:
 	# Клавиатуру пере-поднимаем: если уровень начат нажатием клавиши,
 	# сессия IME рвётся и буквы уходят в никуда (жалоба автора 10.2026:
 	# «после смены уровня нажимал правильную букву, реакции не было»).
-	_kb_refocus_now()
 
 	# Слой и шифт своей клавиатуры сбрасываем: новый уровень — чистые буквы.
 	kb_layer = "ru"
@@ -854,11 +843,6 @@ func _new_level() -> void:
 	typed_cells.clear()
 	passed.clear()
 	errors.clear()
-	_undo.clear()
-	_comp_active = false
-	_comp_dels = 0
-	_comp_chars = ""
-	_comp_region = ""
 	cursor_line = 0
 	cursor_pos = 0
 	typed_ok = 0
@@ -990,69 +974,24 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		return
 	if state != "playing":
 		return
-	# ПОРЯДОК ВВОДА. Пока в буфере лежат софт-символы (keycode
-	# KEY_UNKNOWN — так шлёт Яндекс), следующий ввод обязан ждать своей
-	# очереди, даже если у него настоящий keycode: пробел с клавиатуры
-	# приходит как KEY_SPACE и раньше применялся напрямую, перепрыгивая
-	# букву, нажатую за 6 мс до него. Живой лог 10.2026: «а» ушла в буфер,
-	# пробел применился первым — две красные метки на ровном месте, и всё
-	# выглядело как «букву не считает». Сбрасываем буфер (он применит всё
-	# накопленное по порядку) и только потом берёмся за это событие.
-	if _comp_active and _comp_chars != "" and not _is_soft(ke):
-		_comp_flush()
-	# Backspace с системной клавиатуры — тоже без keycode (unicode 8).
-	# Софт-серии (DEL + перепись региона) копятся в composing-буфер:
-	# разбираются во flush в начале _process, задержка ≤ кадр.
+	# Ввод один и тот же для любой клавиатуры: Backspace — стирание,
+	# управляющие символы — мимо, всё остальное — буква в игру.
+	# Сложной машины с composing-буфером, автозаменой и фильтром дублей
+	# больше нет: своей экранной клавиатуре IME не нужен, а с системной
+	# мы расстались (решение 10.2026, жалобы на сбитый курсор и подсказку
+	# «Стереть», которая ничего не стирала).
 	if ke.keycode == KEY_BACKSPACE or ke.unicode == 8:
-		if _is_soft(ke):
-			_comp_del()
-		else:
-			_backspace()
+		_backspace()
 		return
-	# Управляющие символы — не буквы: иначе Enter с системной прямо во
-	# время партии рисовал бы красную метку перевода строки.
 	if ke.unicode < 32:
-		return
-	if _is_soft(ke):
-		# Софт-клавиатура капслока не имеет: предупреждение о CapsLock
-		# для её заглавных — ложное (раньше орало на каждую букву).
-		# Одиночный символ без серии — тоже серия (из одного): flush
-		# разберёт его обычным путём, задержка ≤ кадр незаметна.
-		if not _comp_active:
-			_comp_active = true
-			_comp_origin = Vector2i(cursor_line, cursor_pos)
-			_comp_dels = 0
-			_comp_chars = ""
-			_comp_undo_mark = _undo.size()
-		_comp_chars += String.chr(ke.unicode)
-		return
-	# АВТОПУНКТУАЦИЯ IME. Яндекс (и Gboard) сами вставляют точку после
-	# пробела, а ещё и по второму нажатию пробела. Приходит она с
-	# НАСТОЯЩИМ keycode (KEY_PERIOD = 46 и т.п.), поэтому composing-буфер
-	# её не задерживает: точка выползает сразу, в обход очереди, и если
-	# игра её НЕ ЖДЁТ — встаёт красной меткой и уносит курсор. Живой лог
-	# 10.2026: TYPE;.; ;mark;(1, 5) сразу после BACK;rollback — игрок
-	# такой точки не нажимал. Наказывать за автопунктуацию нельзя:
-	# если знак не тот, что ждёт игра, молча пропускаем.
-	var want_ch := _current()
-	var got_ch := String.chr(ke.unicode)
-	if (
-		S.get_sys_kb()
-		and (
-			ke.keycode == KEY_PERIOD or ke.keycode == KEY_COMMA
-			or ke.keycode == KEY_SEMICOLON or ke.keycode == KEY_QUESTION
-		)
-		and not _eq(got_ch, want_ch)
-	):
-
 		return
 	if _exact():
 		_caps_check(ke)
-	_type_char(got_ch)
+	_type_char(String.chr(ke.unicode))
 
 
 ## CapsLock-детект для строгого режима («все клавиши»): движок отдаёт
-## готовую букву в unicode, а keycode — физическую клавишу, отдельного
+## готовую букву в unicode, а keycode — физическая клавиша, отдельного
 ## API состояния CapsLock в 4.3 нет. Буква заглавная без шифта (или
 ## строчная с шифтом) — значит, lock включён: поднимаем предупреждение
 ## в подсказке. Не-буквы (цифры, знаки) пропускаем: у них верхний
@@ -1062,15 +1001,10 @@ func _caps_check(ke: InputEventKey) -> void:
 		return
 	var ch := String.chr(ke.unicode)
 	if ch.to_lower() == ch.to_upper():
-		return
+		return  # не буква — судить не о чем
 	if (ch == ch.to_upper()) != ke.shift_pressed:
 		_caps_warn = true
 
-
-## Стек снятий Backspace: [{pos, ch, passed, error}]. Нужен composing-буферу
-## ниже: молча вернуть снятое, если серия оказалась перепиской слова.
-var _undo: Array = []
-const UNDO_CAP := 64
 
 ## Вспышка клетки: ответ на действия, которые иначе не видны. Живой лог
 ## 10.2026 показал два таких случая, и оба выглядели как «игра не считает»:
@@ -1123,199 +1057,7 @@ func _last_filled_behind() -> Vector2i:
 	return Vector2i(-1, -1)
 
 
-func _undo_push(l: int, p: int, had_passed: bool, had_error: String) -> void:
-	if _undo.size() >= UNDO_CAP:
-		_undo.clear()
-		return
-	if l < 0 or l >= display_lines.size():
-		return
-	if p < 0 or p >= display_lines[l].length():
-		return
-	_undo.append({
-		"pos": Vector2i(l, p),
-		"ch": display_lines[l].substr(p, 1),
-		"passed": had_passed,
-		"error": had_error,
-	})
-
-
-## Composing-буфер IME. Экранная клавиатура со словарём (Яндекс, Gboard —
-## русский) набирает через composing-регион: каждый тап стирает и вводит
-## заново всё слово (серии DEL + дубли; keycode KEY_UNKNOWN/0, живой лог
-## с телефона 10.2026). Без буфера каждый дубль — «опечатка»: красная
-## метка, откат, врущие счётчики; кириллица «не набирается», хотя события
-## доходят. Правило: серия [DEL×k + символы], чей префикс повторяет прошлый
-## регион, — переписка: снятое возвращается молча, вводится только новый
-## хвост. Всё остальное — обычный ввод (десктоп не меняется вообще).
-## Софт-события разбираются во flush в начале _process: задержка ≤ кадр.
-var _comp_active := false
-var _comp_origin := Vector2i(-1, -1)
-var _comp_dels := 0
-var _comp_chars := ""
-var _comp_region := ""
-var _comp_undo_mark := 0
-# Счётчики composing-серий: сколько схлопнулось в переписку,
-# сколько отменено как машинный мусор.
-var _comp_hits := 0
-var _comp_drops := 0
-
-
-## Событие с экранной клавиатуры: движок отдаёт keycode KEY_UNKNOWN
-## (Яндекс, живой лог) или KEY_NONE (Gboard). Железная клавиатура шлёт
-## физические keycode — её не буферизуем: серий там нет, задержка ни к чему.
-func _is_soft(ke: InputEventKey) -> bool:
-	return ke.keycode == KEY_UNKNOWN or ke.keycode == KEY_NONE
-
-
-## DEL из серии: запоминаем и выполняем как обычно (откат + стек снятий).
-## Висящие DEL (символы ещё не пришли — серия размазалась по кадрам,
-## автозамена после пробела) ждут продолжения до дедлайна, а не
-## сбрасываются в том же flush: иначе откаты уже применены, а слово
-## придёт следующим циклом и встанет красными метками.
-var _comp_deadline := 0
-func _comp_del() -> void:
-	if not _comp_active:
-		_comp_active = true
-		_comp_origin = Vector2i(cursor_line, cursor_pos)
-		_comp_dels = 0
-		_comp_chars = ""
-		_comp_undo_mark = _undo.size()
-	_comp_dels += 1
-	_comp_deadline = Time.get_ticks_msec() + 150
-	_backspace()
-
-
-## Разобрать накопленное. Софт-серия [DEL×k + символы] в одном межкадровом
-## цикле — всегда машинная: ручной ввод разбит кадрами (между стиранием
-## и следующей буквой всегда есть flush с пустыми символами). Живой лог
-## Яндекса 10.2026 знает три потока: одиночки без DEL (медленный набор),
-## пары [DEL + буква] (быстрый набор, дифф-режим), серии с перепиской
-## всего региона и автозамены слова после пробела. Обычный путь для серий
-## с DEL — это откаты и красные метки на каждую букву («после пробела
-## отбрасывает назад»). Поэтому: снятое серией возвращается молча всегда
-## (DEL в цикле — машинные), курсор — на начало серии, а дальше:
-##  - префикс повторяет регион (m≥2) — переписка: ввести только хвост;
-##  - пара [DEL + буква] (m==1) — ввести букву обычным путём: верная
-##    засчитается, неверная честно встанет меткой, как любая опечатка;
-##  - чужая замена целиком (m≥2, префикс чужой — автозамена слова) —
-##    отменить: иначе откаты и красные метки на каждую букву.
-## Одиночки без DEL и разделённые кадрами идут обычным путём.
-func _comp_flush() -> void:
-	if not _comp_active:
-		return
-	if state != "playing":
-		# Уровень кончился, а пачка ещё летела: сбрасываем её молча,
-		# иначе буква дописывается после победы и сбивает счётчик.
-		_comp_active = false
-		_comp_region = ""
-		_comp_dels = 0
-		_comp_chars = ""
-
-		return
-	var tail := _comp_chars
-	if tail == "":
-		# Символов нет — либо настоящие ручные стирания, либо серия
-		# размазалась (автозамена: DEL сейчас, слово следующим циклом).
-		# DEL уже применены; если дедлайн не вышел — ждём символы,
-		# иначе цикл закрыт (стирания настоящие).
-		if _comp_dels > 0 and Time.get_ticks_msec() < _comp_deadline:
-			return
-		_comp_active = false
-		_comp_region = ""
-		_comp_dels = 0
-		_comp_chars = ""
-		return
-	_comp_active = false
-
-	if _comp_dels > 0:
-		# Снятое серией возвращается молча всегда (DEL в цикле машинные),
-		# курсор — на начало серии. Дальше три ветки:
-		_comp_restore()
-		if tail.length() >= 2:
-			if tail.left(tail.length() - 1) == _comp_region.left(tail.length() - 1):
-				# Переписка региона — ввести только новый хвост.
-				tail = tail.right(1)
-				_comp_hits += 1
-
-			else:
-				# Чужая замена (автозамена слова) — отменить целиком:
-				# иначе откаты и красные метки на каждую букву.
-				tail = ""
-				_comp_drops += 1
-
-		# Пара [DEL + буква] (m==1): ввести букву обычным путём с начала
-		# серии — верная засчитается, неверная честно встанет меткой.
-	_comp_region = _comp_chars
-	_comp_dels = 0
-	_comp_chars = ""
-	for i in tail.length():
-		_type_char_comp(tail.substr(i, 1))
-
-
-## Ввод софт-символа из буфера. Глушим ТОЛЬКО настоящий дубль клавиши:
-## Яндекс (и другие IME с словарём) присылают одну и ту же букву дважды
-## подряд, миллисекунда в миллисекунду (живой лог 10.2026: `FLUSH;0;оо;о`).
-##
-## Раньше правило было шире: глушилась любая буква, совпавшая с ЧЕМ-ЛИБО
-## пройденным раньше в тексте. Это было ошибкой: игра требует набирать
-## «Прибежала», а потом «внучка» — и «л» из «внучка» глушилась тем, что
-## «л» уже встречалась в «Прибежала». Автор видел «нажал, а не считает»
-## и ходил по кругу (живой лог 10.2026: `TYPE;л;ч;dup-ignore;...;0:7`).
-## Теперь глушится только повтор той же буквы в том же нажатии; всё
-## остальное — обычным путём, с честной меткой при настоящей опечатке.
-## Окно «дубля клавиши». Дубли от IME приходят в ОДНУ миллисекунду
-## (живой лог 10.2026: два «о» с одной отметкой времени), поэтому окно
-## можно держать очень узким. Было 60 мс — и намеренное двойное нажатие
-## пробела (два слова подряд, «а» и «а») попадало под фильтр: второй
-## символ молча съедался (жалоба автора 10.2026: «если жму пробел дважды
-## быстро, второй не засчитывается»). Человек дважды не жмёт быстрее
-## ~120 мс, так что 25 мс ловит только машинальные дубли.
-const DUP_MS := 25
-var _dup_ch := ""
-var _dup_t := 0
-var _dup_cell_key := ""
-
-
-
-func _type_char_comp(ch: String) -> void:
-	var now := Time.get_ticks_msec()
-	if (
-		ch == _dup_ch
-		and _dup_t > 0
-		and now - _dup_t <= DUP_MS
-		and not _eq(ch, _current())
-	):
-		_comp_drops += 1
-		if _dup_cell_key != "":
-			var parts := _dup_cell_key.split(":")
-			if parts.size() == 2:
-				_hint_at(int(parts[0]), int(parts[1]))
-
-		return
-	var ok_before := typed_ok
-	var cur_before := _key(cursor_line, cursor_pos)
-	_type_char(ch)
-	if typed_ok > ok_before:
-		# Запоминаем принятую букву: следующая такая же подряд — дубль
-		# клавиши, её глушим (с подсказкой ГДЕ она стоит).
-		_dup_ch = ch
-		_dup_t = now
-		_dup_cell_key = cur_before
-
-
 ## Вернуть снятое серией DEL: снимаем их из undo-стека обратно.
-func _comp_restore() -> void:
-	while _undo.size() > _comp_undo_mark:
-		var v: Dictionary = _undo.pop_back()
-		var kk := "%d:%d" % [v["pos"].x, v["pos"].y]
-		if String(v["error"]) != "":
-			errors[kk] = String(v["error"])
-		if bool(v["passed"]):
-			passed[kk] = true
-	cursor_line = _comp_origin.x
-	cursor_pos = _comp_origin.y
-
-
 ## Клетки, набранные нажатием (не серые автопропуски). Нужны откату
 ## Backspace: он отменяет последнюю НАБРАННУЮ букву, а не последнюю
 ## пройденную клетку (серые символы проскочила сама игра).
@@ -1413,7 +1155,6 @@ func _knockback() -> void:
 func _backspace() -> void:
 	var k := _key(cursor_line, cursor_pos)
 	if errors.has(k):
-		_undo_push(cursor_line, cursor_pos, passed.has(k), String(errors[k]))
 		errors.erase(k)
 		_skip_inactive()
 		_refresh()
@@ -1427,7 +1168,6 @@ func _backspace() -> void:
 			fwd_p = 0
 	var fk := _key(fwd_l, fwd_p)
 	if errors.has(fk):
-		_undo_push(fwd_l, fwd_p, passed.has(fk), String(errors[fk]))
 		errors.erase(fk)
 		cursor_line = fwd_l
 		cursor_pos = fwd_p
@@ -1453,7 +1193,6 @@ func _backspace() -> void:
 	cursor_pos = b.y
 	var bk := _key(cursor_line, cursor_pos)
 	var had := passed.has(bk) or errors.has(bk)
-	_undo_push(cursor_line, cursor_pos, passed.has(bk), String(errors.get(bk, "")))
 	passed.erase(bk)
 	errors.erase(bk)
 	typed_cells.erase(bk)
@@ -1579,37 +1318,71 @@ func _finish(won: bool, reason := "") -> void:
 const MAX_FRAME_DT := 0.1
 
 
+
+## Своя экранная клавиатура: единственный ввод на телефоне. Видна
+## в партии (скрыта под открытым меню и на модалке победы/поражения —
+## там ввод не нужен). На десктопе её нет: там печатают физической.
+func _own_shown() -> bool:
+	if menu_open:
+		return false
+	if state != "playing":
+		return false
+	return not _is_desktop()
+
+
+
+## Область своей клавиатуры: низ экрана, высота от ширины (кнопки —
+## почти квадраты, см. height_for). От view_h не зависит: разрываем цикл
+## с раскладкой (высота входит в eff_h).
+##
+## НО высоты экрана не хватает: в альбомной ориентации клавиши по ширине
+## выходят ВЫШЕ экрана (2340x1080 → 1128 px клавиатуры при 1080 высоты),
+## раскладка схлопывалась в полоску у верхнего края, текст оставался
+## огрызком, а нижние клавиши уезжали за экран (визуальный прогон
+## 10.2026, кадры «landscape»). Поэтому клавиатура ограничена долей
+## экрана, а лишнее убирается ШИРИНОЙ: клавиши остаются квадратными и
+## полоса встаёт по центру, а не прилипает к краю.
+func _own_rect() -> Rect2:
+	# Низ экрана со скруглениями и жестом: клавиатуру поднимаем на
+	# безопасный отступ, иначе угловые клавиши обрезаны (жалоба 10.2026).
+	var m := 16.0 + Ui.bottom_inset(view_h)
+	var max_h: float = maxf(160.0, (view_h - m) * 0.46)
+	var w := view_w - 32.0
+	var h := Kbd.height_for(w)
+	if h > max_h:
+		# Обратная задача height_for: ширина, дающая ровно max_h.
+		var kw: float = (max_h - 64.0) / (5.0 * Kbd.ROW_TALL)
+		w = clampf(kw * 12.0 + 32.0 + 88.0, 240.0, view_w - 32.0)
+		h = minf(Kbd.height_for(w), max_h)
+	return Rect2((view_w - w) * 0.5, view_h - h - m, w, h)
+
+
+
+## Высота своей клавиатуры в пикселях канваса (0 — скрыта). Ставится
+## в _relayout: раскладка едет от неё через _eff_h, как раньше от системной.
+func _own_h() -> float:
+	if not _own_shown():
+		return 0.0
+	return _own_rect().size.y
+
+
+
+## Эффективная высота экрана: низ, занятый клавиатурой, не наш.
+## Вся раскладка считается от неё. Пол под ногами не проваливается:
+## минимум 220 px.
+func _eff_h() -> float:
+	return Ui.eff_h(view_h, kb_h)
+
+
 func _process(dt: float) -> void:
 	dt = minf(dt, MAX_FRAME_DT)
 	time += dt
-	# Composing-буфер IME (софт-клавиатура) разбираем первым: ввод
-	# применяется до движения ежа и таймеров того же кадра.
-	_comp_flush()
-	if _kb_refocus > 0:
-		_kb_refocus -= 1
-		if _kb_refocus == 1:
-			# Первый кадр: скрыть — иначе show ничего не пересоздаст.
-			if DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
-				DisplayServer.virtual_keyboard_hide()
-				_kb_shown = false
-				_kb_request_t = time
-		elif _kb_refocus == 0:
-			# Второй: показать заново — сессия IME встанет как надо.
-			if DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
-				DisplayServer.virtual_keyboard_show("")
-				_kb_shown = true
-				_kb_request_t = time
-	if S.get_sys_kb():
-		_sync_keyboard()
-		_poll_keyboard()
-	else:
-		# Своя клавиатура показалась/скрылась (смена состояния) —
-		# пересчитать раскладку. Высота от view_h, без циклов.
-		var oh := _own_h()
-		if not is_equal_approx(oh, kb_h):
-			kb_h = oh
-
-			_relayout()
+	# Высота раскладки — всегда своя клавиатура: система больше не
+	# участвует, замеров и подстройки нет, раскладка не прыгает сама.
+	var oh := _own_h()
+	if not is_equal_approx(oh, kb_h):
+		kb_h = oh
+		_relayout()
 	if menu_open:
 		# Меню открыто — геймплей стоит: ёж не догоняет, таймер не идёт.
 		# Отрисовка героев продолжается, но без игровых проверок.
@@ -1760,157 +1533,6 @@ func _process(dt: float) -> void:
 	_refresh_hud()
 
 
-## Системная виртуальная клавиатура (Android): ей владеет игра целиком.
-## Нужна всегда, кроме открытого меню без поля ввода: во время партии
-## ею печатают буквы, на модалке победы/поражения — Enter, в меню —
-## имя игрока. Никакой своей клавиатуры не рисуем — только просим
-## систему показать/убрать её штатную. Вызывается каждый кадр, но
-## дёргает DisplayServer только на смене состояния. На десктопе и в
-## headless-тестах no-op: там нет FEATURE_VIRTUAL_KEYBOARD.
-## Своя клавиатура: видна в партии на сенсорных устройствах. На десктопе
-## есть железная — своя не нужна. Под открытым меню — скрыта (меню
-## показывает свою, если вводит имя). На модалке победы/поражения —
-## скрыта: там ввод не нужен, тапы листают дальше.
-func _own_shown() -> bool:
-	if S.get_sys_kb():
-		return false
-	if menu_open:
-		return false
-	if state != "playing":
-		return false
-	return not _is_desktop()
-
-
-## Область своей клавиатуры: низ экрана, высота от ширины (кнопки —
-## почти квадраты, см. height_for). От view_h не зависит: разрываем цикл
-## с раскладкой (высота входит в eff_h).
-##
-## НО высоты экрана не хватает: в альбомной ориентации клавиши по ширине
-## выходят ВЫШЕ экрана (2340x1080 → 1128 px клавиатуры при 1080 высоты),
-## раскладка схлопывалась в полоску у верхнего края, текст оставался
-## огрызком, а нижние клавиши уезжали за экран (визуальный прогон
-## 10.2026, кадры «landscape»). Поэтому клавиатура ограничена долей
-## экрана, а лишнее убирается ШИРИНОЙ: клавиши остаются квадратными и
-## полоса встаёт по центру, а не прилипает к краю.
-func _own_rect() -> Rect2:
-	# Низ экрана со скруглениями и жестом: клавиатуру поднимаем на
-	# безопасный отступ, иначе угловые клавиши обрезаны (жалоба 10.2026).
-	var m := 16.0 + Ui.bottom_inset(view_h)
-	var max_h: float = maxf(160.0, (view_h - m) * 0.46)
-	var w := view_w - 32.0
-	var h := Kbd.height_for(w)
-	if h > max_h:
-		# Обратная задача height_for: ширина, дающая ровно max_h.
-		var kw: float = (max_h - 64.0) / (5.0 * Kbd.ROW_TALL)
-		w = clampf(kw * 12.0 + 32.0 + 88.0, 240.0, view_w - 32.0)
-		h = minf(Kbd.height_for(w), max_h)
-	return Rect2((view_w - w) * 0.5, view_h - h - m, w, h)
-
-
-## Высота своей клавиатуры в пикселях канваса (0 — скрыта). Ставится
-## в _relayout: раскладка едет от неё через _eff_h, как раньше от системной.
-func _own_h() -> float:
-	if not _own_shown():
-		return 0.0
-	return _own_rect().size.y
-
-
-## Системная клавиатура (только при её галке в меню): ей владеет игра
-## целиком, борьба с автозаменой — composing-буфер (_comp_*). Вызывается
-## каждый кадр, но дёргает DisplayServer только на смене состояния.
-func _sync_keyboard() -> void:
-	var want := _kb_want()
-	if want == _kb_shown:
-		return
-	_kb_shown = want
-	if not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
-		return
-	_kb_request_t = time
-	if want:
-		DisplayServer.virtual_keyboard_show("")
-	else:
-		DisplayServer.virtual_keyboard_hide()
-
-
-## Пере-поднять системную клавиатуру: hide сейчас, show через два кадра.
-## Простой show не помогает — сессия IME уже мертва, нужен цикл.
-## Само решение отделено от платформы: на десктопе счётчик тоже идёт,
-## но ничего не происходит (фичи виртуальной клавиатуры нет).
-func _kb_refocus_now() -> void:
-
-	if not S.get_sys_kb():
-		return
-	_kb_refocus = 2
-
-
-## Нужна ли системная клавиатура прямо сейчас. Имя вводится — в любой
-## ориентации; партия идёт — только в портрете, в альбоме её зовёт тап
-## по рабочей области. Чистая функция от состояния — матрица в logic_test.
-func _kb_want() -> bool:
-	if menu_open:
-		return menu != null and bool(menu.get("input_active"))
-	if _kb_manual:
-		return true
-	if view_w > view_h:
-		return false
-	return true
-
-
-## Эффективная высота экрана: низ, занятый клавиатурой, не наш.
-## Вся раскладка считается от неё. Пол под ногами не проваливается:
-## минимум 220 px.
-func _eff_h() -> float:
-	return Ui.eff_h(view_h, kb_h)
-
-
-## Высота системной клавиатуры в пикселях канваса: экранные пиксели
-## делим на масштаб экрана (на телефоне он 2–3). Без фичи — всегда ноль.
-func _kb_height_px() -> float:
-	if not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
-		_kb_raw = 0.0
-		return 0.0
-	_kb_raw = float(DisplayServer.virtual_keyboard_get_height())
-	var scr := DisplayServer.window_get_current_screen()
-	var scale := maxf(1.0, DisplayServer.screen_get_scale(scr))
-	return _kb_raw / scale
-
-
-## Следим за системной каждый кадр: выехала/уехала — пересчитать раскладку.
-## Пропавшую (смахнули, отобрала система, умерла сессия) возвращаем сами
-## пере-показом — ручная галочка не нужна.
-func _poll_keyboard() -> void:
-	if not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
-		return
-	var kh := _kb_height_px()
-	if not is_equal_approx(kh, kb_h):
-		kb_h = kh
-
-		_relayout()
-	var want := _kb_want()
-	if kb_need_reshow(want, _kb_shown, kh, time - _kb_request_t):
-		_kb_request_t = time
-		DisplayServer.virtual_keyboard_show("")
-
-
-## Чистое решение «пора ли пере-показать»: клавиатура нужна, флаг показа
-## стоит, а высоты нет дольше полутора секунд — показывать снова. Без
-## разовости: смахнутую, отобранную системой или умершую сессию игра
-## возвращает сама (требование автора 10.2026: фокус ввода теряться не
-## должен, ручная галочка не нужна). Матрица в logic_test.
-static func kb_need_reshow(want: bool, shown: bool, height: float, elapsed: float) -> bool:
-	return want and shown and height <= 0.0 and elapsed > 1.5
-
-
-## Тап по рабочей области при системной галке: показать её прямо сейчас.
-func _kb_summon() -> void:
-	_kb_manual = true
-	if not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
-		return
-	_kb_request_t = time
-	_kb_shown = true
-	DisplayServer.virtual_keyboard_show("")
-
-
 ## Все буквы — одно начертание и кегль. Состояние только оттенком:
 ## активная — чернила, будущая — средний серый, пройденная — светлый.
 func _refresh() -> void:
@@ -1998,6 +1620,24 @@ func _cell_color(l: int, p: int, ch: String, kk: String) -> String:
 ## Латиница ли буква (для варнинга о чужом слое клавиатуры).
 static func _is_latin(ch: String) -> bool:
 	return (ch >= "A" and ch <= "Z") or (ch >= "a" and ch <= "z")
+
+
+## Диагностика для разбора на телефоне (F3): сколько меток, где курсор
+## и что игра ждёт.
+func _marks_debug() -> String:
+	var far := 0
+	for k in errors.keys():
+		var parts := String(k).split(":")
+		var ax := _lin(int(parts[0]), float(parts[1]))
+		if ax < _lin(cursor_line, float(cursor_pos)) - 0.001:
+			far += 1
+	return "меток %d (позади %d) курсор %d:%d ждёт %s" % [
+		errors.size(),
+		far,
+		cursor_line,
+		cursor_pos,
+		_current(),
+	]
 
 
 func _hint_parts() -> Array:
@@ -2242,12 +1882,10 @@ func _refresh_hud() -> void:
 	# kb — сдвиг раскладки в пикселях канваса, kh — сырая высота
 	# клавиатуры в экранных пикселях, sc — масштаб экрана, vw/vh —
 	# вьюпорт. Нужно для настройки сдвига на живых телефонах.
-	var sc := 1.0
-	if DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
-		sc = DisplayServer.screen_get_scale(DisplayServer.window_get_current_screen())
-	var txt := "[dbg ex=%.0f eln=%d cur=%d:%d cw=%.1f k=%.2f ok=%d bad=%d kb=%.0f sc=%.2f vw=%.0f vh=%.0f]" % [
+	var sc := Ui.dpr()
+	var txt := "[dbg ex=%.0f eln=%d cur=%d:%d cw=%.1f k=%.2f ok=%d bad=%d kb=%.0f sc=%.2f vw=%.0f vh=%.0f] %s" % [
 		enemy_x, enemy_line, cursor_line, cursor_pos, char_w, k, typed_ok, typed_bad,
-		kb_h, sc, view_w, view_h,
+		kb_h, sc, view_w, view_h, _marks_debug(),
 	]
 	hud_label.text = txt
 	# Лейблу задаём свою ширину: он не должен раздуваться под текст
@@ -2521,7 +2159,7 @@ func _ui_ink() -> Color:
 ## headless-тестов веток с клавиатурой (там фичи нет никогда).
 var _force_touch := false
 func _is_desktop() -> bool:
-	return not _force_touch and not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD)
+	return not _force_touch and Ui.is_desktop()
 
 
 ## Подсказка кнопки игроков: на десктопе словами «Меню (F2)»
@@ -2637,11 +2275,9 @@ func _input(event: InputEvent) -> void:
 	# Своя клавиатура: клавиши раньше карточки (области не пересекаются).
 	if _own_press(pos):
 		return
-	# Рабочая область: при системной галке тап её вызывает, при своей
-	# она и так видна — тапу здесь делать нечего. Карточка последняя.
+	# Карточка: тап по ней ничего не делает, но событие съедаем, чтобы
+	# жест не утаскивал текст.
 	if card_p.visible and Rect2(card_p.position, card_p.size).has_point(pos):
-		if S.get_sys_kb():
-			_kb_summon()
 		get_viewport().set_input_as_handled()
 		return
 ## Залп салюта: разлёт искр из точки. Позиции — верхняя половина экрана.

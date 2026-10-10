@@ -21,12 +21,16 @@ static func panel_sb(bg: Color, radius: float, border := Color(0, 0, 0, 0), bw :
 	return sb
 
 
-## Десктоп — там, где нет системной клавиатуры.
-## force_touch включает мобильную раскладку принудительно — для стенда
-## (--touch-kb) и headless-тестов: игру и меню переключает игра.
+## Десктоп — там, где печатают физической клавиатурой.
+## Признак больше не «нет системной клавиатуры» (с ней мы расстались),
+## а платформа: своя экранная клавиатура рисуется на телефоне, на
+## десктопе её нет. force_touch включает мобильную раскладку принудительно
+## — для headless-тестов и стенда.
 static var force_touch := false
 static func is_desktop() -> bool:
-	return not force_touch and not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD)
+	if force_touch:
+		return false
+	return OS.get_name() != "Android" and OS.get_name() != "iOS"
 
 
 ## Переопределение плотности для тестов (0 — авто).
@@ -70,7 +74,7 @@ static func cutout_bottom(cutouts: Array, view_h: float) -> float:
 
 
 static func top_inset(view_h: float) -> float:
-	if not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
+	if is_desktop():
 		return 0.0
 	return cutout_bottom(DisplayServer.get_display_cutouts(), view_h)
 
@@ -87,7 +91,7 @@ static var bottom_override := -1.0
 static func bottom_inset(view_h: float) -> float:
 	if bottom_override >= 0.0:
 		return bottom_override
-	if not DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
+	if is_desktop():
 		return 0.0
 	var safe := 0.0
 	var area: Rect2 = DisplayServer.get_display_safe_area()

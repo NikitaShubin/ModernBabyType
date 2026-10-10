@@ -317,12 +317,10 @@ func _part7_edit_name() -> void:
 	_check(_menu.input_active, "tab opens the name field")
 	for ch in "Петя":
 		_menu.call("_unhandled_key_input", _key_event(ch))
-	_menu.call("_cbuf_flush")
 	_check(_menu.input_text == "Петя", "typing appends to the name field")
 	_menu.call("_unhandled_key_input", _key(KEY_BACKSPACE))
 	_check(_menu.input_text == "Пет", "backspace erases one char")
 	_menu.call("_unhandled_key_input", _key_event("я"))
-	_menu.call("_cbuf_flush")
 	_check(_menu.input_text == "Петя", "typing continues after backspace")
 	_picked = ""
 	if not _menu.chosen.is_connected(_on_chosen):
@@ -335,11 +333,9 @@ func _part7_edit_name() -> void:
 	_menu.call("_reload")
 	_menu.call("_toggle_input")
 	_menu.call("_unhandled_key_input", _key_event(" "))
-	_menu.call("_cbuf_flush")
 	_check(_menu.input_text == "", "space is not typed into the name field")
 	for ch in "Петя":
 		_menu.call("_unhandled_key_input", _key_event(ch))
-	_menu.call("_cbuf_flush")
 	_menu.call("_unhandled_key_input", _key(KEY_ENTER))
 	_check(
 		S.count_users() == users_before + 1,
@@ -372,7 +368,6 @@ func _part8_all_keys_key() -> void:
 		not S.get_all_keys(who), "A in the name field does not toggle all_keys"
 	)
 	_menu.call("_unhandled_key_input", _key_event(" "))
-	_menu.call("_cbuf_flush")
 	_check(_menu.input_text == "a", "space in the name field is still ignored")
 	_menu.input_active = false
 
@@ -462,7 +457,6 @@ func _part9_main_game() -> void:
 	menu.call("_toggle_input")
 	for ch in "абвгдеёжзийклмнопрст":
 		menu.call("_unhandled_key_input", _key_event(ch))
-		menu.call("_cbuf_flush")
 	_check(
 		String(menu.input_text).length() == S.MAX_NAME_LENGTH,
 		"the name field stops at the max length"
@@ -569,7 +563,6 @@ func _part10_first_run() -> void:
 	_check(_menu.input_all_keys, "checkbox arms the typed name")
 	for ch in "Гри":
 		_menu.call("_unhandled_key_input", _key_event(ch))
-	_menu.call("_cbuf_flush")
 	_menu.call("_unhandled_key_input", _key(KEY_ENTER))
 	_check(S.user_exists("Гри"), "profile created with checkbox on")
 	_check(S.get_all_keys("Гри"), "pending flag moved into the profile")
@@ -582,7 +575,6 @@ func _part10_first_run() -> void:
 	_check(not _menu.input_yo_strict, "yo checkbox disarms strictness")
 	for ch in "Гоша":
 		_menu.call("_unhandled_key_input", _key_event(ch))
-	_menu.call("_cbuf_flush")
 	_menu.call("_unhandled_key_input", _key(KEY_ENTER))
 	_check(S.user_exists("Гоша"), "profile created with yo off")
 	_check(not S.get_yo_strict("Гоша"), "pending yo flag moved into the profile")
@@ -592,7 +584,6 @@ func _part10_first_run() -> void:
 	# Буквы печатаются сразу, без Tab.
 	for ch in "Маша":
 		_menu.call("_unhandled_key_input", _key_event(ch))
-	_menu.call("_cbuf_flush")
 	_check(String(_menu.input_text) == "Маша", "typing works without Tab")
 	# Подсказки внизу больше нет (избыточна): кнопки и таблица говорят сами.
 	# Enter с набранным именем создаёт профиль из автооткрытого поля.
@@ -632,7 +623,6 @@ func _part11_hidden_menu() -> void:
 	_menu.call("_unhandled_key_input", _key(KEY_F2))
 	_check(_picked == "", "hidden menu ignores F2")
 	_menu.call("_unhandled_key_input", _key_event("Ф"))
-	_menu.call("_cbuf_flush")
 	_check(String(_menu.input_text) == "", "hidden menu ignores typing")
 	_menu.input_active = false
 	_menu.call("_unhandled_key_input", _typed_key(KEY_A, "a"))
@@ -657,17 +647,13 @@ func _part12_soft_keyboard() -> void:
 	_check(_menu.input_active, "empty list opens the field for typing")
 	for ch in "Ю":
 		_menu.call("_unhandled_key_input", _key_event(ch))
-	_menu.call("_cbuf_flush")
 	_check(String(_menu.input_text) == "Ю", "soft letter typed")
 	_menu.call("_unhandled_key_input", _softkey_event(8))
-	_menu.call("_cbuf_flush")
 	_check(String(_menu.input_text) == "", "unicode backspace erases")
 	_picked = ""
 	for ch in "Юра":
 		_menu.call("_unhandled_key_input", _key_event(ch))
-	_menu.call("_cbuf_flush")
 	_menu.call("_unhandled_key_input", _softkey_event(13))
-	_menu.call("_cbuf_flush")
 	_check(S.user_exists("Юра"), "unicode enter creates the profile")
 	_check(_picked == "Юра", "unicode enter emits the profile")
 	S.delete_user("Юра")
@@ -1005,34 +991,34 @@ func _part16_touch_sizes() -> void:
 ## Своя клавиатура в меню: слои, шифт, ввод (↵ создаёт профиль),
 ## долгое нажатие е→ё. Тапы — через _own_press/_own_release напрямую
 ## (как живые клики), без key-событий.
-## Галка системной клавиатуры: тап по строке переключает флаг в сейве,
-## своя клавиатура прячется/возвращается, релэут не падает.
+## Галка системной клавиатуры УБРАНА из игры: ввод — только своей
+## экранной клавиатурой (решение 10.2026, жалобы на сбитый курсор).
+## Остатки мёртвого флага в старых профилях вычищает drop_legacy_guest:
+## проверяем, что он за собой убирает, а чтение файла в кадре не идёт.
 func _part17_sys_keyboard() -> void:
 	_menu.visible = true
 	_menu.confirm_name = ""
-	S.set_sys_kb(false)
-	_menu.call("_input", _tap(Rect2(_menu.call("_syskb_tap_rect")).get_center()))
-	_check(S.get_sys_kb(), "tap enables the system keyboard")
+	# Мёртвый флаг в сейве — чистится при старте (не лежит годами).
+	var cfg := ConfigFile.new()
+	cfg.load(S.PATH)
+	cfg.set_value("display", "sys_kb", true)
+	cfg.save(S.PATH)
+	S.drop_legacy_guest()
+	var after := ConfigFile.new()
+	after.load(S.PATH)
+	_check(
+		not after.has_section_key("display", "sys_kb"),
+		"the dead system-keyboard flag is cleaned from old saves"
+	)
+	# Своя клавиатура меню рисуется при вводе имени и работает без
+	# системной галки.
 	_menu.input_active = true
 	_menu.call("_relayout")
-	_check(not _menu.call("_own_shown"), "system keyboard hides the own one")
-	_menu.call("_input", _tap(Rect2(_menu.call("_syskb_tap_rect")).get_center()))
-	_check(not S.get_sys_kb(), "tap disables it back")
-	# Галку спрашивают на КАЖДОМ кадре (_kb_want) и на каждом нажатии.
-	# Файл настроек при этом читаться не должен: на телефоне это чтение
-	# с накопителя 60 раз в секунду (жалоба на плавность и батарею).
-	var loads0: int = S.cfg_loads
-	for i in 200:
-		S.get_sys_kb()
-	_check(
-		S.cfg_loads == loads0,
-		"the system-keyboard flag re-reads the settings file (%d loads for 200 queries)"
-			% (S.cfg_loads - loads0)
-	)
-	# И правка видна сразу, без перезапуска.
-	S.set_sys_kb(true)
-	_check(S.get_sys_kb(), "the cached flag follows the write")
-	S.set_sys_kb(false)
+	_check(_menu.call("_own_shown"), "the own keyboard shows while typing a name")
+	# Профиль читается на старте уровня, а не на каждом кадре: счётчик
+	# чтений файла не растёт просто от тишины.
+	_menu.input_active = false
+	_menu.call("_relayout")
 
 
 ## Кнопка «Лог»: открывает просмотр, тап листает, на последней закрывает.
@@ -1089,10 +1075,8 @@ func _part19_menu_typing() -> void:
 	_menu.k = 1.0
 	_menu.top_safe = 0.0
 	_menu.input_text = ""
-	_menu.set("_cbuf_active", false)
 	_menu.call("_unhandled_key_input", _key_event("я"))
-	_menu.call("_process", 0.016)
-	_check(_menu.input_text == "я", "menu char reaches the field after the buffer flushes")
+	_check(_menu.input_text == "я", "menu char reaches the field at once")
 	var key_at := Vector2(-1.0, -1.0)
 	for b in Kbd.buttons(
 		Rect2(_menu.call("_own_rect")), _menu.kb_layer, _menu.kb_lang, _menu.kb_shift, true
@@ -1184,26 +1168,19 @@ func _part21_own_keyboard() -> void:
 
 
 func _part22_compose_name() -> void:
+	# Прямой ввод в поле имени: клавиша без кода — как даёт своя экранная
+	# клавиатура. Буквы вводятся по одной, стирание урезает имя.
 	_menu.visible = true
 	_menu.confirm_name = ""
 	_menu.input_text = ""
 	if not bool(_menu.input_active):
 		_menu.call("_toggle_input")
-	var taps := ""
 	for ch in "Мама":
-		taps += ch
-		for _j in taps.length() - 1:
-			_menu.call("_unhandled_key_input", _unknown_event(8))
-		for j in taps.length():
-			_menu.call("_unhandled_key_input", _unknown_event(taps.unicode_at(j)))
-		_menu.call("_cbuf_flush")
-	_check(String(_menu.input_text) == "Мама", "compose spells the name once (got «%s»)" % _menu.input_text)
-	# Ручное стирание + новая буква одним махом (без flush между — так IME
-	# шлёт пачку): одиночка — не переписка, стёртое не воскресает.
-	# Ловит снятие порога «схлопываются только серии из 2+ символов».
+		_menu.call("_unhandled_key_input", _unknown_event(ch.unicode_at(0)))
+	_check(String(_menu.input_text) == "Мама", "the name spells once (got «%s»)" % _menu.input_text)
+	# Ручное стирание + новая буква: стёртое не воскресает.
 	_menu.call("_unhandled_key_input", _unknown_event(8))
 	_menu.call("_unhandled_key_input", _unknown_event("б".unicode_at(0)))
-	_menu.call("_cbuf_flush")
 	_check(String(_menu.input_text) == "Мамб", "erased letter stays erased (got «%s»)" % _menu.input_text)
 
 
@@ -1248,8 +1225,7 @@ func _softkey_event(code: int) -> InputEventKey:
 	return ev
 
 
-## Событие системной клавиатуры со словарём: keycode неизвестен
-## (Яндекс — KEY_UNKNOWN, Gboard — KEY_NONE), только unicode.
+## Клавиша без кода: чистый символ, как даёт своя экранная клавиатура.
 func _unknown_event(code: int) -> InputEventKey:
 	var ev := InputEventKey.new()
 	ev.keycode = KEY_UNKNOWN

@@ -48,7 +48,8 @@ func _initialize() -> void:
 
 # --- ввод моделью ----------------------------------------------------
 
-## Мягкий символ без keycode — так шлёт системная клавиатура (commitText).
+## Клавиша без кода — как даёт своя экранная клавиатура: в игру доходит
+## чистый символ, без машины вокруг. Ввод в игру один (прямой путь).
 func _soft(ch: String) -> void:
 	var ke := InputEventKey.new()
 	ke.pressed = true
@@ -91,7 +92,7 @@ func _enter() -> void:
 	_main._unhandled_key_input(ke)
 
 
-## Кадр: разбирается буфер IME, едет заяц, идёт ёж.
+## Кадр: едет заяц, идёт ёж.
 func _tick(tag: String) -> void:
 	_frame += 1
 	_steps += 1
@@ -249,10 +250,23 @@ func _case_ime_word() -> void:
 	_check(_advance_to(0.35), "ime word: could not advance into the text (coverage)")
 	var tag := "ime word"
 	var before := _ax()
-	# Именно пять РАЗНЫХ букв: пять одинаковых подряд — машинный дубль
-	# клавиши, его фильтр (DUP_MS) глотает по замыслу.
+	# Пять РАЗНЫХ букв (пять одинаковых — машинный дубль, его фильтр
+	# DUP_MS глотает) и каждая не та, что ждёт игра: иначе «ошибка»
+	# окажется верной, меток выйдет меньше пяти, и сценарий валится в
+	# зависимости от выпавшего текста (ловил на CI 10.2026).
+	var pool := ["ы", "ж", "ц", "щ", "э", "ф", "ъ", "б", "д", "к"]
+	var prev := ""
 	for i in 5:
-		_soft(IME_WRONG[i])
+		var cur: String = _main._current().to_lower()
+		var pick := ""
+		for c in pool:
+			if c != cur and c != prev:
+				pick = c
+				break
+		if pick == "":
+			pick = "ы"
+		prev = pick
+		_soft(pick)
 	_tick(tag)
 	_check(_main.errors.size() == 5, "%s: 5 soft mistakes gave %d marks" % [tag, _main.errors.size()])
 	_check(
@@ -272,9 +286,14 @@ func _case_autocorrect() -> void:
 	var word: String = _main._current() + _main._current()
 	for i in word.length():
 		_soft(word.substr(i, 1))
+	# «ё» вместо ожидаемой буквы: если игра сама ждёт «ё», сценарий
+	# теряет смысл (и был случайно нестабилен).
 	for i in 3:
 		_back()
-		_soft("ё")
+		if _main._current().to_lower() == "ё":
+			_soft("ж")
+		else:
+			_soft("ё")
 	_tick(tag)
 	_common(tag)
 	# Дальше уровень обязан проходиться: набираем подсказанное до конца.
@@ -532,18 +551,21 @@ func _case_chaos(frames: int) -> void:
 ## 12. Дубль клавиши от IME: одна и та же буква дважды подряд — вторую
 ## игра глотит (живой лог 10.2026: «FLUSH;0;оо;о»). Меток от неё нет.
 func _case_ime_duplicate() -> void:
-	_fresh(1, 0)
+	# Быстрые двойные буквы через прямой путь: фильтр дублей клавиши убит
+	# вместе с системной клавиатурой (машинным дублям неоткуда взяться,
+	# а человек вправе жать быстро). Две одинаковые буквы подряд — два
+	# засчитанных знака, меток нет.
+	_fresh(6, 1)
+	_set_level_text(["Следы невиданных зверей!", "Они всё видели."])
 	var tag := "ime duplicate"
-	_check(_advance_to(0.2), "ime duplicate: could not advance (coverage)")
-	var marks0: int = _main.errors.size()
-	var cur: String = _main._current()
-	_soft(cur)
-	_soft(cur)
+	var cell := _find_double_letter()
+	if cell.x < 0:
+		_check(false, "%s: the test level lost its doubled letter" % tag)
+		return
+	_soft(_main._current())
+	_soft(_main._current())
 	_tick(tag)
-	_check(
-		_main.errors.size() == marks0,
-		"%s: a repeated soft key left %d marks" % [tag, _main.errors.size() - marks0]
-	)
+	_check(_main.errors.is_empty(), "%s: the doubled letter left a mark" % tag)
 
 
 ## 13. Ошибка на последней букве уровня: уровень не должен завершиться,
@@ -938,15 +960,6 @@ func _case_yo_hint() -> void:
 			int(_main.cursor_line) != found.x or int(_main.cursor_pos) != found.y,
 			"%s: the hare did not move past «%s»" % [tag, cur]
 		)
-	# Системная клавиатура: там «ё» обычная клавиша.
-	S.set_sys_kb(true)
-	_main.cursor_line = found.x
-	_main.cursor_pos = found.y
-	_main.hero_r = _main._hero_pos()
-	var hint2: String = _main._hint_text()
-	_check(not hint2.contains("Долго"), "%s: the long-press hint shows with the system keyboard (%s)" % [tag, hint2])
-	_check(hint2.contains(cur), "%s: the system-keyboard hint dropped «%s» (%s)" % [tag, cur, hint2])
-	S.set_sys_kb(false)
 	_common(tag)
 
 
@@ -1397,26 +1410,78 @@ func _case_long_press_then_backspace() -> void:
 	)
 
 
+## 38. Быстрый ввод со своей клавиатуры: тапы и стереть по кадрам.
+## Серий IME (DEL + перепись региона) больше нет: каждый тап — буква
+## в игру напрямую. Держим инварианты честности на каждом шаге.
+func _case_ime_frames() -> void:
+	for seed0 in [987654321, 24681357, 13579246, 112233445]:
+		_ime_frames_run(seed0)
+
+
+func _ime_frames_run(seed_v: int) -> void:
+	var tag := "ime frames"
+	_advance_to(0.25)
+	var word := ["о", "б", "с", "т", "р", "а", "х", "й", "у", "м", "к", "н"]
+	for step in 140:
+		seed_v = (seed_v * 1103515245 + 12345) % 2147483648
+		match seed_v % 5:
+			0:
+				# Серия DEL, размазанная по кадрам.
+				for i in 1 + (seed_v % 3):
+					_back()
+					_tick(tag)
+			1:
+				# Буква приходит отдельным кадром (обычный набор).
+				_soft(word[seed_v % word.size()])
+				_tick(tag)
+			2:
+				# Стирание и буква разными кадрами (медленный ввод).
+				_back()
+				_tick(tag)
+				_soft(word[seed_v % word.size()])
+				_tick(tag)
+			3:
+				# Переписка слова: DEL'ы одним куском, потом слово.
+				for i in 2 + (seed_v % 3):
+					_back()
+				for i in 3 + (seed_v % 3):
+					_soft(word[seed_v % word.size()])
+					_tick(tag)
+			_:
+				# Дубль одной буквы (машинный).
+				var ch: String = word[seed_v % word.size()]
+				_soft(ch)
+				_soft(ch)
+				_tick(tag)
+		if _main.state != "playing":
+			_finish_level(tag)
+			_advance_to(0.2)
+		_common(tag)
+
+
 ## 18. Автопунктуация IME: точка с настоящим keycode, когда игра ждёт
 ## другое, молча пропускается — ребёнок её не нажимал.
 func _case_auto_punctuation() -> void:
+	# Знак не по месту считается обычной опечаткой: автопунктуации IME
+	# больше нет, молчаливый пропуск ушёл вместе с системной клавиатурой.
+	# А когда игра ждёт именно «.», она принимается без меток.
 	_fresh(1, 0)
-	# Автопунктуация приходит только от системной клавиатуры: со своей
-	# точку нажимает сам ребёнок, и она считается ошибкой по-честному.
-	S.set_sys_kb(true)
 	var tag := "auto punctuation"
-	var cur: String = _main._current()
-	if cur == "." or cur == ",":
-		return
 	var bad0: int = _main.typed_bad
-	var before := _ax()
-	_hard(".", KEY_PERIOD)
-	_tick(tag)
-	_common(tag)
-	_check(_main.typed_bad == bad0, "%s: the auto dot counted as a mistake" % tag)
-	_check(_main.errors.is_empty(), "%s: the auto dot left a mark" % tag)
-	_check(absf(_ax() - before) <= 0.001, "%s: the auto dot moved the hare" % tag)
-	S.set_sys_kb(false)
+	if _main._current() == ".":
+		_hard(".", KEY_PERIOD)
+		_tick(tag)
+		_check(_main.typed_bad == bad0, "%s: the wanted dot counted as a mistake" % tag)
+		_check(_main.errors.is_empty(), "%s: the wanted dot left a mark" % tag)
+	else:
+		_hard(".", KEY_PERIOD)
+		_tick(tag)
+		_check(
+			_main.typed_bad == bad0 + 1,
+			"%s: the wrong dot was not counted (%d → %d)" % [tag, bad0, _main.typed_bad]
+		)
+		_check(_main.errors.size() == 1, "%s: the wrong dot left no mark" % tag)
+		_common(tag)
 
 
 ## 19. Скачок времени (кадр завис на полсекунды): инварианты должны
@@ -1623,9 +1688,11 @@ func _case_enter_spam() -> void:
 	_check(not _main.menu_open, "%s: Enter spam opened the menu" % tag)
 
 
-## 25. Потолок стека отмен (UNDO_CAP): сто Backspace подряд не ломают
+## 25. Шторм Backspace: сто нажатий подряд ничего не ломают
 ## ни курсор, ни метки, ни счётчики.
 func _case_undo_cap() -> void:
+	# Шторм Backspace: сто нажатий подряд не ломают ни курсор, ни метки,
+	# ни счётчики. Стека снятий больше нет (ушёл вместе с IME).
 	_fresh(2, 1)
 	var tag := "undo cap"
 	_check(_advance_to(0.4), "%s: could not advance (coverage)" % tag)
@@ -1640,16 +1707,8 @@ func _case_undo_cap() -> void:
 		_common(tag)
 	_check(_main.typed_ok == ok0, "%s: the backspace storm moved typed_ok" % tag)
 	_check(_main.typed_bad == bad0, "%s: the backspace storm moved typed_bad" % tag)
-	_check(
-		_main._undo.size() <= _main.UNDO_CAP,
-		"%s: the undo stack grew past the cap (%d)" % [tag, _main._undo.size()]
-	)
 
 
-# --- общие хелперы ---------------------------------------------------
-
-## Набираем подсказанное до конца уровня. Уровень обязан быть проходим:
-## никакая связка опечаток и Backspace не имеет права его заблокировать.
 func _finish_level(tag: String) -> void:
 	var guard := 0
 	while _main.state == "playing" and guard < 4000:
@@ -1718,8 +1777,9 @@ func _process(_dt: float) -> bool:
 	_case_sym_layer_hint()
 	_case_fast_doubles()
 	_case_long_press_then_backspace()
+	_case_ime_frames()
 	_case_chaos(1500)
-	_cases = 35
+	_cases = 36
 	_check(_steps > 1200, "the test really played (coverage: %d steps)" % _steps)
 	for f in _failures:
 		print("COMBO_TEST: FAIL: ", f)

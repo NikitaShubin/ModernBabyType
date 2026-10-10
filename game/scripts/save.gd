@@ -24,7 +24,6 @@ const KEY_NIGHT := "night_mode"
 ## Системная клавиатура вместо своей (галочка в меню). По умолчанию —
 ## своя: системные IME коверкают ввод composing-перепиской. Кому нужна
 ## привычная — включает, борьба с автозаменой уже встроена (comp-буфер).
-const KEY_SYS_KB := "sys_kb"
 const NIGHT_AUTO := -1
 const NIGHT_DAY := 0
 const NIGHT_ON := 1
@@ -55,9 +54,9 @@ static func clean_name(raw: String) -> String:
 	return raw.strip_edges().left(MAX_NAME_LENGTH)
 
 
-## Сколько раз файл настроек реально читался с диска. Счётчик для теста
-## (см. profiles_test): горячие флаги обязаны браться из кэша, иначе игра
-## открывает и читает файл на КАЖДОМ кадре.
+## Сколько раз файл настроек реально читался с диска. Счётчик для теста:
+## профиль читается на старте уровня, а не на каждом кадре (проверяет
+## profiles_test — в игре не должно быть обращений к файлу в кадре).
 static var cfg_loads := 0
 
 
@@ -231,24 +230,10 @@ static func get_night_mode() -> int:
 	return clampi(int(cfg.get_value(SECTION_DISPLAY, KEY_NIGHT, NIGHT_AUTO)), NIGHT_AUTO, NIGHT_ON)
 
 
-## Системная клавиатура: горичий флаг, спрашивается на каждом кадре
-## (_kb_want → _sync_keyboard) и на каждом нажатии. Без кэша это файл на
-## диске на кадр: на телефоне — лишние обращения к накопителю каждый кадр.
-## Кэш сбрасывается записью (set_sys_kb) — правка видна сразу.
-static var _sys_kb := -1
-
-
-static func get_sys_kb() -> bool:
-	if _sys_kb < 0:
-		_sys_kb = 1 if bool(_cfg().get_value(SECTION_DISPLAY, KEY_SYS_KB, false)) else 0
-	return _sys_kb == 1
-
-
-static func set_sys_kb(on: bool) -> void:
-	var cfg := _cfg()
-	cfg.set_value(SECTION_DISPLAY, KEY_SYS_KB, on)
-	cfg.save(PATH)
-	_sys_kb = 1 if on else 0
+## Системной клавиатуры больше нет: игра и меню набирают текст только
+## своей экранной клавиатурой (Kbd). Флаг «sys_kb» в старых профилях
+## игнорируется, а из файла убирается при первой же записи профиля —
+## иначе он годами лежит мёртвым полем (решение 10.2026).
 
 
 static func set_night_mode(mode: int) -> void:
@@ -280,12 +265,20 @@ static func _now() -> int:
 
 ## Убрать профиль гостя из старых сборок: он был затычкой «один игрок без
 ## меню». Список профилей его не показывает, но файл пухнет и путает.
+## Заодно вычищаем мёртвый флаг системной клавиатуры: своего ввода он
+## больше не описывает (решение 10.2026), а в файлах лежит годами.
 static func drop_legacy_guest() -> void:
 	var cfg := _cfg()
+	var touched := false
 	if cfg.has_section_key(SECTION_PROFILES, "guest"):
 		cfg.erase_section_key(SECTION_PROFILES, "guest")
 		if get_last_user() == "guest":
 			cfg.set_value(SECTION_LAST, KEY_LAST_USER, GUEST)
+		touched = true
+	if cfg.has_section_key(SECTION_DISPLAY, "sys_kb"):
+		cfg.erase_section_key(SECTION_DISPLAY, "sys_kb")
+		touched = true
+	if touched:
 		cfg.save(PATH)
 
 

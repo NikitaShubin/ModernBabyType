@@ -186,7 +186,6 @@ func _child(key_gap: float, err_rate: float, back_rate: float, gap: float) -> bo
 	if _main.state == "won" or _main.state == "lost":
 		# Дальше — Enter, как в жизни.
 		_main._unhandled_key_input(_enter())
-		_main._comp_flush()
 		return true
 	gap -= DT
 	if gap > 0.0:

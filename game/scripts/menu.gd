@@ -41,16 +41,6 @@ var input_text := ""
 ## ещё нет — применять не к кому). При создании профиля переносится
 ## в него, затем сбрасывается.
 var input_all_keys := false
-## Composing-буфер IME для поля имени — тот же механизм, что в игре
-## (см. _comp_* в main.gd): клавиатура со словарём каждый тап стирает
-## и вводит заново всё слово. Строка линейная, поэтому вместо сетки —
-## просто снятый суффикс: при переписке возвращаем его и дописываем
-## только новый хвост. Разбор — во flush в _process, задержка ≤ кадр.
-var _cbuf_active := false
-var _cbuf_dels := 0
-var _cbuf_chars := ""
-var _cbuf_region := ""
-var _cbuf_cut := ""
 ## То же для строгой ё (колонка «Ё»): ждёт создания профиля.
 var input_yo_strict := true
 ## Самообновление с GitHub: только по кнопке (никакой фоновой магии).
@@ -94,7 +84,6 @@ var kb_lang := "ru"
 var kb_shift := false
 ## Высота системной клавиатуры (ставит игра своим замером, только при
 ## её галке). Своя высота считается отдельно (_own_h).
-var sys_kb_h := 0.0
 var _lp_act := ""
 var _lp_t0 := 0
 var kb_key_sb: StyleBoxFlat
@@ -108,27 +97,8 @@ var mono: Font
 var row_sb: StyleBoxFlat
 var row_idle_sb: StyleBoxFlat
 var box_sb: StyleBoxFlat
-## Своя клавиатура (модуль Kbd): клавиши прямо дают символы в поле ввода,
-## без IME — composing-переписям неоткуда взяться. Слой — флип.
-## Строка системной клавиатуры: бокс-галка + подпись. Тап — везде
-## по строке (зона 64px под палец).
-func _draw_syskb() -> void:
-	var r := _syskb_tap_rect()
-	draw_style_box(box_sb, Rect2(r.position.x, r.position.y, 32.0 * k, 32.0 * k))
-	if S.get_sys_kb():
-		var cx := r.position.x + 16.0 * k
-		var cy := r.position.y + 16.0 * k
-		draw_line(
-			Vector2(cx - 10.0 * k, cy + 2.0 * k), Vector2(cx, cy + 12.0 * k),
-			_ink(), 4.0 * k
-		)
-		draw_line(
-			Vector2(cx, cy + 12.0 * k), Vector2(cx + 16.0 * k, cy - 12.0 * k),
-			_ink(), 4.0 * k
-		)
-	_text("Системная клавиатура", Vector2(r.position.x + 44.0 * k, r.position.y + 30.0 * k), FONT_ROW, _ink())
-
-
+## Своя клавиатура (модуль Kbd): клавиши прямо дают символы в поле
+## ввода, без IME.
 func _draw_own_kb() -> void:
 	if not _own_shown():
 		return
@@ -265,9 +235,8 @@ func _fit_k(k0: float, kmin: float) -> float:
 ## Открыть меню поверх игры. Видимость и процесс — только здесь:
 ## скрытое меню глухо и слепо архитектурно (process выключен),
 ## а не только проверками visible.
-func open(resume: String, kb := 0.0) -> void:
+func open(resume: String) -> void:
 	resume_user = resume
-	sys_kb_h = kb
 	visible = true
 	process_mode = Node.PROCESS_MODE_INHERIT
 	_apply_night()
@@ -393,31 +362,13 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		get_tree().quit()
 		_eaten()
 		return
-	# ПОРЯДОК ВВОДА — тот же, что в игре: пока в буфере лежат софт-символы
-	# (Яндекс шлёт их с keycode KEY_UNKNOWN), следующий ввод ждёт очереди.
-	# Иначе пробел (у него настоящий keycode KEY_SPACE) применялся раньше
-	# буквы, нажатой за пару миллисекунд до него (живой лог 10.2026).
-	if _cbuf_active and _cbuf_chars != "":
-		if not (ke.keycode == KEY_UNKNOWN or ke.keycode == KEY_NONE):
-			_cbuf_flush()
+	# Стирание — одно простое: урезать имя на символ. Серий IME
+	# (DEL + перепись региона) больше нет: ввод — только своей
+	# клавиатурой (решение 10.2026).
 	if ke.keycode == KEY_BACKSPACE or ke.unicode == 8:
 		if not input_active:
 			return
-		if ke.keycode == KEY_UNKNOWN or ke.keycode == KEY_NONE:
-			# Софт-серия (DEL + перепись региона): режем сразу, символы
-			# копятся — разберём во flush в _process.
-			if not _cbuf_active:
-				_cbuf_active = true
-				_cbuf_dels = 0
-				_cbuf_chars = ""
-				_cbuf_cut = ""
-			_cbuf_dels += 1
-			var n := input_text.length()
-			if n > 0:
-				_cbuf_cut = input_text.substr(n - 1, 1) + _cbuf_cut
-				input_text = input_text.left(n - 1)
-		else:
-			input_text = input_text.left(maxi(0, input_text.length() - 1))
+		input_text = input_text.left(maxi(0, input_text.length() - 1))
 		queue_redraw()
 		_eaten()
 		return
@@ -433,55 +384,11 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	# их быть не должно, а имя всё равно обрежется по краям.
 	if ke.unicode < 32 or ch == " " or input_text.length() >= S.MAX_NAME_LENGTH:
 		return
-	if ke.keycode == KEY_UNKNOWN or ke.keycode == KEY_NONE:
-		# Софт-символ: копим до flush в _process (там же решится,
-		# переписка это или обычный ввод).
-		if not _cbuf_active:
-			_cbuf_active = true
-			_cbuf_dels = 0
-			_cbuf_chars = ""
-			_cbuf_cut = ""
-		_cbuf_chars += ch
-
-		_eaten()
-		return
 	input_text += ch
 
 	queue_redraw()
 	_eaten()
-
-
-## Разобрать накопленное софт-серии: переписка (префикс символов повторяет
-## прошлый регион) — вернуть срезанное, дописать только новый хвост.
-## Иначе дописать всё как есть. Вызывается из _process каждый кадр.
-func _cbuf_flush() -> void:
-	if not _cbuf_active:
-		return
-	_cbuf_active = false
-	var tail := _cbuf_chars
-	# Схлопывание — только для серий из 2+ символов: одиночка после ручного
-	# стирания — обычный ввод (иначе стёртое воскресало бы).
-	if (
-		_cbuf_dels > 0
-		and tail.length() >= 2
-		and tail.left(tail.length() - 1) == _cbuf_region.left(tail.length() - 1)
-	):
-		input_text += _cbuf_cut
-		tail = tail.right(1)
-
-	_cbuf_region = _cbuf_chars
-	_cbuf_dels = 0
-	_cbuf_chars = ""
-	_cbuf_cut = ""
-	for i in tail.length():
-		if input_text.length() >= S.MAX_NAME_LENGTH:
-			break
-		input_text += tail.substr(i, 1)
-	queue_redraw()
-
-
 func _process(_dt: float) -> void:
-	_cbuf_flush()
 	_poll_update()
 
 
@@ -587,8 +494,6 @@ func _input(event: InputEvent) -> void:
 	if _field_tap_rect().has_point(pos):
 		if not input_active:
 			_toggle_input()
-		if S.get_sys_kb():
-			_kb_show()
 		get_viewport().set_input_as_handled()
 		return
 	# Своя клавиатура: клавиши раньше остального (тап по клавише — ввод).
@@ -604,10 +509,6 @@ func _input(event: InputEvent) -> void:
 		return
 	if _night_tap_rect().has_point(pos):
 		_toggle_night()
-		get_viewport().set_input_as_handled()
-		return
-	if _syskb_tap_rect().has_point(pos):
-		_toggle_sys_kb()
 		get_viewport().set_input_as_handled()
 		return
 
@@ -628,12 +529,6 @@ func _nav(direction: int) -> void:
 		return
 	sel = (sel + direction + users.size()) % users.size()
 	queue_redraw()
-
-
-## Показать системную клавиатуру (только при её галке): тап по полю.
-func _kb_show() -> void:
-	if DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD):
-		DisplayServer.virtual_keyboard_show("")
 
 
 func _toggle_input() -> void:
@@ -820,12 +715,6 @@ func _on_upd_downloaded(path: String) -> void:
 
 ## Переключить клавиатуру: системная вместо своей (и назад).
 ## Своя высота пересчитается релэутом (клавиатура показалась/скрылась).
-func _toggle_sys_kb() -> void:
-	S.set_sys_kb(not S.get_sys_kb())
-	_relayout()
-	queue_redraw()
-
-
 func _toggle_all_keys() -> void:
 	if users.is_empty():
 		# Пустой список (первый запуск): переключаем флаг для вводимого
@@ -988,14 +877,12 @@ func _field_text() -> String:
 ## Центрирование — от эффективной высоты (минус клавиатура): иначе
 ## на телефоне с выездом клавиатуры блок остаётся под ней.
 func _menu_eff_h() -> float:
-	return Ui.eff_h(view_h, maxf(_own_h(), sys_kb_h))
+	return Ui.eff_h(view_h, _own_h())
 
 
 ## Своя клавиатура в меню: видна, когда вводится имя, на сенсорных
 ## устройствах. Высоту для раскладки считаем от неё же.
 func _own_shown() -> bool:
-	if S.get_sys_kb():
-		return false
 	if not visible:
 		return false
 	if not input_active:
@@ -1286,11 +1173,6 @@ func _guest_tap_rect() -> Rect2:
 
 ## Строка «Системная клавиатура» с галкой — под кнопками действий.
 ## Галка в сейве (устройство, как ночь): системная вместо своей.
-func _syskb_tap_rect() -> Rect2:
-	var y := _buttons_y() + _btn_h() + 44.0 * k
-	return Rect2(60.0 * k, y - 32.0 * k, maxf(view_w - 120.0 * k, 64.0), 64.0)
-
-
 func _night_tap_rect() -> Rect2:
 	var y := _buttons_y()
 	return Rect2(cx_of() - 288.0 * k + 524.0 * k, y, 52.0 * k, _btn_h())
@@ -1539,7 +1421,6 @@ func _draw() -> void:
 	_button(_play_tap_rect(), "Играть")
 	_button(_guest_tap_rect(), "Без профиля")
 	_draw_daynight(_night_tap_rect())
-	_draw_syskb()
 	_draw_own_kb()
 	# Пояснение галки по тапу на заголовок — строкой под кнопками.
 	# Модалка его перекрывает (рисуется позже поверх).
