@@ -1233,11 +1233,15 @@ func _case_rotate_with_marks() -> void:
 	_main._relayout()
 
 
-## 33. Символы, которых нет на буквенном слое (':', '-', ';', скобки):
-## подсказка обязана показать переход ?123, иначе набирать нечем. Тот же
-## принцип, что и с «ё»: игра просит то, что нельзя нажать.
-## Заодно проверяем, что и переход работает: жмём ?123 и сам символ.
+## 33. Символы, которых нет на буквенном слое (':', ';', скобки):
+## подсказка обязана учить шифту с верхней цифры (как на настоящей
+## клавиатуре), иначе набирать нечем. Тот же принцип, что и с «ё»:
+## игра просит то, что нельзя нажать.
 func _case_sym_layer_hint() -> void:
+	# Знаки препинания на настоящей клавиатуре — шифт с верхней цифры
+	# (Shift+6 даёт «:»), а не слой ?123: мы учим человека реальной
+	# клавиатуре (требование автора 10.2026). Подсказка и подсветка
+	# обязаны учить именно этому, а нажатие — давать знак.
 	_kbd_on()
 	var tag := "sym hint"
 	_fresh(6, 1)
@@ -1246,33 +1250,32 @@ func _case_sym_layer_hint() -> void:
 		_check(false, "%s: the test level lost its symbol" % tag)
 		return
 	var want: String = _main._current()
-	_check(
-		_main.kb_layer != "sym",
-		"%s: the level started on the symbol layer (coverage)" % tag
-	)
+	var digit: String = Kbd.digit_for(want)
+	_check(digit != "", "%s: «%s» has no Shift+digit way" % [tag, want])
+	if digit == "":
+		return
 	var hint: String = _main._hint_text()
-	_check(hint.contains("?123"), "%s: the hint does not show the layer switch (%s)" % [tag, hint])
-	_check(hint.contains(want), "%s: the hint does not name «%s» (%s)" % [tag, want, hint])
-	# Переход и ввод работают: ?123 → символ принимается без меток.
+	_check(hint.contains("Shift"), "%s: the hint does not teach Shift (%s)" % [tag, hint])
+	_check(hint.contains(digit), "%s: the hint does not name [%s] (%s)" % [tag, digit, hint])
+	# Ввод по подсказке: шифт, потом цифра — знак принимается без меток,
+	# а слой не переключается (он для этого не нужен).
 	var btns := _kbd_buttons()
-	if not btns.has("?123"):
-		_check(false, "%s: no ?123 key" % tag)
+	if not btns.has("⇧") or not btns.has(digit):
+		_check(false, "%s: no ⇧/%s keys" % [tag, digit])
 		return
 	var ok0: int = _main.typed_ok
-	_main._own_press(btns["?123"])
+	_main._own_press(btns["⇧"])
 	_tick(tag)
-	_check(_main.kb_layer == "sym", "%s: the layer did not switch (%s)" % [tag, _main.kb_layer])
-	var btns2 := _kbd_buttons()
-	if not btns2.has(want):
-		_check(false, "%s: the symbol layer has no key «%s»" % [tag, want])
-		return
-	_main._own_press(btns2[want])
+	_check(_main.kb_shift, "%s: shift did not arm" % tag)
+	btns = _kbd_buttons()
+	_main._own_press(btns[digit])
 	_tick(tag)
 	_check(
 		_main.typed_ok == ok0 + 1,
-		"%s: the symbol was not accepted (%d → %d)" % [tag, ok0, _main.typed_ok]
+		"%s: Shift+%s did not type «%s» (%d → %d)" % [tag, digit, want, ok0, _main.typed_ok]
 	)
 	_check(_main.errors.is_empty(), "%s: the symbol left a mark" % tag)
+	_check(not _main.kb_shift, "%s: shift stuck after the symbol" % tag)
 	_common(tag)
 
 
@@ -1504,7 +1507,7 @@ func _case_idle_hint() -> void:
 	_tick(tag)
 	_check(_main._hint_keys().is_empty(), "%s: a letter is highlighted over the marks" % tag)
 	_check(_main._hint_text().contains("Стереть"), "%s: the erase hint is gone" % tag)
-	# Символа нет на слое — подсвечивается клавиша слоя.
+	# Символа нет на слое — подсвечивается пара [Shift, цифра].
 	_main.errors.clear()
 	_main.cursor_line = 0
 	for p in String(_main.display_lines[0]).length():
@@ -1517,8 +1520,8 @@ func _case_idle_hint() -> void:
 		_main.idle_t = _main.HINT_IDLE + 0.5
 		_tick(tag)
 		_check(
-			_main._hint_keys() == ["?123"],
-			"%s: off-layer symbol highlights %s, expected the layer key"
+			_main._hint_keys() == ["⇧", "6"],
+			"%s: off-layer symbol highlights %s, expected shift plus the digit"
 				% [tag, str(_main._hint_keys())]
 		)
 	_common(tag)

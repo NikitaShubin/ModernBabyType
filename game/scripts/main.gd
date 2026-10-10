@@ -1742,10 +1742,18 @@ func _hint_parts() -> Array:
 				{"s": "→", "cap": false},
 				{"s": cur, "cap": true},
 			]
-		# Символа нет на этом слое (':' и '-' живут на знаках) — говорим,
-		# куда сначала нажать. Без подсказки букву нечем набрать. Обычные
-		# буквы проверять незачем: на буквенном слое они есть всегда.
+		# Символа нет на этом слое — учим настоящему вводу: знаки идут
+		# шифтом с верхней цифры (Shift+6 даёт «:»). Обычные буквы
+		# проверять незачем: на буквенном слое они есть всегда.
 		if not Kbd.is_plain_letter(cur) and not Kbd.has_key(kb_layer, kb_lang, kb_shift, cur):
+			var digit := Kbd.digit_for(cur)
+			if digit != "":
+				return [
+					{"s": "Жми:", "cap": false},
+					{"s": "Shift", "cap": true},
+					{"s": "+", "cap": false},
+					{"s": digit, "cap": true},
+				]
 			if Kbd.has_key("sym", kb_lang, kb_shift, cur):
 				return [
 					{"s": "Жми:", "cap": false},
@@ -2106,6 +2114,11 @@ func _hint_keys() -> Array:
 	if base != "":
 		return [base]
 	if not Kbd.is_plain_letter(cur) and not Kbd.has_key(kb_layer, kb_lang, kb_shift, cur):
+		# Знаки — шифтом с верхней цифры (настоящая клавиатура), а не
+		# слоем ?123: мы учим человека реальной клавиатуре.
+		var digit := Kbd.digit_for(cur)
+		if digit != "":
+			return ["⇧", digit]
 		if Kbd.has_key("sym", kb_lang, kb_shift, cur):
 			return ["?123"]
 	return [cur]
@@ -2193,8 +2206,11 @@ func _own_press(pos: Vector2) -> bool:
 		_lp_act = act
 		_lp_t0 = Time.get_ticks_msec()
 	else:
+		# Шифт + цифра даёт знак (как на настоящей клавиатуре), шифт
+		# при этом гаснет — как после заглавной буквы.
+		var out := Kbd.shift_digit(act) if kb_shift else ""
 		kb_shift = false
-		_type_char(act)
+		_type_char(out if out != "" else act)
 	queue_redraw()
 	get_viewport().set_input_as_handled()
 	return true

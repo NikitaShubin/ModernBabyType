@@ -137,9 +137,11 @@ func _own_press(pos: Vector2) -> bool:
 		_lp_act = act
 		_lp_t0 = Time.get_ticks_msec()
 	else:
+		# Шифт + цифра даёт знак (как на настоящей клавиатуре).
+		var out := Kbd.shift_digit(act) if kb_shift else ""
 		kb_shift = false
 		if input_text.length() < S.MAX_NAME_LENGTH:
-			input_text += act
+			input_text += out if out != "" else act
 	queue_redraw()
 	get_viewport().set_input_as_handled()
 	return true
