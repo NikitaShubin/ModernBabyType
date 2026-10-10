@@ -67,6 +67,9 @@ func _process(_dt: float) -> bool:
 	_part22_compose_name()
 	_part23_portrait_dense()
 	_part24_rounded_corners()
+	_part25_corrupt_file()
+	_part26_update_modal_keys()
+	_part27_menu_chaos()
 	_report()
 	return true
 
@@ -1015,6 +1018,20 @@ func _part17_sys_keyboard() -> void:
 	_check(not _menu.call("_own_shown"), "system keyboard hides the own one")
 	_menu.call("_input", _tap(Rect2(_menu.call("_syskb_tap_rect")).get_center()))
 	_check(not S.get_sys_kb(), "tap disables it back")
+	# Галку спрашивают на КАЖДОМ кадре (_kb_want) и на каждом нажатии.
+	# Файл настроек при этом читаться не должен: на телефоне это чтение
+	# с накопителя 60 раз в секунду (жалоба на плавность и батарею).
+	var loads0: int = S.cfg_loads
+	for i in 200:
+		S.get_sys_kb()
+	_check(
+		S.cfg_loads == loads0,
+		"the system-keyboard flag re-reads the settings file (%d loads for 200 queries)"
+			% (S.cfg_loads - loads0)
+	)
+	# И правка видна сразу, без перезапуска.
+	S.set_sys_kb(true)
+	_check(S.get_sys_kb(), "the cached flag follows the write")
 	S.set_sys_kb(false)
 
 
@@ -1271,3 +1288,161 @@ func _report() -> void:
 		printerr("FAIL: ", f)
 	printerr("PROFILES_TEST: FAIL (%d)" % _failures.size())
 	quit(1)
+
+
+## 25. Битый файл профилей. На телефоне такое бывает после падения
+## посреди записи, а файл ещё и правят руками. Игра обязана подняться:
+## гостем, с пустым меню, дефолтными числами — но НЕ упасть.
+func _part25_corrupt_file() -> void:
+	# (а) Мусор вместо файла целиком.
+	var fa := FileAccess.open(TEST_PATH, FileAccess.WRITE)
+	fa.store_string("не конфиг " + String.chr(0) + String.chr(1) + " <<<>>> {{")
+	fa.close()
+	S.PATH = TEST_PATH
+	_check(S.user_list().is_empty(), "a garbage file yields an empty user list")
+	var prof: Dictionary = S.load_profile("кого-то")
+	_check(
+		int(prof.get("difficulty", 0)) == 0 and float(prof.get("enemy_cps", 1.0)) > 0.0,
+		"a garbage file yields the default profile"
+	)
+	# (б) Профиль есть, но значение не словарь (правка руками).
+	var cfg := ConfigFile.new()
+	cfg.load(TEST_PATH)
+	cfg.set_value(S.SECTION_PROFILES, "число", 5)
+	cfg.save(TEST_PATH)
+	# Такой профиль в списке остаться может (имя в разделе есть), но
+	# читаться обязан без падения — иначе меню не открывается вовсе.
+	var every_loads := true
+	for n in S.user_list():
+		if S.load_profile(n).is_empty():
+			every_loads = false
+	_check(every_loads, "every profile in the list loads, even a broken one")
+	var prof2: Dictionary = S.load_profile("число")
+	_check(
+		int(prof2.get("difficulty", 0)) == 0,
+		"a non-dict profile yields the default numbers"
+	)
+	# (в) Игра с таким профилем поднимается и даёт уровень. Сцену берём
+	# свою: предыдущая часть её освободила (дальше тесты только меню).
+	var scene: PackedScene = load("res://scenes/main.tscn")
+	var game: Node = scene.instantiate()
+	game.skip_menu = true
+	game.all_keys_override = 1
+	root.add_child(game)
+	game.profile_name = "число"
+	game._start_game()
+	_check(game.state == "playing", "the game starts on a non-dict profile (%s)" % game.state)
+	_check(not game.display_lines.is_empty(), "the level is not empty on a non-dict profile")
+	# (г) Словарь есть, но поля чужих типов: всё равно не падаем.
+	var cfg2 := ConfigFile.new()
+	cfg2.load(TEST_PATH)
+	cfg2.set_value(S.SECTION_PROFILES, "словарь", {"difficulty": "не число", "ema_acc": "и не доля"})
+	cfg2.save(TEST_PATH)
+	game.profile_name = "словарь"
+	game._start_game()
+	_check(game.state == "playing", "the game starts on a wrongly typed profile (%s)" % game.state)
+	_check(
+		game.ema_acc >= 0.0 and game.ema_acc <= 1.0,
+		"a wrongly typed accuracy is clamped (%.2f)" % game.ema_acc
+	)
+	game.queue_free()
+
+
+## 26. Модалка обновления с клавиатуры: «Не сейчас» должна быть
+## достижима. Кнопка на экране есть, но с клавиш до неё не дойти —
+## Enter качает, всё остальное съедается, а Esc в этой модалке уходит
+## из ИГРЫ. На десктопе и на эмуляторе с внешней клавиатурой это тупик:
+## либо качать, либо закрыть игру (проба 10.2026).
+func _part26_update_modal_keys() -> void:
+	_menu._upd_open = true
+	_menu._upd_tag = "v0.0.10"
+	_menu._upd_notes = ["a", "b"] as Array[String]
+	var esc := InputEventKey.new()
+	esc.keycode = KEY_ESCAPE
+	esc.pressed = true
+	_menu.call("_unhandled_key_input", esc)
+	_check(
+		not bool(_menu._upd_open),
+		"Esc declines the update modal instead of reaching the player list"
+	)
+	# N — тот же отказ (как в модалке удаления профиля).
+	_menu._upd_open = true
+	var n := InputEventKey.new()
+	n.keycode = KEY_N
+	n.pressed = true
+	_menu.call("_unhandled_key_input", n)
+	_check(not bool(_menu._upd_open), "N declines the update modal")
+	# Enter по-прежнему согласие, и Esc в обычном меню доску не трогает.
+	_menu._upd_open = false
+	_menu.call("_unhandled_key_input", esc)
+	_check(bool(_menu.visible), "Esc outside the modal does not close the menu")
+	# Отказ во время закачки гасит закачку: иначе файл докачается и
+	# установщик вылезет поверх игры, хотя от обновления отказались.
+	_menu._upd._pending_url = "http://x/apk"
+	_menu._upd._pending_tag = "v0.0.10"
+	_menu._upd_open = true
+	_menu.call("_unhandled_key_input", esc)
+	_check(
+		String(_menu._upd._pending_url) == "" and String(_menu._upd._pending_tag) == "",
+		"declining during the download forgets the pending file"
+	)
+	_check(String(_menu._upd_state) == "", "declining during the download resets the state")
+
+
+## 27. Хаос по меню: сотни случайных тапов и клавиш по живой доске с
+## профилями, модалкой удаления и модалкой обновления. Инварианты после
+## каждого события: меню живо, поле ввода и флаги не рассыпались, а
+## выход (F2) работает ВСЕГДА — ребёнок не должен остаться в меню
+## без возможности вернуться в игру.
+func _part27_menu_chaos() -> void:
+	for u in ["хаос-а", "хаос-б"]:
+		S.create_user(u)
+	_menu.open(S.GUEST)
+	var stuck := 0
+	var broken := 0
+	var seed_v := 12345
+	for i in 600:
+		seed_v = (seed_v * 1103515245 + 12345) % 2147483648
+		var r := float(seed_v % 10000) / 10000.0
+		if r < 0.5:
+			# Случайный тап по меню (включая мимо кнопок).
+			var w: float = 1280.0
+			var h: float = 900.0
+			var pos := Vector2(r * w, float(seed_v % 900) / 1000.0 * h)
+			_menu.call("_input", _tap(pos))
+		else:
+			var k := String.chr(32 + (seed_v % 90))
+			_menu.call("_unhandled_key_input", _key_event(k))
+		# Инварианты после события.
+		if not bool(_menu.visible):
+			broken += 1
+			break
+		var txt: String = String(_menu.input_text)
+		if txt.find("\n") >= 0 or txt.length() > 40:
+			broken += 1
+			break
+		# Выход должен быть на месте: F2 возвращает в игру. Меню само
+		# не закрывается — его закрывает игра по сигналу chosen, так что
+		# проверяем именно сигнал.
+		if i % 50 == 49:
+			_menu._upd_open = false
+			_menu.confirm_name = ""
+			# Метка: пустая строка — это гость, а «сигнала не было»
+			# — это вовсе другая пустая строка, поэтому метим событие.
+			_picked = "НЕ-ОТПРАВЛЕНО"
+			var esc := InputEventKey.new()
+			esc.keycode = KEY_F2
+			esc.pressed = true
+			_menu.call("_unhandled_key_input", esc)
+			if _picked == "НЕ-ОТПРАВЛЕНО":
+				stuck += 1
+			_menu.open(S.GUEST)
+	_check(broken == 0, "the menu stayed sane under 600 random events (%d)" % broken)
+	_check(stuck == 0, "F2 always returns to the game (%d times it did not)" % stuck)
+	# Профили на месте: хаос не унёс никого.
+	_check(
+		S.user_exists("хаос-а") and S.user_exists("хаос-б"),
+		"chaos did not delete the profiles"
+	)
+	for u in ["хаос-а", "хаос-б"]:
+		S.delete_user(u)

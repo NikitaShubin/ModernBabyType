@@ -80,6 +80,15 @@ func _D() -> float:
 
 
 func _start_episode() -> void:
+	# Каждый третий эпизод — в обычном режиме (буквы серые, игра проходит
+	# их сама). Там шаг назад за ошибку идёт по СВОИМ клеткам, то есть
+	# через серые символы, и откаты сильнее: именно такие откаты перебрасывали
+	# зайца через угол строк (жалоба автора). На «все клавиши» откат был бы
+	# ровно на клетку, и этот случай проверял бы только тривиальный путь.
+	if _episodes % 3 == 0:
+		_main.all_keys_override = 0
+	else:
+		_main.all_keys_override = 1
 	_main._new_level()
 	_main.grace_t = 0.0
 	_main.hedge_active = true
@@ -145,11 +154,17 @@ func _backspace_turn() -> void:
 	var before: float = _main._lin(_main.cursor_line, float(_main.cursor_pos))
 	var ok0: int = _main.typed_ok
 	var bad0: int = _main.typed_bad
+	var marks0: int = _main.errors.size()
 	_main._backspace()
 	var after: float = _main._lin(_main.cursor_line, float(_main.cursor_pos))
 	if after < before:
 		_retreats += 1
-		if absf(after - (before - 1.0)) > 0.001:
+		# Откат Backspace отменяет последнюю НАБРАННУЮ букву и перепрыгивает
+		# серые символы (на «все клавиши» шаг равен ровно клетке — там это
+		# и проверяем: шаг назад у опечатки тоже ровно символ, см.
+		# marks_test). Откат всегда НАЗАД, форсеред разрешён только
+		# «починить метку впереди» — он ниже, отдельной веткой.
+		if _main.all_keys_override == 1 and absf(after - (before - 1.0)) > 0.001:
 			_failures.append("frame %d: retreat moved %.2f chars, expected exactly 1 back"
 				% [_frame, before - after])
 		if _main.passed.has(_main._key(_main.cursor_line, _main.cursor_pos)):
@@ -158,11 +173,18 @@ func _backspace_turn() -> void:
 		if _main.typed_ok != ok0 or _main.typed_bad != bad0:
 			_failures.append("frame %d: retreat changed the typing counters" % _frame)
 	elif after > before + 0.001:
-		# Вперёд — это «починить метку впереди»: ровно на клетку вперёд,
-		# на ту самую клетку, где была метка.
-		if absf(after - (before + 1.0)) > 0.001:
-			_failures.append("frame %d: typo fix moved the cursor %.2f chars forward, expected 1"
+		# Вперёд — это «починить метку впереди»: заяц встаёт на клетку с
+		# меткой, а та сразу проходит серые символы после неё, поэтому
+		# расстояние тут не фиксировано. Проверяем суть: снята ровно одна
+		# метка, и заяц стоит там, где игра ждёт нажатия (активная буква
+		# или клетка с меткой).
+		if marks0 - _main.errors.size() != 1:
+			_failures.append("frame %d: typo fix forward by %.2f chars did not clear exactly one mark"
 				% [_frame, after - before])
+		var cur: String = _main._current()
+		if cur != "" and not _main._is_active(cur) and not _main.errors.has(_main._key(_main.cursor_line, _main.cursor_pos)):
+			_failures.append("frame %d: typo fix left the hare on an auto-passed cell «%s»"
+				% [_frame, cur])
 
 
 func _process(_dt: float) -> bool:

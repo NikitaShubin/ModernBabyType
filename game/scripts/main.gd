@@ -506,11 +506,19 @@ func _start_game() -> void:
 	var prof: Dictionary = S.load_profile(profile_name)
 	profile_all_keys = bool(prof.get("all_keys", false))
 	profile_yo = bool(prof.get("yo_strict", true))
-	difficulty = int(prof.get("difficulty", 0))
-	wins_in_row = int(prof.get("wins_in_row", 0))
-	ema_cpm = float(prof.get("ema_cpm", 0.0))
-	ema_acc = float(prof.get("ema_acc", 1.0))
-	enemy_cps = float(prof.get("enemy_cps", B.BASE_CPS))
+	# Профиль — файл на диске: его правят руками, он может побиться или
+	# достаться от другой версии. Значения приводим к допустимым сами —
+	# иначе один плохой байт делает игру неиграбельной НАВСЕГДА: ёж при
+	# enemy_cps = 1000000 убивает на первом кадре, а значение пишется
+	# обратно при каждом конце уровня, и ни одна победа его не починит
+	# (проба 10.2026, сценарий «битый профиль»).
+	difficulty = clampi(
+		int(prof.get("difficulty", 0)), 0, B.KEY_PROGRESSION.length()
+	)
+	wins_in_row = clampi(int(prof.get("wins_in_row", 0)), 0, B.WINS_TO_LEVEL_UP - 1)
+	ema_cpm = clampf(float(prof.get("ema_cpm", 0.0)), 0.0, 10000.0)
+	ema_acc = clampf(float(prof.get("ema_acc", 1.0)), 0.0, 1.0)
+	enemy_cps = clampf(float(prof.get("enemy_cps", B.BASE_CPS)), B.MIN_CPS, B.MAX_CPS)
 	_relayout()
 	_new_level()
 
@@ -614,8 +622,17 @@ func _relayout() -> void:
 		margin = view_w * 0.08
 	text_y = 80.0 * k + top_safe
 	char_w = mono.get_string_size("н", HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size).x
-	if old_cw > 0.0 and char_w > 0.0 and hedge_active:
-		enemy_x = margin + (enemy_x - old_margin) / old_cw * char_w
+	if old_cw > 0.0 and char_w > 0.0:
+		# Метрики букв поменялись (поворот, системная клавиатура выехала
+		# или спряталась, узкое окно) — пересчитываем ОБОИХ героев в тех
+		# же символах оси, что и текст. Раньше ёж пересчитывался, а заяц
+		# нет: он телепортировался относительно букв, а ёж уезжал один
+		# (и на экране проигрыша табло укола разъезжалось — визуальный
+		# прогон 10.2026, сценарий «скачок времени»).
+		var sx := char_w / old_cw
+		if hedge_active:
+			enemy_x = margin + (enemy_x - old_margin) * sx
+		hero_r.x = margin + (hero_r.x - old_margin) * sx
 	# Зазор высотой в строку текста: пустая полоса для качения ежа.
 	# Текст при этом никогда не сдвигается.
 	sep_h = mono.get_height(font_size)
@@ -1333,17 +1350,19 @@ func _type_char(ch: String) -> void:
 		_skip_inactive()
 
 	else:
-		# Опечатка: красная метка на месте курсора и шаг назад —
-		# механика 0.0.10. Каждая следующая неверная клавиша отбрасывает
-		# ещё дальше: неверные копятся назад, Backspace снимает их по
-		# одной. Заглушка diag21 («в пачке без отката») ломала это на
-		# всём телефонном вводе: метки затирали друг друга на месте,
-		# курсор стоял, снимать было нечего.
+		# Опечатка: красная метка на месте курсора и шаг назад ровно на
+		# ОДИН символ — моноширинная сетка, шаг должен быть точным
+		# (автор 10.2026: «вроде у нас моноширинный текст и можно всегда
+		# отступать на 1 символ ровно»). Каждая следующая неверная
+		# клавиша отбрасывает ещё на символ: метки копятся назад
+		# сплошной стопкой, Backspace снимает их по одной. Заглушка
+		# diag21 («в пачке без отката») ломала это на всём телефонном
+		# вводе: метки затирали друг друга на месте, курсор стоял,
+		# снимать было нечего.
 		errors[_key(cursor_line, cursor_pos)] = ch
 		typed_cells[_key(cursor_line, cursor_pos)] = true
 		typed_bad += 1
 		shake_t = SHAKE_T
-		var kb_before := Vector2i(cursor_line, cursor_pos)
 		_knockback()
 
 	_refresh()
@@ -1361,8 +1380,9 @@ func _behind() -> Vector2i:
 	return Vector2i(-1, -1)
 
 
-## Шаг назад: cumulative — каждая опечатка отбрасывает ещё на шаг,
-## через пройденные буквы и через переносы строк (упор в начало текста).
+## Шаг назад: cumulative — каждая опечатка отбрасывает ещё на ОДИН
+## символ, через переносы строк (упор в начало текста). Единица шага —
+## глиф: текст моноширинный, и «назад на символ» видно точно.
 func _knockback() -> void:
 	var b := _behind()
 	if b.x >= 0:
@@ -1550,7 +1570,17 @@ func _finish(won: bool, reason := "") -> void:
 	_refresh()
 
 
+## Потолок кадра для геймплея. Телефон умеет подвисать: уход в фон,
+## звонок, тяжёлый кадр — после такого движок отдаёт дельту в секунды, и
+## за ОДИН кадр ёж проезжает десятки символов. Ребёнок возвращается к
+## «Ёж догнал!», хотя не нажимал ничего (проба 10.2026: dt=0.5, 2 и 8
+## секунд — мгновенный проигрыш). Поэтому игровое время живёт по
+## ограниченной дельте: худший случай — обычный медленный кадр в 10 fps.
+const MAX_FRAME_DT := 0.1
+
+
 func _process(dt: float) -> void:
+	dt = minf(dt, MAX_FRAME_DT)
 	time += dt
 	# Composing-буфер IME (софт-клавиатура) разбираем первым: ввод
 	# применяется до движения ежа и таймеров того же кадра.
@@ -1754,12 +1784,27 @@ func _own_shown() -> bool:
 ## Область своей клавиатуры: низ экрана, высота от ширины (кнопки —
 ## почти квадраты, см. height_for). От view_h не зависит: разрываем цикл
 ## с раскладкой (высота входит в eff_h).
+##
+## НО высоты экрана не хватает: в альбомной ориентации клавиши по ширине
+## выходят ВЫШЕ экрана (2340x1080 → 1128 px клавиатуры при 1080 высоты),
+## раскладка схлопывалась в полоску у верхнего края, текст оставался
+## огрызком, а нижние клавиши уезжали за экран (визуальный прогон
+## 10.2026, кадры «landscape»). Поэтому клавиатура ограничена долей
+## экрана, а лишнее убирается ШИРИНОЙ: клавиши остаются квадратными и
+## полоса встаёт по центру, а не прилипает к краю.
 func _own_rect() -> Rect2:
-	var h := Kbd.height_for(view_w)
 	# Низ экрана со скруглениями и жестом: клавиатуру поднимаем на
 	# безопасный отступ, иначе угловые клавиши обрезаны (жалоба 10.2026).
 	var m := 16.0 + Ui.bottom_inset(view_h)
-	return Rect2(16.0, view_h - h - m, view_w - 32.0, h)
+	var max_h: float = maxf(160.0, (view_h - m) * 0.46)
+	var w := view_w - 32.0
+	var h := Kbd.height_for(w)
+	if h > max_h:
+		# Обратная задача height_for: ширина, дающая ровно max_h.
+		var kw: float = (max_h - 64.0) / (5.0 * Kbd.ROW_TALL)
+		w = clampf(kw * 12.0 + 32.0 + 88.0, 240.0, view_w - 32.0)
+		h = minf(Kbd.height_for(w), max_h)
+	return Rect2((view_w - w) * 0.5, view_h - h - m, w, h)
 
 
 ## Высота своей клавиатуры в пикселях канваса (0 — скрыта). Ставится
@@ -1906,16 +1951,7 @@ func _refresh() -> void:
 				out += "[color=" + ecol + "]" + shown + "[/color]"
 				continue
 			# Пройденное (съеденное или пропущенное) — серым.
-			var col := "#6f6a5e" if not night else "#7a86a0"
-			if passed.has(kk):
-				# Съеденное серым, но ночное #4a5468 давало 1.9:1 к
-				# карточке — буквы пропадали, строка шла дырами.
-				col = "#b3a996" if not night else "#6f7b99"
-			elif _is_active(ch):
-				col = "#1c1a16" if not night else "#f2ede0"
-			if hints.has(kk):
-				# Вспышка: видно, что нажатие принято (буква не изменилась).
-				col = Ui.HINT_DAY_HEX if not night else Ui.HINT_NIGHT_HEX
+			var col := _cell_color(l, p, ch, kk)
 			out += "[color=" + col + "]" + esc + "[/color]"
 		text_labels[l].text = out
 		text_labels[l].visible = true
@@ -1925,6 +1961,34 @@ func _refresh() -> void:
 	_layout_text_lines()
 	for i in range(display_lines.size(), text_labels.size()):
 		text_labels[i].visible = false
+
+
+## Цвет буквы в клетке. Отдельной функцией, а не инлайном: на этом цвете
+## держится всё, что ребёнок видит про свои клетки, и он проверяется
+## тестом (см. marks_test).
+##
+## Клетка, в которой стоит заяц, рисуется как буква, которую игра ЖДЁТ —
+## и когда она серая. Рамка под текущей клеткой (_draw_cursor_marker) была
+## всегда, но сама буква рисовалась тем же тусклым цветом, что и
+## автопропущенная. Заяц после отката за ошибку встаёт на символ назад по
+## сквозной оси, в том числе на серый символ, и игра там ждёт нажатия:
+## без разницы в цвете ребёнок читал это как «эта буква не считается», а
+## по факту игра требовала именно её (жалоба автора 10.2026: снимать
+## метки приходилось, напечатав серые «л» и «е», которых он не нажимал).
+func _cell_color(l: int, p: int, ch: String, kk: String) -> String:
+	if hints.has(kk):
+		# Вспышка: видно, что нажатие принято (буква не изменилась).
+		return Ui.HINT_DAY_HEX if not night else Ui.HINT_NIGHT_HEX
+	if l == cursor_line and p == cursor_pos:
+		return "#1c1a16" if not night else "#f2ede0"
+	var col := "#6f6a5e" if not night else "#7a86a0"
+	if passed.has(kk):
+		# Съеденное серым, но ночное #4a5468 давало 1.9:1 к карточке —
+		# буквы пропадали, строка шла дырами.
+		col = "#b3a996" if not night else "#6f7b99"
+	elif _is_active(ch):
+		col = "#1c1a16" if not night else "#f2ede0"
+	return col
 
 
 ## Подсказка следующей клавиши частями: обычный текст (cap=false)
@@ -1985,6 +2049,31 @@ func _hint_parts() -> Array:
 			{"s": "+", "cap": false},
 			{"s": cur, "cap": true},
 		]
+	# Буквы без отдельной клавиши на своей клавиатуре (ё, ъ — раскладка
+	# Яндекса, там это долгое нажатие). Молчаливая подсказка «Жми: ё» —
+	# ловушка: ребёнок жмёт «е» и получает метки одну за другой. С
+	# СИСТЕМНОЙ клавиатурой всё наоборот: там «ё» обычная клавиша, и
+	# лишняя подсказка только сбивает.
+	if _own_shown():
+		var base := Kbd.long_base(cur)
+		if base != "":
+			return [
+				{"s": "Долго жми", "cap": false},
+				{"s": base, "cap": true},
+				{"s": "→", "cap": false},
+				{"s": cur, "cap": true},
+			]
+		# Символа нет на этом слое (':' и '-' живут на знаках) — говорим,
+		# куда сначала нажать. Без подсказки букву нечем набрать. Обычные
+		# буквы проверять незачем: на буквенном слое они есть всегда.
+		if not Kbd.is_plain_letter(cur) and not Kbd.has_key(kb_layer, kb_lang, kb_shift, cur):
+			if Kbd.has_key("sym", kb_lang, kb_shift, cur):
+				return [
+					{"s": "Жми:", "cap": false},
+					{"s": "?123", "cap": true},
+					{"s": "→", "cap": false},
+					{"s": cur, "cap": true},
+				]
 	return [
 		{"s": "Жми:", "cap": false},
 		{"s": cur if _exact() else cur.to_upper(), "cap": true},
@@ -2270,7 +2359,20 @@ func _hero_pos() -> Vector2:
 	# Заяц стоит ПЕРЕД буквой, спрайт центрируется на левом краю её
 	# клетки: буква остаётся читаемой, заяц заходит на пол-шара в клетку.
 	var half := HERO_TEX.get_width() * 0.5 * _spr_scale(HERO_TEX, _unit_h()).x
-	return Vector2(_cursor_cx() - char_w * 0.5 - half, _track_cy(cursor_line) + bounce)
+	# Курсор после победы уходит за конец текста (cursor_line == размеру
+	# строк). Тогда _cursor_cx() отдаёт margin, и заяц уезжал влево от
+	# строки и на пол-экрана вниз — прямо на полосу прогресса
+	# (визуальный прогон 10.2026, кадр «11-win»). На экране победы он
+	# стоит там, где закончил: последняя строка, сразу за её концом.
+	var rows: int = display_lines.size()
+	if cursor_line >= rows and rows > 0:
+		var last: String = display_lines[rows - 1]
+		var end_x: float = margin + mono.get_string_size(
+			last, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size
+		).x
+		return Vector2(end_x + half, _track_cy(rows - 1) + bounce)
+	var row: int = clampi(cursor_line, 0, maxi(0, rows - 1))
+	return Vector2(_cursor_cx() - char_w * 0.5 - half, _track_cy(row) + bounce)
 
 
 func _draw() -> void:
@@ -2322,6 +2424,28 @@ func _draw_own_kb() -> void:
 const LONG_PRESS_MS := 500
 var _lp_act := ""
 var _lp_t0 := 0
+var _lp_line := 0
+var _lp_pos := 0
+
+
+## Откат долгого нажатия: палец уже ввёл «е» (а игра ждала «ё»), буква
+## засчитана, метка поставлена, заяц откатился и ушёл через серые
+## клетки. Откатывать «на одну клетку» (_backspace) тут нельзя: он
+## приземляется не туда, и «ё» вводится в ЧУЖУЮ клетку — красная метка
+## и откат назад, хотя ребёнок сделал ровно то, что нужно (проба
+## 10.2026, сценарий «долгое нажатие рядом с серыми»).
+##
+## Возвращаем палец на его клетку и снимаем всё, что навесило нажатие:
+## метку и «пройдено». Счётчики НЕ трогаем — как и в _backspace: игра
+## считает НАЖАТИЯ, а не буквы на экране (правило закреплено
+## logic_test: «erase is free, type counts»). Один жест — два события
+## (нажатие и отпускание), и оба считаются.
+func _long_swap() -> void:
+	var k := _key(_lp_line, _lp_pos)
+	errors.erase(k)
+	passed.erase(k)
+	cursor_line = _lp_line
+	cursor_pos = _lp_pos
 
 
 ## Нажатие на свою клавишу: символ — в _type_char, стереть — в _backspace,
@@ -2349,6 +2473,10 @@ func _own_press(pos: Vector2) -> bool:
 		_type_char(" ")
 	elif Kbd.long_alt(act) != "":
 		kb_shift = false
+		# Клетку запоминаем ДО ввода: долгое нажатие возвращает палец
+		# именно сюда (см. _long_swap), а не «на одну назад».
+		_lp_line = cursor_line
+		_lp_pos = cursor_pos
 		_type_char(act)
 		_lp_act = act
 		_lp_t0 = Time.get_ticks_msec()
@@ -2369,7 +2497,7 @@ func _own_release(pos: Vector2) -> bool:
 	if Time.get_ticks_msec() - _lp_t0 >= LONG_PRESS_MS:
 		var act := Kbd.hit(_own_rect(), kb_layer, kb_lang, false, false, pos)
 		if act == _lp_act:
-			_backspace()
+			_long_swap()
 			_type_char(Kbd.long_alt(_lp_act))
 			done = true
 	_lp_act = ""

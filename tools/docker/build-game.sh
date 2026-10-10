@@ -148,21 +148,6 @@ ensure_android_build() {
 	'
 }
 
-# Все пять тестов обязательны: логика ввода, обновление, проходимость
-# уровня, профили игроков, инвариант погони. Тест, который ни разу не
-# падает на сломанном коде, бесполезен: правя геометрию погони,
-# сначала ломаем правило руками, убеждаемся, что CHASE_TEST это ловит,
-# и только потом ставим исправленное.
-run_tests() {
-	run_godot --headless --path game --import
-	run_test logic_test.gd
-	run_test update_test.gd
-	run_test end_test.gd
-	run_test profiles_test.gd
-	# Погоня гоняет живой цикл кадр за кадром — самый долгий тест.
-	run_test chase_test.gd 1800
-}
-
 # Один тест под предохранителями.
 #
 # Сырой запуск движка опасен: тест, у которого на каждый кадр летит
@@ -213,12 +198,19 @@ run_test() {
 	fi
 }
 
+# Все шесть тестов обязательны: логика ввода, обновление, проходимость
+# уровня, профили игроков, метки и координаты героев, инвариант погони.
+# Тест, который ни разу не падает на сломанном коде, бесполезен: правя
+# геометрию погони, сначала ломаем правило руками, убеждаемся, что
+# CHASE_TEST это ловит, и только потом ставим исправленное.
 run_tests() {
 	run_godot --headless --path game --import
 	run_test logic_test.gd
 	run_test update_test.gd
 	run_test end_test.gd
 	run_test profiles_test.gd
+	run_test marks_test.gd
+	run_test combo_test.gd
 	# Погоня гоняет живой цикл кадр за кадром — самый долгий тест.
 	run_test chase_test.gd 1800
 }
@@ -269,6 +261,12 @@ case "$MODE" in
 	# рендерер отдаёт null вместо картинки.
 	run_godot --path game --script res://tests/shot_driver.gd
 	ls -la /tmp/opencode/*.png
+	;;
+--visual)
+	# Тот же живой рендер, но драйвер ИГРАЕТ партию и снимает экран в
+	# ключевые события, печатая рядом состояние модели.
+	run_godot --path game --script res://tests/visual_driver.gd
+	ls -la /tmp/opencode/vis-*.png
 	;;
 --preset)
 	shift

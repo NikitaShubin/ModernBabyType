@@ -81,6 +81,55 @@ static func long_alt(s: String) -> String:
 	return ""
 
 
+## Обратная к long_alt: какую клавишу надо ДЕРЖАТЬ, чтобы получить эту
+## букву. Игра ждёт «ё» или «ъ», а отдельной клавиши на клавиатуре нет —
+## без этой подсказки ребёнок жмёт «е» и собирает красные метки
+## (визуальный прогон 10.2026: подсказка молчала «Жми: ё»).
+static func long_base(s: String) -> String:
+	match s:
+		"ё":
+			return "е"
+		"ъ":
+			return "ь"
+		"Ё":
+			return "Е"
+		"Ъ":
+			return "Ь"
+	return ""
+
+
+## Есть ли такая клавиша на этом слое? Игра так учит ребёнка, если
+## символа на текущем слое нет: «:» и «-» живут только на знаках, а
+## подсказка молчала «Жми: :» — набирать было нечем (визуальный прогон
+## 10.2026).
+##
+## Смотрим ТОЛЬКО подписи рядов, без прямоугольников: подсказка
+## пересчитывается каждый кадр, и пятьдесят выделенных Rect2 и словарей
+## на кадр — это мусор в куче на телефоне (проверено: было именно так).
+static func has_key(layer: String, lang: String, shift: bool, s: String) -> bool:
+	if s == "":
+		return false
+	for row in all_rows(layer, lang, false):
+		for label in row:
+			var lab := String(label)
+			if shift and lab.length() == 1 and lab != "←" and lab != "⇧":
+				lab = lab.to_upper()
+			if lab == s:
+				return true
+	return false
+
+
+## Обычная буква или пробел — на буквенном слое есть всегда, проверять
+## нечего (ё/ъ разбираются отдельно, они только долгим нажатием).
+static func is_plain_letter(s: String) -> bool:
+	if s.length() != 1:
+		return false
+	if s == " ":
+		return true
+	var lo := s.to_lower()
+	return lo >= "а" and lo <= "я" or lo >= "a" and lo <= "z"
+
+
 ## Широкие кнопки (долей ширины ряда): пробел тройной, шифт
 ## и стереть полуторные (как у Яндекс-клавиатуры), остальные обычные.
 static func _span(label: String) -> float:

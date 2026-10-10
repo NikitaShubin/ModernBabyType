@@ -5,7 +5,8 @@ __pycache__/
 progress.json
 
 # tools/: в репозитории лежат скрипты сборки (tools/docker), генератор
-# иконок (tools/icons), хелпер визуального стенда (tools/x11test.py),
+# иконок (tools/icons), хелперы визуального стенда (tools/x11test.py,
+# tools/verify_vis.py — сверка кадров партии с моделью по пикселям),
 # скрипт эмулятора (tools/emulator/run-emu.sh) и исходники нативного
 # плагина MbtInstall (tools/plugin/mbt-install: Java-мост для установки
 # APK и шаринга файлов — без него обновление из игры невозможно).
@@ -17,6 +18,7 @@ tools/*
 !tools/docker/
 !tools/icons/
 !tools/x11test.py
+!tools/verify_vis.py
 !tools/emulator/run-emu.sh
 !tools/plugin/
 tools/plugin/*

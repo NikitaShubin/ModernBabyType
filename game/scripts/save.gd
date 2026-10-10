@@ -55,8 +55,15 @@ static func clean_name(raw: String) -> String:
 	return raw.strip_edges().left(MAX_NAME_LENGTH)
 
 
+## Сколько раз файл настроек реально читался с диска. Счётчик для теста
+## (см. profiles_test): горячие флаги обязаны браться из кэша, иначе игра
+## открывает и читает файл на КАЖДОМ кадре.
+static var cfg_loads := 0
+
+
 static func _cfg() -> ConfigFile:
 	var cfg := ConfigFile.new()
+	cfg_loads += 1
 	cfg.load(PATH)
 	return cfg
 
@@ -147,10 +154,16 @@ static func load_profile(user_name: String) -> Dictionary:
 	var cfg := _cfg()
 	if not cfg.has_section_key(SECTION_PROFILES, user_name):
 		return data
-	var stored: Dictionary = cfg.get_value(SECTION_PROFILES, user_name, {})
+	var stored: Variant = cfg.get_value(SECTION_PROFILES, user_name, {})
+	# Профиль — это СЛОВАРЬ. Если в файле оказалось что-то другое (правка
+	# руками, обрыв записи на телефоне), читаем дефолты: раньше здесь был
+	# жёсткий тип, и игра падала на чтении, не доходя до экрана
+	# (проба 10.2026, profiles_test часть 25).
+	if stored is not Dictionary:
+		return data
 	for key in data.keys():
-		if stored.has(key):
-			data[key] = stored[key]
+		if (stored as Dictionary).has(key):
+			data[key] = (stored as Dictionary)[key]
 	return data
 
 
@@ -164,7 +177,12 @@ static func save_profile(user_name: String, data: Dictionary) -> void:
 	# обновляем поданные известные ключи, добиваем дефолты для
 	# ключей, которых в старых сейвах ещё не было.
 	var cfg := _cfg()
-	var stored: Dictionary = cfg.get_value(SECTION_PROFILES, user_name, {})
+	# Что бы там ни лежало, пишем в СВОЙ словарь: чужой мусор не должен
+	# ломать сохранение (теперь читается безопасно, см. load_profile).
+	var stored: Dictionary = {}
+	var raw: Variant = cfg.get_value(SECTION_PROFILES, user_name, {})
+	if raw is Dictionary:
+		stored = raw
 	var known := default_profile()
 	for key in data.keys():
 		if known.has(key):
@@ -213,15 +231,24 @@ static func get_night_mode() -> int:
 	return clampi(int(cfg.get_value(SECTION_DISPLAY, KEY_NIGHT, NIGHT_AUTO)), NIGHT_AUTO, NIGHT_ON)
 
 
+## Системная клавиатура: горичий флаг, спрашивается на каждом кадре
+## (_kb_want → _sync_keyboard) и на каждом нажатии. Без кэша это файл на
+## диске на кадр: на телефоне — лишние обращения к накопителю каждый кадр.
+## Кэш сбрасывается записью (set_sys_kb) — правка видна сразу.
+static var _sys_kb := -1
+
+
 static func get_sys_kb() -> bool:
-	var cfg := _cfg()
-	return bool(cfg.get_value(SECTION_DISPLAY, KEY_SYS_KB, false))
+	if _sys_kb < 0:
+		_sys_kb = 1 if bool(_cfg().get_value(SECTION_DISPLAY, KEY_SYS_KB, false)) else 0
+	return _sys_kb == 1
 
 
 static func set_sys_kb(on: bool) -> void:
 	var cfg := _cfg()
 	cfg.set_value(SECTION_DISPLAY, KEY_SYS_KB, on)
 	cfg.save(PATH)
+	_sys_kb = 1 if on else 0
 
 
 static func set_night_mode(mode: int) -> void:
