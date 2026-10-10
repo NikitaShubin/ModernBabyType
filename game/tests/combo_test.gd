@@ -748,56 +748,33 @@ func _case_kbd_shift_layer() -> void:
 	_check(_main.errors.size() == marks0, "%s: switching the layer made marks" % tag)
 
 
-## 17. Долгое нажатие е→ё и ь→ъ: введённая буква меняется на
-## альтернативу откатом и вводом. Меток не появляется, курсор в итоге
-## там же, где был.
+## 17. Свои клавиши «ё» и «ъ» (как на настоящей клавиатуре): жмутся
+## напрямую, без долгого нажатия. Тап вводит букву, меток нет.
 func _case_long_press() -> void:
 	_kbd_on()
 	var tag := "long press"
 	var placed := false
 	for attempt in 12:
 		_fresh(2 + attempt / 4, 1)
-		placed = _find_soft_letter()
+		placed = _find_soft_letter(["ё", "ъ"])
 		if placed:
 			break
 	if not placed:
-		_check(false, "%s: no е/ь in the level (coverage)" % tag)
+		_check(false, "%s: no ё/ъ in the level (coverage)" % tag)
 		return
 	var btns := _kbd_buttons()
 	var pressed: String = _main._current()
+	_check(btns.has(pressed), "%s: the keyboard has no key «%s»" % [tag, pressed])
 	if not btns.has(pressed):
-		_check(false, "%s: the keyboard has no key «%s»" % [tag, pressed])
 		return
 	var ok0: int = _main.typed_ok
 	_main._own_press(btns[pressed])
 	_tick(tag)
-	# Короткое отпускание ничего не меняет.
-	_main._lp_t0 = Time.get_ticks_msec() - 50
-	_main._own_release(_main._own_rect().get_center())
-	_tick(tag)
-	_check(_main.typed_ok == ok0 + 1, "%s: a short press counted oddly" % tag)
-	_check(_main.errors.is_empty(), "%s: a short press left a mark" % tag)
-	# Настоящее долгое нажатие: буква меняется на альтернативу.
-	var marks0: int = _main.errors.size()
-	var btns2 := _kbd_buttons()
-	var pressed2: String = _main._current()
-	if not btns2.has(pressed2):
-		return
-	var b3 := _ax()
-	_main._own_press(btns2[pressed2])
-	_main._lp_t0 = Time.get_ticks_msec() - int(_main.LONG_PRESS_MS) - 50
-	_main._own_release(btns2[pressed2])
-	_tick(tag)
 	_common(tag)
-	_check(
-		_main.errors.size() == marks0,
-		"%s: the long press left %d marks" % [tag, _main.errors.size() - marks0]
-	)
+	_check(_main.typed_ok == ok0 + 1, "%s: the tap was not accepted (%d → %d)" % [tag, ok0, _main.typed_ok])
+	_check(_main.errors.is_empty(), "%s: a direct key left a mark" % tag)
 
 
-## Поставить зайца перед «е» или «ь» (у них есть вторая раскладка по
-## долгому нажатию). Случайные тексты не обязаны содержать эти буквы —
-## тогда перебираем уровни.
 func _find_soft_letter(letters := ["е", "ь"]) -> bool:
 	for l in _main.display_lines.size():
 		var line: String = _main.display_lines[l]
@@ -894,17 +871,23 @@ func _case_own_kbd_fits() -> void:
 			_main._eff_h() >= _main.view_h * 0.45,
 			"%s: only %.0f px of text left on %s" % [tag, _main._eff_h(), str(wh)]
 		)
-		# Соты с референса настоящей клавиатуры: у буквенных клавиш
-		# одинаковая ширина на всех рядах, а ступеньки (ф правее й,
-		# я правее ф примерно втрое сильнее — пропорция Caps-Tab :
-		# Shift-Tab) добираются шириной краевых клавиш.
+		# Физическая раскладка: у буквенных клавиш (включая ё/ъ)
+		# одинаковая ширина на всех рядах; стереть — двойное сверху
+		# справа (как настоящий Backspace); ввод справа от «э» (как
+		# настоящий Enter); два шифта по бокам нижнего ряда. Ступеньки
+		# ф/я идут от ширины шифтов (1:2, как Tab→Caps→Shift).
 		var letter_w := -1.0
 		var row_x := {}
-		var shift_x := -1.0
+		var shift_xs := []
+		var bs_w := -1.0
+		var bs_y := -1.0
+		var enter_w := -1.0
+		var enter_y := -1.0
+		var digit_w := -1.0
 		for b in Kbd.buttons(r, _main.kb_layer, _main.kb_lang, _main.kb_shift):
 			var kr: Rect2 = b["r"]
 			var lab := String(b["s"])
-			var is_letter := lab.length() == 1 and ((lab >= "а" and lab <= "я") or (lab >= "А" and lab <= "Я"))
+			var is_letter := lab.length() == 1 and ((lab >= "а" and lab <= "я") or (lab >= "А" and lab <= "Я") or lab == "ё" or lab == "Ё")
 			if is_letter:
 				if letter_w < 0.0:
 					letter_w = kr.size.x
@@ -920,12 +903,38 @@ func _case_own_kbd_fits() -> void:
 				else:
 					row_x[key] = minf(float(row_x[key]), kr.position.x)
 			elif lab == "⇧":
-				shift_x = kr.position.x
-		# Шифт — от левого края (он и есть ступенька нижнего ряда).
-		_check(
-			absf(shift_x - r.position.x) <= 1.0,
-			"%s: shift starts at %.0f, expected the keyboard edge on %s" % [tag, shift_x, str(wh)]
-		)
+				shift_xs.append(kr.size.x)
+				_check(
+					absf(kr.position.x - r.position.x) <= 1.0 or absf(kr.end.x - r.end.x) <= 1.0,
+					"%s: a shift hangs off the keyboard edges on %s" % [tag, str(wh)]
+				)
+			elif lab == "←":
+				bs_w = kr.size.x
+				bs_y = kr.get_center().y
+			elif lab == "↵":
+				enter_w = kr.size.x
+				enter_y = kr.get_center().y
+			elif lab.length() == 1 and ((lab >= "0" and lab <= "9") or lab in ["ё", "-", "="]):
+				if digit_w < 0.0:
+					digit_w = kr.size.x
+		# Стереть сверху справа, не меньше 48px. Цифры (включая ё) —
+		# тем же питчем, что буквы.
+		_check(bs_w >= 48.0, "%s: erase is %.0fpx on %s" % [tag, bs_w, str(wh)])
+		if digit_w > 0.0 and letter_w > 0.0:
+			_check(
+				absf(digit_w - letter_w) <= 1.0,
+				"%s: digits are %.0fpx, expected %.0f like letters on %s" % [tag, digit_w, letter_w, str(wh)]
+			)
+		# Правая колонка как на настоящей: стереть сверху, ввод
+		# посередине (справа от «э»), оба у правого края.
+		_check(enter_w >= 32.0, "%s: no usable enter key on %s" % [tag, str(wh)])
+		if bs_y >= 0.0 and enter_y >= 0.0:
+			_check(bs_y < enter_y, "%s: erase is not above enter on %s" % [tag, str(wh)])
+		# Два шифта (как на настоящей: левый и правый разной ширины)
+		# и оба не меньше пальца.
+		_check(shift_xs.size() == 2, "%s: expected two shifts, got %d on %s" % [tag, shift_xs.size(), str(wh)])
+		for shw in shift_xs:
+			_check(float(shw) >= 32.0, "%s: a shift is %.0fpx on %s" % [tag, float(shw), str(wh)])
 		var ys := row_x.keys()
 		ys.sort()
 		# Буквенные ряды — второй, третий и четвёртый сверху.
@@ -936,8 +945,8 @@ func _case_own_kbd_fits() -> void:
 			_check(x1 > x0, "%s: the second letter row is not stepped right (%.0f vs %.0f) on %s" % [tag, x1, x0, str(wh)])
 			_check(x2 > x1, "%s: the third letter row is not stepped right (%.0f vs %.0f) on %s" % [tag, x2, x1, str(wh)])
 			_check(
-				absf((x2 - x1) - 3.0 * (x1 - x0)) <= 6.0,
-				"%s: steps %.0f/%.0f, expected 1:3 like the reference" % [tag, x1 - x0, x2 - x1]
+				absf((x2 - x1) - 2.0 * (x1 - x0)) <= 8.0,
+				"%s: steps %.0f/%.0f, expected 1:2 like the reference" % [tag, x1 - x0, x2 - x1]
 			)
 		# Клавиши: квадратные (палец), внутри своей области, все на месте.
 		var btns := _kbd_buttons()
@@ -964,48 +973,34 @@ func _case_own_kbd_fits() -> void:
 	_main._relayout()
 
 
-## 28. Буквы без отдельной клавиши (ё, ъ). На своей клавиатуре это
-## долгое нажатие по «е»/«ь», и подсказка ОБЯЗАНА этому учить: иначе
-## ребёнок жмёт «е» и собирает красные метки одну за другой, ничего не
-## понимая. С системной клавиатурой «ё» — обычная клавиша, там лишняя
-## подсказка только сбивает.
+## 28. Свои клавиши «ё» и «ъ» (как на настоящей клавиатуре): игра их
+## ждёт, клавиши есть, подсказка про долгое нажатие больше не нужна —
+## буква печатается прямым нажатием, как любая другая.
 func _case_yo_hint() -> void:
 	_kbd_on()
 	var tag := "yo hint"
-	# «ё» и «ъ» — обычные буквы на высокой ступени, серых клеток рядом
-	# нет. Уровень задаём свой, чтобы сценарий не зависел от фрагмента.
+	# «ё» и «ъ» — обычные буквы на высокой ступени. Уровень задаём свой,
+	# чтобы сценарий не зависел от фрагмента.
 	_fresh(24, 1)
 	_set_level_text(["Ёжик ел ёжика и ёл ёршик."])
-	var placed := _find_soft_letter(["ё", "ъ"])
-	if not placed:
+	if not _find_soft_letter(["ё", "ъ"]):
 		_check(false, "%s: the test level lost its ё/ъ" % tag)
 		return
-	# Хелпер уже поставил зайца на найденную букву.
-	var found := Vector2i(int(_main.cursor_line), int(_main.cursor_pos))
 	var cur: String = _main._current()
-	var base: String = Kbd.long_base(cur)
-	_check(base != "", "%s: «%s» has no base letter on the keyboard" % [tag, cur])
-	if base == "":
-		return
-	# Своя клавиатура: подсказка учит долгому нажатию.
-	var hint: String = _main._hint_text()
-	_check(hint.contains("Долго"), "%s: the hint does not teach the long press (%s)" % [tag, hint])
-	_check(hint.contains(base), "%s: the hint does not name the key «%s» (%s)" % [tag, base, hint])
-	_check(hint.contains(cur), "%s: the hint does not name «%s» (%s)" % [tag, cur, hint])
-	_check(_hint_width() <= _main.view_w - 2.0, "%s: the hint is wider than the screen (%.0f of %.0f)" % [tag, _hint_width(), _main.view_w])
-	# И долгое нажатие действительно даёт эту букву.
 	var btns := _kbd_buttons()
-	if btns.has(base):
-		_main._own_press(btns[base])
-		_main._lp_t0 = Time.get_ticks_msec() - int(_main.LONG_PRESS_MS) - 60
-		_main._own_release(btns[base])
-		_tick(tag)
-		_check(_main.errors.is_empty(), "%s: the long press on «%s» did not type «%s»" % [tag, base, cur])
-		_check(
-			int(_main.cursor_line) != found.x or int(_main.cursor_pos) != found.y,
-			"%s: the hare did not move past «%s»" % [tag, cur]
-		)
+	_check(btns.has(cur), "%s: the keyboard has no key «%s»" % [tag, cur])
+	if not btns.has(cur):
+		return
+	# Подсказка молчит про долгое нажатие: его больше нет.
+	var hint: String = _main._hint_text()
+	_check(not hint.contains("Долго"), "%s: the dead long-press hint is back (%s)" % [tag, hint])
+	# А прямое нажатие вводит букву без меток.
+	var ok0: int = _main.typed_ok
+	_main._own_press(btns[cur])
+	_tick(tag)
 	_common(tag)
+	_check(_main.typed_ok == ok0 + 1, "%s: the tap was not accepted" % tag)
+	_check(_main.errors.is_empty(), "%s: a direct key left a mark" % tag)
 
 
 ## Ширина строки подсказки в пикселях — та же сумма, что рисует _draw_hint.
@@ -1139,17 +1134,9 @@ func _case_broken_profile() -> void:
 	_main._start_game()
 
 
-## 31. Долгое нажатие е→ё, когда игра ждёт «е», а сразу за ним серая
-## клетка (обычная игра, не «все клавиши»).
-##
-## Нажатие вводит «е» — игра её принимает, и заяц уходит дальше: серые
-## клетки проходятся автоматически. Долгое отпускание обязано вернуть
-## всё на клетку буквы: снять «пройдено», снять засчитанный знак и
-## ввести «ё» именно туда. Со старым откатом «на одну клетку назад» он
-## приземлялся на серую клетку слева: «ё» уходило не туда, метка
-## оставалась ПОЗАДИ зайца, а счётчики сходились (знак засчитан, а
-## буква на экране не набрана) — красная буква, которую потом путают с
-## «не исчезающей» (проба 10.2026).
+## 31. Своя клавиша рядом с серыми клетками: игра ждёт «е», а сразу
+## за ним серая клетка. Нажатие вводит букву напрямую, заяц уходит
+## дальше через автопропуск — чисто, без меток и лишних событий.
 func _case_long_press_grey() -> void:
 	_kbd_on()
 	var tag := "long press grey"
@@ -1157,11 +1144,9 @@ func _case_long_press_grey() -> void:
 	# прогрессии), а дальше по строке идут серые клетки — их и требуем.
 	_fresh(9, 0)
 	_set_level_text(["Он ест еду и ест мёд."])
-	var placed := _find_active_soft_before_grey()
-	if not placed:
+	if not _find_active_soft_before_grey():
 		_check(false, "%s: no active е/ь before a grey cell in the test level" % tag)
 		return
-	var cell := Vector2i(int(_main.cursor_line), int(_main.cursor_pos))
 	var btns := _kbd_buttons()
 	var ch: String = _main._current()
 	if not btns.has(ch):
@@ -1171,34 +1156,16 @@ func _case_long_press_grey() -> void:
 	var ok0: int = _main.typed_ok
 	var bad0: int = _main.typed_bad
 	_main._own_press(btns[ch])
-	_main._lp_t0 = Time.get_ticks_msec() - int(_main.LONG_PRESS_MS) - 50
-	_main._own_release(btns[ch])
 	_tick(tag)
 	_common(tag)
-	# Ровно одна метка — и на клетке самой буквы.
 	_check(
-		_main.errors.size() == marks0 + 1,
-		"%s: the long press left %d marks (one is expected)" % [tag, _main.errors.size() - marks0]
+		_main.errors.size() == marks0,
+		"%s: a direct key next to grey cells left %d marks" % [tag, _main.errors.size() - marks0]
 	)
 	_check(
-		_main.errors.has(_main._key(cell.x, cell.y)),
-		"%s: the mark is not on the letter's own cell" % tag
-	)
-	# Заяц не должен уйти дальше метки: иначе красная буква остаётся
-	# ПОЗАДИ курсора — то, что ребёнок зовёт «застрявшей».
-	var mark_lin: float = _main._lin(cell.x, float(cell.y))
-	_check(
-		_ax() <= mark_lin + 0.001,
-		"%s: the hare (%.1f) left the mark (%.1f) behind" % [tag, _ax(), mark_lin]
-	)
-	# Счётчики игры считают НАЖАТИЯ (стирание бесплатно — правило
-	# закреплено logic_test): жест это нажатие плюс отпускание, то есть
-	# ровно два события. Больше — значит где-то завелся лишний ввод.
-	_check(
-		_main.typed_ok + _main.typed_bad == ok0 + bad0 + 2,
-		"%s: the gesture counted %d events, expected 2" % [
-			tag, _main.typed_ok + _main.typed_bad - ok0 - bad0
-		]
+		_main.typed_ok == ok0 + 1 and _main.typed_bad == bad0,
+		"%s: the tap counted oddly (%d+%d → %d+%d)"
+			% [tag, ok0, bad0, _main.typed_ok, _main.typed_bad]
 	)
 
 
@@ -1327,7 +1294,7 @@ func _case_sym_layer_hint() -> void:
 ## Ставит зайца перед символом, которого нет на буквенном слое, но есть
 ## на знаках (':', '-', ';', '"', "'", '(', ')').
 func _find_sym_only_letter() -> bool:
-	var only := [":", "-", ";", '"', "'", "(", ")"]
+	var only := [":", ";", '"', "'", "(", ")"]
 	for l in _main.display_lines.size():
 		var line: String = _main.display_lines[l]
 		for p in line.length():
@@ -1414,9 +1381,9 @@ func _find_double_letter() -> Vector2i:
 	return Vector2i(-1, -1)
 
 
-## 35. Backspace после долгого нажатия. _long_swap возвращает палец на
-## клетку буквы: дальше всё как обычно — стирание метки, откат назад,
-## упор в начало текста. Путь этот трогали только в одну сторону.
+## 35. Backspace после своей клавиши «ё»: буква убирается, заяц
+## встаёт на её место, меток нет. Путь этот трогали только в одну
+## сторону, когда было долгое нажатие.
 func _case_long_press_then_backspace() -> void:
 	_kbd_on()
 	var tag := "long then backspace"
@@ -1426,16 +1393,14 @@ func _case_long_press_then_backspace() -> void:
 		_check(false, "%s: the test level lost its ё/ъ" % tag)
 		return
 	var btns := _kbd_buttons()
-	var base: String = Kbd.long_base(_main._current())
-	if base == "" or not btns.has(base):
-		_check(false, "%s: no base key" % tag)
+	var ch: String = _main._current()
+	if not btns.has(ch):
+		_check(false, "%s: no key «%s»" % [tag, ch])
 		return
-	# Долгое нажатие: «е» вместо «ё» — метка, потом подмена на «ё».
-	_main._own_press(btns[base])
-	_main._lp_t0 = Time.get_ticks_msec() - int(_main.LONG_PRESS_MS) - 50
-	_main._own_release(btns[base])
+	# Прямое нажатие «ё»: меток нет, заяц ушёл дальше.
+	_main._own_press(btns[ch])
 	_tick(tag)
-	_check(_main.errors.is_empty(), "%s: the long press left a mark" % tag)
+	_check(_main.errors.is_empty(), "%s: the direct key left a mark" % tag)
 	# Сразу Backspace: буква должна убраться, заяц — встать на её место.
 	var after := Vector2i(int(_main.cursor_line), int(_main.cursor_pos))
 	_main._backspace()
@@ -1448,15 +1413,13 @@ func _case_long_press_then_backspace() -> void:
 	)
 	_check(
 		_main.errors.is_empty(),
-		"%s: backspace after the long press left marks" % tag
+		"%s: backspace after the key left marks" % tag
 	)
-	# И повторное нажатие «е» (теперь как обычная буква) снова печатает.
-	_main._own_press(btns[base])
+	# И повторное нажатие снова печатает.
+	var ok: int = _main.typed_ok
+	_main._own_press(_kbd_buttons()[ch])
 	_tick(tag)
-	_check(
-		_main.errors.size() >= 0,
-		"%s: the second press did not reach the game" % tag
-	)
+	_check(_main.typed_ok == ok + 1, "%s: the second press did not type" % tag)
 
 
 ## 38. Быстрый ввод со своей клавиатуры: тапы и стереть по кадрам.
@@ -1536,10 +1499,10 @@ func _case_idle_hint() -> void:
 			"%s: capital highlights %s, expected shift plus the letter" % [tag, str(keys)]
 		)
 	else:
-		# Пробел — своей клавишей; остальное необычное (слой знаков,
-		# долгое нажатие) проверяется отдельными ветками ниже.
+		# Пробел — своей клавишей; необычное (слой знаков) проверяется
+		# отдельной веткой ниже.
 		var want_key := "пробел" if cur == " " else cur
-		if want_key == cur and (not Kbd.is_plain_letter(cur) or Kbd.long_base(cur) != ""):
+		if want_key == cur and not Kbd.is_plain_letter(cur):
 			pass
 		else:
 			_check(keys == [want_key], "%s: highlights %s, expected [%s]" % [tag, str(keys), want_key])
@@ -1850,6 +1813,15 @@ func _case_enter_spam() -> void:
 		_main._type_char(cur)
 	_tick(tag)
 	_check(_main.state == "won", "%s: the level was not finished" % tag)
+	# Клавиша ввода на самой доске (справа от «э», как настоящий Enter):
+	# на финале она листает дальше, в партии молчит.
+	var ebtns := _kbd_buttons()
+	if not ebtns.has("↵"):
+		_check(false, "%s: the board has no enter key" % tag)
+		return
+	_check(_main._own_press(ebtns["↵"]), "%s: the board enter did nothing on the won screen" % tag)
+	_tick(tag)
+	_check(_main.state == "playing", "%s: the board enter did not advance (%s)" % [tag, _main.state])
 	for i in 6:
 		_enter()
 		_tick(tag)

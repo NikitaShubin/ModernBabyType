@@ -989,8 +989,8 @@ func _part16_touch_sizes() -> void:
 
 
 ## Своя клавиатура в меню: слои, шифт, ввод (↵ создаёт профиль),
-## долгое нажатие е→ё. Тапы — через _own_press/_own_release напрямую
-## (как живые клики), без key-событий.
+## свои клавиши ё/ъ. Тапы — через _own_press напрямую (как живые клики),
+## без key-событий.
 ## Галка системной клавиатуры УБРАНА из игры: ввод — только своей
 ## экранной клавиатурой (решение 10.2026, жалобы на сбитый курсор).
 ## Остатки мёртвого флага в старых профилях вычищает drop_legacy_guest:
@@ -1154,11 +1154,9 @@ func _part21_own_keyboard() -> void:
 	_check(String(_menu.kb_layer) == "en", "globe switches to latin")
 	_menu.call("_own_press", _mkey(area, "en", false, "глобус"))
 	_check(String(_menu.kb_layer) == "ru", "globe switches back to russian")
-	# Долгое е→ё.
-	_menu.call("_own_press", _mkey(area, "ru", false, "е"))
-	_menu._lp_t0 = Time.get_ticks_msec() - 600
-	_menu.call("_own_release", _mkey(area, "ru", false, "е"))
-	_check(String(_menu.input_text) == "Пё", "long press gives yo")
+	# Своя клавиша ё (как на настоящей клавиатуре).
+	_menu.call("_own_press", _mkey(area, "ru", false, "ё"))
+	_check(String(_menu.input_text) == "Пё", "own yo key types yo")
 	# Ввод (↵) создаёт профиль и закрывает поле.
 	_menu.call("_own_press", _mkey(area, "ru", false, "↵"))
 	_check(S.user_exists("Пё"), "enter key creates the profile")

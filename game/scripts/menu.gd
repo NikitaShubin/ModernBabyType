@@ -82,10 +82,6 @@ var top_safe := 0.0
 var kb_layer := "ru"
 var kb_lang := "ru"
 var kb_shift := false
-## Высота системной клавиатуры (ставит игра своим замером, только при
-## её галке). Своя высота считается отдельно (_own_h).
-var _lp_act := ""
-var _lp_t0 := 0
 var kb_key_sb: StyleBoxFlat
 ## Ручной режим ночи из настроек: 0 день, 1 ночь, -1 авто (система).
 ## Кнопка крутит по кругу день → ночь → авто.
@@ -114,8 +110,6 @@ func _own_press(pos: Vector2) -> bool:
 	var act := Kbd.hit(_own_rect(), kb_layer, kb_lang, kb_shift, true, pos)
 	if act == "":
 		return false
-	_lp_act = ""
-
 	if act == "стереть":
 		input_text = input_text.left(maxi(0, input_text.length() - 1))
 	elif act == "слой":
@@ -130,12 +124,6 @@ func _own_press(pos: Vector2) -> bool:
 		_enter()
 	elif act == "пробел":
 		pass  # в имени пробелов не бывает
-	elif Kbd.long_alt(act) != "":
-		kb_shift = false
-		if input_text.length() < S.MAX_NAME_LENGTH:
-			input_text += act
-		_lp_act = act
-		_lp_t0 = Time.get_ticks_msec()
 	else:
 		# Шифт + цифра даёт знак (как на настоящей клавиатуре).
 		var out := Kbd.shift_digit(act) if kb_shift else ""
@@ -145,25 +133,6 @@ func _own_press(pos: Vector2) -> bool:
 	queue_redraw()
 	get_viewport().set_input_as_handled()
 	return true
-
-
-## Отпускание после долгого нажатия на е/ь: введённую букву меняем на ё/ъ.
-func _own_release(pos: Vector2) -> bool:
-	if _lp_act == "" or not input_active:
-		_lp_act = ""
-		return false
-	var done := false
-	if Time.get_ticks_msec() - _lp_t0 >= 500:
-		var act := Kbd.hit(_own_rect(), kb_layer, kb_lang, false, true, pos)
-		if act == _lp_act and input_text.ends_with(_lp_act):
-			input_text = input_text.left(input_text.length() - 1) + Kbd.long_alt(_lp_act)
-
-			done = true
-	_lp_act = ""
-	if done:
-		queue_redraw()
-		get_viewport().set_input_as_handled()
-	return done
 
 
 ## Бокс выбранной стрелками галки: залит цветом вместо рамки.
@@ -420,8 +389,6 @@ func _input(event: InputEvent) -> void:
 			pos = mb.position
 			has_pos = true
 		elif mb.button_index == MOUSE_BUTTON_LEFT and not mb.pressed:
-			# Отпускание после долгого нажатия (е→ё, ь→ъ).
-			_own_release(mb.position)
 			return
 	if not has_pos:
 		return

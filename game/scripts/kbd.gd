@@ -17,13 +17,20 @@ extends RefCounted
 ## Верхняя строка цифр — всегда, на всех слоях.
 const ROW_DIGITS: Array = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
 
-## Ряды русских букв (без отдельных ё/ъ — они долгие).
-## Шифт и стереть — по бокам нижнего буквенного ряда, широкие
-## (раскладка Яндекс-клавиатуры, требование автора 10.2026).
+## Верх цифр по-русски: своя «ё» слева сверху (как на настоящей),
+## справа «-» и «=» (тоже прямые клавиши), дальше «стереть» —
+## Backspace сверху справа, как на настоящей (решение 10.2026).
+const ROW_DIGITS_RU: Array = ["ё", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
+
+## Ряды русских букв — как на настоящей клавиатуре: «ъ» справа от «х»,
+## ввод справа от «э» (как настоящий Enter), два шифта по бокам нижнего
+## ряда. Отдельных клавиш Tab/Caps/Enter-слева нет (им нечего делать в
+## игре), поэтому ступеньки идут от края — честная адаптация narrow-рядов,
+## а не копия вслепую.
 const ROWS_RU: Array = [
-	["й", "ц", "у", "к", "е", "н", "г", "ш", "щ", "з", "х"],
-	["ф", "ы", "в", "а", "п", "р", "о", "л", "д", "ж", "э"],
-	["⇧", "я", "ч", "с", "м", "и", "т", "ь", "б", "ю", "←"],
+	["й", "ц", "у", "к", "е", "н", "г", "ш", "щ", "з", "х", "ъ"],
+	["ф", "ы", "в", "а", "п", "р", "о", "л", "д", "ж", "э", "↵"],
+	["⇧", "я", "ч", "с", "м", "и", "т", "ь", "б", "ю", ".", "⇧"],
 ]
 
 ## Ряды латиницы для взрослых текстов (та же геометрия).
@@ -35,14 +42,18 @@ const ROWS_EN: Array = [
 
 ## Ряд знаков (цифры — сверху, отдельно).
 const ROWS_SYM: Array = [
-	["!", "?", ",", ".", ":", ";", "-", "\"", "'", "(", ")"],
+	["!", "?", ",", ".", ":", ";", "-", "\"", "'", "(", ")", "="],
 ]
 
 ## Низ буквенных слоёв: [знаки, глобус, запятая, пробел, точка, …].
 ## В меню вместо «?» — ввод (↵): имя надо чем-то заканчивать.
 static func bottom_row(enter: bool) -> Array:
 	var last := "↵" if enter else "?"
-	return ["?123", "глобус", ",", "пробел", ".", "!", last]
+	if enter:
+		return ["?123", "глобус", ",", "пробел", ".", "!", last]
+	# Дефис внизу игрового ряда: в настоящих текстах он встречается
+	# (9 раз), а на цифровой ряд он не влез бы без ломки питча.
+	return ["?123", "глобус", ",", "пробел", ".", "!", "?", "-"]
 
 
 ## Низ слоя знаков: [глобус, возврат на язык, пробел, стереть].
@@ -53,12 +64,15 @@ static func bottom_sym_row(lang: String) -> Array:
 
 ## Все ряды слоя сверху вниз (цифры + верх + низ).
 static func all_rows(layer: String, lang: String, enter: bool) -> Array:
-	var rows: Array = [ROW_DIGITS]
+	var rows: Array = []
 	if layer == "en":
+		rows.append(ROW_DIGITS)
 		rows.append_array(ROWS_EN)
 	elif layer == "sym":
+		rows.append(ROW_DIGITS)
 		rows.append_array(ROWS_SYM)
 	else:
+		rows.append(ROW_DIGITS_RU)
 		rows.append_array(ROWS_RU)
 	if layer == "sym":
 		rows.append(bottom_sym_row(lang))
@@ -67,35 +81,8 @@ static func all_rows(layer: String, lang: String, enter: bool) -> Array:
 	return rows
 
 
-## Долгое нажатие (стандарт Яндекс-клавиатуры): е→ё, ь→ъ. Пусто — нет пары.
-static func long_alt(s: String) -> String:
-	match s:
-		"е":
-			return "ё"
-		"ь":
-			return "ъ"
-		"Е":
-			return "Ё"
-		"Ь":
-			return "Ъ"
-	return ""
-
-
-## Обратная к long_alt: какую клавишу надо ДЕРЖАТЬ, чтобы получить эту
-## букву. Игра ждёт «ё» или «ъ», а отдельной клавиши на клавиатуре нет —
-## без этой подсказки ребёнок жмёт «е» и собирает красные метки
-## (визуальный прогон 10.2026: подсказка молчала «Жми: ё»).
-static func long_base(s: String) -> String:
-	match s:
-		"ё":
-			return "е"
-		"ъ":
-			return "ь"
-		"Ё":
-			return "Е"
-		"Ъ":
-			return "Ь"
-	return ""
+## Долгого нажатия больше нет: у «ё» и «ъ» свои клавиши, как на
+## настоящей клавиатуре (решение 10.2026).
 
 
 ## Есть ли такая клавиша на этом слое? Игра так учит ребёнка, если
@@ -120,13 +107,16 @@ static func has_key(layer: String, lang: String, shift: bool, s: String) -> bool
 
 
 ## Обычная буква или пробел — на буквенном слое есть всегда, проверять
-## нечего (ё/ъ разбираются отдельно, они только долгим нажатием).
+## нечего.
 static func is_plain_letter(s: String) -> bool:
 	if s.length() != 1:
 		return false
 	if s == " ":
 		return true
 	var lo := s.to_lower()
+	# «ё» вне диапазона а..я (U+0451), но буква обычная: у неё своя клавиша.
+	if lo == "ё":
+		return true
 	return lo >= "а" and lo <= "я" or lo >= "a" and lo <= "z"
 
 
@@ -256,46 +246,79 @@ static func buttons(area: Rect2, layer: String, lang: String, shift: bool, enter
 	if pitch < 1.0:
 		pitch = 24.0
 	# Русские буквенные ряды: общий питч и ступеньки с референса.
+	# Русская доска — физическая раскладка: цифры с ё/-/= и стереть
+	# сверху справа (как настоящий Backspace), 12 букв, 11 букв + ввод
+	# (как настоящий Enter), два шифта. У букв питч один на все ряды;
+	# ступеньки ф/я идут от ширины шифтов (1:2, как Tab→Caps→Shift).
 	var ru_p := 0.0
 	var ru_a := 0.0
-	var ru_b := 0.0
-	if ru_letters and rows.size() >= 4:
+	var ru_lr := 0.0
+	if ru_letters and rows.size() >= 5:
 		var w := area.size.x
-		ru_p = minf((w - 10.0 * gap) / 11.0, (w - 11.0 * gap - 60.0) / 10.0)
-		ru_p = minf(ru_p, (2.0 * w - 19.0 * gap + 28.0) / 23.0)
+		# Питч один на всё, включая цифры: 12 букв, ступеньки ф/я,
+		# симметричные шифты от 32px, стереть от 48px.
+		ru_p = minf((w - 11.0 * gap) / 12.0, (w - 11.0 * gap - 64.0) / 10.0)
+		ru_p = minf(ru_p, (5.0 * w - 55.0 * gap - 192.0) / 56.0)
+		ru_p = minf(ru_p, (w - 11.0 * gap - 32.0) / 11.25)
+		ru_p = minf(ru_p, (w - 11.0 * gap - 48.0) / 11.0)
 		ru_p = maxf(ru_p, 16.0)
-		ru_b = w - 10.0 * ru_p - 11.0 * gap - 28.0
-		ru_b = maxf(ru_b, 28.0)
-		ru_a = ru_b / 3.0
+		ru_lr = (w - 10.0 * ru_p - 11.0 * gap) * 0.5
+		ru_lr = maxf(ru_lr, 32.0)
+		ru_a = ru_lr / 3.0
 	for ri in rows.size():
 		var row: Array = rows[ri]
 		var x := area.position.x
 		var y := area.position.y + float(ri) * (rh + gap)
-		# Русские буквенные ряды (цифры, й, ф, я): питч и ступеньки.
-		if ru_letters and (ri == 1 or ri == 2 or ri == 3):
-			var inset := 0.0
-			if ri == 2:
-				inset = ru_a
-			elif ri == 3:
-				inset = ru_b
-			x += inset
-			if ri == 3:
-				# Шифт — во всю ступеньку (как настоящий левый шифт).
-				var sh := "⇧"
-				out.append({"r": Rect2(area.position.x, y, ru_b, rh), "s": sh})
-				x += gap
-			for label in row:
-				var s := String(label)
-				if s == "⇧" or s == "←":
-					continue
-				if shift and s.length() == 1 and s != "←" and s != "⇧":
-					s = s.to_upper()
-				out.append({"r": Rect2(x, y, ru_p, rh), "s": s})
-				x += ru_p + gap
-			if ri == 3:
-				# Стереть — ровно остаток до правого края (≥28px).
+		# Русская доска: цифры, 12 букв, 11 букв + ввод, шифты.
+		if ru_letters and rows.size() >= 5 and (ri >= 0 and ri <= 3):
+			if ri == 0:
+				# Цифры тем же питчем (включая ё), стереть — остаток:
+				# он не меньше 48px по построению питча.
+				for label in row:
+					var s0 := String(label)
+					if s0 == "←":
+						continue
+					if shift and s0.length() == 1:
+						s0 = s0.to_upper()
+					out.append({"r": Rect2(x, y, ru_p, rh), "s": s0})
+					x += ru_p + gap
 				out.append({"r": Rect2(x, y, area.position.x + area.size.x - x, rh), "s": "←"})
-			continue
+				continue
+			if ri == 1:
+				for label in row:
+					var s1 := String(label)
+					if shift and s1.length() == 1:
+						s1 = s1.to_upper()
+					out.append({"r": Rect2(x, y, ru_p, rh), "s": s1})
+					x += ru_p + gap
+				continue
+			if ri == 2:
+				x += ru_a
+				for label in row:
+					var s2 := String(label)
+					if s2 == "↵":
+						continue
+					if shift and s2.length() == 1:
+						s2 = s2.to_upper()
+					out.append({"r": Rect2(x, y, ru_p, rh), "s": s2})
+					x += ru_p + gap
+				out.append({"r": Rect2(x, y, area.position.x + area.size.x - x, rh), "s": "↵"})
+				continue
+			if ri == 3:
+				# Шифт шириной в ступеньку без зазора: буквы начинаются
+				# ровно на ru_lr, шаги 1:2 держатся точно.
+				out.append({"r": Rect2(area.position.x, y, ru_lr - gap, rh), "s": "⇧"})
+				x += ru_lr
+				for label in row:
+					var s3 := String(label)
+					if s3 == "⇧":
+						continue
+					if shift and s3.length() == 1:
+						s3 = s3.to_upper()
+					out.append({"r": Rect2(x, y, ru_p, rh), "s": s3})
+					x += ru_p + gap
+				out.append({"r": Rect2(x, y, area.position.x + area.size.x - x, rh), "s": "⇧"})
+				continue
 		# Крайние широкие без пробела (⇧/←): впитывают остаток.
 		var lead := -1
 		var trail := -1

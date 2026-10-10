@@ -1726,39 +1726,25 @@ func _hint_parts() -> Array:
 			{"s": cur, "cap": true},
 		]
 
-	# Буквы без отдельной клавиши на своей клавиатуре (ё, ъ — раскладка
-	# Яндекса, там это долгое нажатие). Молчаливая подсказка «Жми: ё» —
-	# ловушка: ребёнок жмёт «е» и получает метки одну за другой. С
-	# СИСТЕМНОЙ клавиатурой всё наоборот: там «ё» обычная клавиша, и
-	# лишняя подсказка только сбивает.
-	if _own_shown():
-		var base := Kbd.long_base(cur)
-		if base != "":
+	# Символа нет на этом слое — учим настоящему вводу: знаки идут
+	# шифтом с верхней цифры (Shift+6 даёт «:»). Обычные буквы проверять
+	# незачем: на буквенном слое они есть всегда.
+	if not Kbd.is_plain_letter(cur) and not Kbd.has_key(kb_layer, kb_lang, kb_shift, cur):
+		var digit := Kbd.digit_for(cur)
+		if digit != "":
 			return [
-				{"s": "Долго жми", "cap": false},
-				{"s": base, "cap": true},
+				{"s": "Жми:", "cap": false},
+				{"s": "Shift", "cap": true},
+				{"s": "+", "cap": false},
+				{"s": digit, "cap": true},
+			]
+		if Kbd.has_key("sym", kb_lang, kb_shift, cur):
+			return [
+				{"s": "Жми:", "cap": false},
+				{"s": "?123", "cap": true},
 				{"s": "→", "cap": false},
 				{"s": cur, "cap": true},
 			]
-		# Символа нет на этом слое — учим настоящему вводу: знаки идут
-		# шифтом с верхней цифры (Shift+6 даёт «:»). Обычные буквы
-		# проверять незачем: на буквенном слое они есть всегда.
-		if not Kbd.is_plain_letter(cur) and not Kbd.has_key(kb_layer, kb_lang, kb_shift, cur):
-			var digit := Kbd.digit_for(cur)
-			if digit != "":
-				return [
-					{"s": "Жми:", "cap": false},
-					{"s": "Shift", "cap": true},
-					{"s": "+", "cap": false},
-					{"s": digit, "cap": true},
-				]
-			if Kbd.has_key("sym", kb_lang, kb_shift, cur):
-				return [
-					{"s": "Жми:", "cap": false},
-					{"s": "?123", "cap": true},
-					{"s": "→", "cap": false},
-					{"s": cur, "cap": true},
-				]
 	return []
 
 
@@ -2112,9 +2098,6 @@ func _hint_keys() -> Array:
 		return ["глобус"]
 	if _exact() and cur == cur.to_upper() and cur != cur.to_lower():
 		return ["⇧", cur.to_lower()]
-	var base := Kbd.long_base(cur)
-	if base != "":
-		return [base]
 	if not Kbd.is_plain_letter(cur) and not Kbd.has_key(kb_layer, kb_lang, kb_shift, cur):
 		# Знаки — шифтом с верхней цифры (настоящая клавиатура), а не
 		# слоем ?123: мы учим человека реальной клавиатуре.
@@ -2142,49 +2125,25 @@ func _draw_own_kb() -> void:
 	)
 
 
-## Долгое нажатие (стандарт Яндекс-клавиатуры): е→ё, ь→ъ. Состояние ждёт
-## отпускания: короткое — обычный ввод уже случился, долгое — откатываем
-## его и вводим альтернативу. Порог — полсекунды, как у системных.
-const LONG_PRESS_MS := 500
-var _lp_act := ""
-var _lp_t0 := 0
-var _lp_line := 0
-var _lp_pos := 0
-
-
-## Откат долгого нажатия: палец уже ввёл «е» (а игра ждала «ё»), буква
-## засчитана, метка поставлена, заяц откатился и ушёл через серые
-## клетки. Откатывать «на одну клетку» (_backspace) тут нельзя: он
-## приземляется не туда, и «ё» вводится в ЧУЖУЮ клетку — красная метка
-## и откат назад, хотя ребёнок сделал ровно то, что нужно (проба
-## 10.2026, сценарий «долгое нажатие рядом с серыми»).
-##
-## Возвращаем палец на его клетку и снимаем всё, что навесило нажатие:
-## метку и «пройдено». Счётчики НЕ трогаем — как и в _backspace: игра
-## считает НАЖАТИЯ, а не буквы на экране (правило закреплено
-## logic_test: «erase is free, type counts»). Один жест — два события
-## (нажатие и отпускание), и оба считаются.
-func _long_swap() -> void:
-	var k := _key(_lp_line, _lp_pos)
-	errors.erase(k)
-	passed.erase(k)
-	cursor_line = _lp_line
-	cursor_pos = _lp_pos
-
-
 ## Нажатие на свою клавишу: символ — в _type_char, стереть — в _backspace,
 ## слой — дальше по кругу, шифт — флип. Напрямую, без key-событий: IME тут
 ## не участвует вообще, composing-переписям неоткуда взяться.
 func _own_press(pos: Vector2) -> bool:
 	if not _own_shown():
 		return false
-	if state != "playing":
-		return false
 	idle_t = 0.0
 	var act := Kbd.hit(_own_rect(), kb_layer, kb_lang, kb_shift, false, pos)
 	if act == "":
 		return false
-	_lp_act = ""
+	if act == "ввод":
+		# Как физический Enter: на финале — дальше, в партии молчит.
+		if state != "playing":
+			_new_level()
+			queue_redraw()
+			get_viewport().set_input_as_handled()
+		return true
+	if state != "playing":
+		return false
 	if act == "стереть":
 		_backspace()
 	elif act == "слой":
@@ -2198,15 +2157,6 @@ func _own_press(pos: Vector2) -> bool:
 	elif act == "пробел":
 		kb_shift = false
 		_type_char(" ")
-	elif Kbd.long_alt(act) != "":
-		kb_shift = false
-		# Клетку запоминаем ДО ввода: долгое нажатие возвращает палец
-		# именно сюда (см. _long_swap), а не «на одну назад».
-		_lp_line = cursor_line
-		_lp_pos = cursor_pos
-		_type_char(act)
-		_lp_act = act
-		_lp_t0 = Time.get_ticks_msec()
 	else:
 		# Шифт + цифра даёт знак (как на настоящей клавиатуре), шифт
 		# при этом гаснет — как после заглавной буквы.
@@ -2218,29 +2168,7 @@ func _own_press(pos: Vector2) -> bool:
 	return true
 
 
-## Отпускание после долгого нажатия на е/ь: введённую букву меняем на
 ## ё/ъ (откат + ввод альтернативы). Короткое — ничего не делает.
-func _own_release(pos: Vector2) -> bool:
-	idle_t = 0.0
-	if state != "playing":
-		_lp_act = ""
-		return false
-	if _lp_act == "":
-		return false
-	var done := false
-	if Time.get_ticks_msec() - _lp_t0 >= LONG_PRESS_MS:
-		var act := Kbd.hit(_own_rect(), kb_layer, kb_lang, false, false, pos)
-		if act == _lp_act:
-			_long_swap()
-			_type_char(Kbd.long_alt(_lp_act))
-			done = true
-	_lp_act = ""
-	if done:
-		queue_redraw()
-		get_viewport().set_input_as_handled()
-	return done
-
-
 ## Чернила для рисованного текста поверх панелей и фона: днём тёмные,
 ## ночью светлые. Пилюли сами меняют фон (_apply_night), а рисованный
 ## текст за ним не следил — ночью «Дальше», чёрточки ≡ и
@@ -2333,9 +2261,6 @@ func _input(event: InputEvent) -> void:
 			pos = mb.position
 			has_pos = true
 		elif mb.button_index == MOUSE_BUTTON_LEFT and not mb.pressed:
-			# Отпускание после долгого нажатия (е→ё, ь→ъ): разбирает
-			# _own_release, остальное — мимо.
-			_own_release(mb.position)
 			return
 	if not has_pos:
 		return

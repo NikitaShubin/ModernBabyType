@@ -172,11 +172,12 @@ func _a_touch_wrong() -> void:
 
 ## Долгое нажатие е→ё: ставим зайца перед «е» или «ь», жмём и отпускаем
 ## позже порога.
+## Своя клавиша «ё» (как на настоящей клавиатуре): прямое нажатие.
 func _a_long_press() -> void:
 	for l in _main.display_lines.size():
 		var line: String = _main.display_lines[l]
 		for p in line.length():
-			if line.substr(p, 1) in ["е", "ь"] and (l > 0 or p > 0):
+			if line.substr(p, 1) in ["ё", "ъ"] and (l > 0 or p > 0):
 				_main.cursor_line = l
 				_main.cursor_pos = p
 				_main.hero_r = _main._hero_pos()
@@ -187,8 +188,6 @@ func _a_long_press() -> void:
 				if not btns.has(ch):
 					return
 				_main._own_press(btns[ch])
-				_main._lp_t0 = Time.get_ticks_msec() - int(_main.LONG_PRESS_MS) - 60
-				_main._own_release(btns[ch])
 				return
 
 
