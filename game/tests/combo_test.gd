@@ -905,14 +905,13 @@ func _case_own_kbd_fits() -> void:
 func _case_yo_hint() -> void:
 	_kbd_on()
 	var tag := "yo hint"
-	var placed := false
-	for attempt in 24:
-		_fresh(6, 1)
-		placed = _find_soft_letter(["ё", "ъ"])
-		if placed:
-			break
+	# «ё» и «ъ» — обычные буквы на высокой ступени, серых клеток рядом
+	# нет. Уровень задаём свой, чтобы сценарий не зависел от фрагмента.
+	_fresh(24, 1)
+	_set_level_text(["Ёжик ел ёжика и ёл ёршик."])
+	var placed := _find_soft_letter(["ё", "ъ"])
 	if not placed:
-		_check(false, "%s: no ё/ъ in 24 levels (coverage)" % tag)
+		_check(false, "%s: the test level lost its ё/ъ" % tag)
 		return
 	# Хелпер уже поставил зайца на найденную букву.
 	var found := Vector2i(int(_main.cursor_line), int(_main.cursor_pos))
@@ -1096,15 +1095,13 @@ func _case_broken_profile() -> void:
 func _case_long_press_grey() -> void:
 	_kbd_on()
 	var tag := "long press grey"
-	var placed := false
-	# «е» входит в набор букв не сразу (КЛЮЧИ идут по прогрессии).
-	for attempt in 16:
-		_fresh(8 + attempt / 4, 0)
-		placed = _find_active_soft_before_grey()
-		if placed:
-			break
+	# «е» входит в набор букв на девятой ступени (КЛЮЧИ идут по
+	# прогрессии), а дальше по строке идут серые клетки — их и требуем.
+	_fresh(9, 0)
+	_set_level_text(["Он ест еду и ест мёд."])
+	var placed := _find_active_soft_before_grey()
 	if not placed:
-		_check(false, "%s: no active е/ь before a grey cell (coverage)" % tag)
+		_check(false, "%s: no active е/ь before a grey cell in the test level" % tag)
 		return
 	var cell := Vector2i(int(_main.cursor_line), int(_main.cursor_pos))
 	var btns := _kbd_buttons()
@@ -1230,17 +1227,12 @@ func _case_rotate_with_marks() -> void:
 func _case_sym_layer_hint() -> void:
 	_kbd_on()
 	var tag := "sym hint"
-	var placed := false
-	var want := ""
-	for attempt in 16:
-		_fresh(6, 1)
-		placed = _find_sym_only_letter()
-		if placed:
-			want = _main._current()
-			break
-	if not placed:
-		_check(false, "%s: no sym-only character in the level (coverage)" % tag)
+	_fresh(6, 1)
+	_set_level_text(["Дверь: открыта - тихо."])
+	if not _find_sym_only_letter():
+		_check(false, "%s: the test level lost its symbol" % tag)
 		return
+	var want: String = _main._current()
 	_check(
 		_main.kb_layer != "sym",
 		"%s: the level started on the symbol layer (coverage)" % tag
@@ -1294,14 +1286,16 @@ func _find_sym_only_letter() -> bool:
 func _case_fast_doubles() -> void:
 	_fresh(6, 1)
 	var tag := "fast doubles"
-	var cell := Vector2i(-1, -1)
-	for attempt in 12:
-		_fresh(6, 1)
-		cell = _find_double_letter()
-		if cell.x >= 0:
-			break
+	# «нн» — единственная двойная буква во всём банке текстов; ловить её
+	# в случайном фрагменте бессмысленно (на CI сценарий валился по
+	# coverage), поэтому уровень задаём свой. Ступень 13 — «н» там своя
+	# буква: иначе игра проходит серые клетки сама и вторую «н» ждать
+	# просто не на чем.
+	_fresh(13, 0)
+	_set_level_text(["Следы невиданных зверей!", "Они всё видели."])
+	var cell := _find_double_letter()
 	if cell.x < 0:
-		_check(false, "%s: no doubled letter in 12 levels (coverage)" % tag)
+		_check(false, "%s: the test level lost its doubled letter" % tag)
 		return
 	var pair: String = _main._current()
 	var ok0: int = _main.typed_ok
@@ -1323,6 +1317,28 @@ func _case_fast_doubles() -> void:
 	_common(tag)
 
 
+## Свой текст уровня. Сценарии не должны зависеть от того, какой случайный
+## фрагмент выпал: двойная буква «нн» есть ровно в одной строке банка,
+## и на CI сценарий «быстрые двойные» валился по coverage (10.2026).
+func _set_level_text(lines: Array) -> void:
+	var typed: Array[String] = []
+	for l in lines:
+		typed.append(String(l))
+	_main.display_lines = typed
+	_main._reindex_lines()
+	# Набор букв — штатный для этой сложности (не «все буквы текста»):
+	# часть сценариев проверяет именно серые клетки.
+	_main.active = B.active_chars(_main.difficulty)
+	_main.cursor_line = 0
+	_main.cursor_pos = 0
+	_main.hero_r = _main._hero_pos()
+	_main.state = "playing"
+	_main.errors.clear()
+	_main.passed.clear()
+	_main.typed_cells.clear()
+	_main._refresh()
+
+
 ## Ставит зайца на первую из двух одинаковых букв подряд («сс», «папа»).
 func _find_double_letter() -> Vector2i:
 	for l in _main.display_lines.size():
@@ -1342,14 +1358,10 @@ func _find_double_letter() -> Vector2i:
 func _case_long_press_then_backspace() -> void:
 	_kbd_on()
 	var tag := "long then backspace"
-	var placed := false
-	for attempt in 16:
-		_fresh(21 + attempt / 4, 0)
-		placed = _find_soft_letter(["ё", "ъ"])
-		if placed:
-			break
-	if not placed:
-		_check(false, "%s: no ё/ъ in 16 levels (coverage)" % tag)
+	_fresh(24, 1)
+	_set_level_text(["Ёлка и ёлка, ёжик."])
+	if not _find_soft_letter(["ё", "ъ"]):
+		_check(false, "%s: the test level lost its ё/ъ" % tag)
 		return
 	var btns := _kbd_buttons()
 	var base: String = Kbd.long_base(_main._current())
