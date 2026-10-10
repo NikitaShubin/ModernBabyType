@@ -894,23 +894,50 @@ func _case_own_kbd_fits() -> void:
 			_main._eff_h() >= _main.view_h * 0.45,
 			"%s: only %.0f px of text left on %s" % [tag, _main._eff_h(), str(wh)]
 		)
-		# Соты, как на настоящей клавиатуре: каждый ряд начинается
-		# правее верхнего примерно на полклавиши.
+		# Соты с референса настоящей клавиатуры: у буквенных клавиш
+		# одинаковая ширина на всех рядах, а ступеньки (ф правее й,
+		# я правее ф примерно втрое сильнее — пропорция Caps-Tab :
+		# Shift-Tab) добираются шириной краевых клавиш.
+		var letter_w := -1.0
 		var row_x := {}
+		var shift_x := -1.0
 		for b in Kbd.buttons(r, _main.kb_layer, _main.kb_lang, _main.kb_shift):
 			var kr: Rect2 = b["r"]
-			var key := int(kr.get_center().y)
-			if not row_x.has(key):
-				row_x[key] = kr.position.x
-			else:
-				row_x[key] = minf(float(row_x[key]), kr.position.x)
+			var lab := String(b["s"])
+			var is_letter := lab.length() == 1 and ((lab >= "а" and lab <= "я") or (lab >= "А" and lab <= "Я"))
+			if is_letter:
+				if letter_w < 0.0:
+					letter_w = kr.size.x
+				else:
+					_check(
+						absf(kr.size.x - letter_w) <= 1.0,
+						"%s: the key «%s» is %.0fpx, expected %.0f like the rest on %s"
+							% [tag, lab, kr.size.x, letter_w, str(wh)]
+					)
+				var key := int(kr.get_center().y)
+				if not row_x.has(key):
+					row_x[key] = kr.position.x
+				else:
+					row_x[key] = minf(float(row_x[key]), kr.position.x)
+			elif lab == "⇧":
+				shift_x = kr.position.x
+		# Шифт — от левого края (он и есть ступенька нижнего ряда).
+		_check(
+			absf(shift_x - r.position.x) <= 1.0,
+			"%s: shift starts at %.0f, expected the keyboard edge on %s" % [tag, shift_x, str(wh)]
+		)
 		var ys := row_x.keys()
 		ys.sort()
-		for i in range(1, ys.size()):
+		# Буквенные ряды — второй, третий и четвёртый сверху.
+		if ys.size() >= 4:
+			var x0 := float(row_x[ys[1]])
+			var x1 := float(row_x[ys[2]])
+			var x2 := float(row_x[ys[3]])
+			_check(x1 > x0, "%s: the second letter row is not stepped right (%.0f vs %.0f) on %s" % [tag, x1, x0, str(wh)])
+			_check(x2 > x1, "%s: the third letter row is not stepped right (%.0f vs %.0f) on %s" % [tag, x2, x1, str(wh)])
 			_check(
-				float(row_x[ys[i]]) > float(row_x[ys[i - 1]]),
-				"%s: row %d starts at %.0f, not right of row %d (%.0f) on %s"
-					% [tag, i, float(row_x[ys[i]]), i - 1, float(row_x[ys[i - 1]]), str(wh)]
+				absf((x2 - x1) - 3.0 * (x1 - x0)) <= 6.0,
+				"%s: steps %.0f/%.0f, expected 1:3 like the reference" % [tag, x1 - x0, x2 - x1]
 			)
 		# Клавиши: квадратные (палец), внутри своей области, все на месте.
 		var btns := _kbd_buttons()

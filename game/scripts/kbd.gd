@@ -208,29 +208,153 @@ const ROW_TALL := 1.15
 
 
 ## Кнопки слоя: [{r: Rect2, s: String}]. При shift буквы заглавные.
+## Раскладка ряда: у буквенных клавиш ОДИНАКОВАЯ ширина на всех рядах
+## (питч слоя), а сдвиги-соты добираются нестандартной шириной краевых
+## клавиш — как на настоящей клавиатуре (решение 10.2026).
+## Питч задают ряды без широких клавиш (min их натуральной ширины);
+## ряды с пробелом считаются по-старому (пробел тянется во всю ширину).
+## Остаток ряда без широких клавиш (цифры) — делится поровну по бокам.
+## Остаток ряда со стиранием/шифтом уходит в края: ведущий край берёт
+## всё сверх минимума 32px (это и есть ступенька), замыкающий — 32px.
+## Минимум держит и узкий телефон: питч ограничен сверху и этим рядом.
+## Раскладка ряда: у буквенных клавиш ОДИНАКОВАЯ ширина на всех рядах,
+## а сдвиги-соты добираются нестандартной шириной краевых клавиш — как на
+## настоящей клавиатуре (ANSI-референс: Tab 1.5u, Caps 1.75u, Shift 2.25u —
+## ступеньки буквенных рядов 0.25u и 0.75u; решение 10.2026).
+## Русские буквенные ряды (11/11/10+края): питч p = min() из трёх условий —
+## й-ряд во всю ширину, стиранию со шифтом хватает минимумов, ф-ряд не
+## вылезает за край. Отступы: й 0, ф треть шифта, я весь шифт (пропорция
+## Caps-Tab : Shift-Tab = 1:3 с референса). Шифт = отступ (как настоящий
+## левый шифт во всю высоту ступени), «стереть» = ровно остаток (≥28px).
+## Остальные ряды и слои — по-старому (заливка/центровка): там нет
+## буквенных краёв, которым надо держать ступеньку.
 static func buttons(area: Rect2, layer: String, lang: String, shift: bool, enter := false) -> Array:
 	var rows: Array = all_rows(layer, lang, enter)
 	var out: Array = []
 	var gap := 8.0
 	var rh := (area.size.y - gap * float(rows.size() - 1)) / float(rows.size())
-	# Соты, как на настоящей клавиатуре: каждый ряд сдвинут на полклавиши
-	# относительно верхнего. Ширина при этом делится и на сдвиг тоже,
-	# чтобы ряд кончался ровно у правого края (решение 10.2026).
+	var ru_letters := lang == "ru" and layer != "sym"
+	var pitch := -1.0
+	for row in rows:
+		var n1 := 0
+		var wide := false
+		for label in row:
+			if _span(String(label)) != 1.0:
+				wide = true
+			else:
+				n1 += 1
+		if n1 <= 0:
+			continue
+		var u := (area.size.x - gap * float(row.size() - 1)) / float(n1)
+		if wide:
+			# Ряд со стиранием/шифтом: буквы плюс достойные края.
+			u = (area.size.x - gap * float(row.size() - 1) - 64.0) / float(n1)
+		if pitch < 0.0:
+			pitch = u
+		else:
+			pitch = minf(pitch, u)
+	if pitch < 1.0:
+		pitch = 24.0
+	# Русские буквенные ряды: общий питч и ступеньки с референса.
+	var ru_p := 0.0
+	var ru_a := 0.0
+	var ru_b := 0.0
+	if ru_letters and rows.size() >= 4:
+		var w := area.size.x
+		ru_p = minf((w - 10.0 * gap) / 11.0, (w - 11.0 * gap - 60.0) / 10.0)
+		ru_p = minf(ru_p, (2.0 * w - 19.0 * gap + 28.0) / 23.0)
+		ru_p = maxf(ru_p, 16.0)
+		ru_b = w - 10.0 * ru_p - 11.0 * gap - 28.0
+		ru_b = maxf(ru_b, 28.0)
+		ru_a = ru_b / 3.0
 	for ri in rows.size():
 		var row: Array = rows[ri]
-		var total_units := 0.0
-		for label in row:
-			total_units += _span(String(label))
-		var unit := (area.size.x - gap * float(row.size() - 1)) / (total_units + float(ri) * 0.5)
-		var x := area.position.x + float(ri) * unit * 0.5
+		var x := area.position.x
 		var y := area.position.y + float(ri) * (rh + gap)
+		# Русские буквенные ряды (цифры, й, ф, я): питч и ступеньки.
+		if ru_letters and (ri == 1 or ri == 2 or ri == 3):
+			var inset := 0.0
+			if ri == 2:
+				inset = ru_a
+			elif ri == 3:
+				inset = ru_b
+			x += inset
+			if ri == 3:
+				# Шифт — во всю ступеньку (как настоящий левый шифт).
+				var sh := "⇧"
+				out.append({"r": Rect2(area.position.x, y, ru_b, rh), "s": sh})
+				x += gap
+			for label in row:
+				var s := String(label)
+				if s == "⇧" or s == "←":
+					continue
+				if shift and s.length() == 1 and s != "←" and s != "⇧":
+					s = s.to_upper()
+				out.append({"r": Rect2(x, y, ru_p, rh), "s": s})
+				x += ru_p + gap
+			if ri == 3:
+				# Стереть — ровно остаток до правого края (≥28px).
+				out.append({"r": Rect2(x, y, area.position.x + area.size.x - x, rh), "s": "←"})
+			continue
+		# Крайние широкие без пробела (⇧/←): впитывают остаток.
+		var lead := -1
+		var trail := -1
+		var has_fill := false
+		for bi in row.size():
+			var sp := _span(String(row[bi]))
+			if sp != 1.0 and String(row[bi]) != "пробел":
+				if lead < 0:
+					lead = bi
+				trail = bi
+			if String(row[bi]) == "пробел":
+				has_fill = true
+		if has_fill or lead < 0:
+			# Пробел тянется (старый счёт) или ряд чисто из одиночных:
+			# остаток (если есть) — поровну по бокам.
+			var total_units := 0.0
+			for label in row:
+				total_units += _span(String(label))
+			if has_fill:
+				var unit := (area.size.x - gap * float(row.size() - 1)) / total_units
+				for label in row:
+					var w0 := unit * _span(String(label))
+					var s0 := String(label)
+					if shift and s0.length() == 1 and s0 != "←" and s0 != "⇧":
+						s0 = s0.to_upper()
+					out.append({"r": Rect2(x, y, w0, rh), "s": s0})
+					x += w0 + gap
+			else:
+				var n1b := row.size()
+				var left := (area.size.x - (float(n1b) * pitch + gap * float(n1b - 1))) * 0.5
+				x += left
+				for label in row:
+					var s1 := String(label)
+					if shift and s1.length() == 1 and s1 != "←" and s1 != "⇧":
+						s1 = s1.to_upper()
+					out.append({"r": Rect2(x, y, pitch, rh), "s": s1})
+					x += pitch + gap
+			continue
+		# Ряд со стиранием/шифтом: одиночные — питчем, края — остатком.
+		var singles := 0
 		for label in row:
-			var w := unit * _span(String(label))
-			var s := String(label)
+			if _span(String(label)) == 1.0:
+				singles += 1
+		var rest := area.size.x - (float(singles) * pitch + gap * float(row.size() - 1))
+		var widths := []
+		for bi in row.size():
+			var lab := String(row[bi])
+			if _span(lab) == 1.0:
+				widths.append(pitch)
+			elif bi == lead:
+				widths.append(maxf(rest - 32.0, 32.0))
+			else:
+				widths.append(32.0)
+		for bi in row.size():
+			var s := String(row[bi])
 			if shift and s.length() == 1 and s != "←" and s != "⇧":
 				s = s.to_upper()
-			out.append({"r": Rect2(x, y, w, rh), "s": s})
-			x += w + gap
+			out.append({"r": Rect2(x, y, float(widths[bi]), rh), "s": s})
+			x += float(widths[bi]) + gap
 	return out
 
 
