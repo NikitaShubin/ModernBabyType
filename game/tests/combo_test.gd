@@ -652,6 +652,18 @@ func _kbd_on() -> void:
 
 
 ## Центры клавиш своей клавиатуры: «буква → точка».
+## Модификаторное событие как от настоящей клавиатуры: код клавиши плюс
+## нажатые Ctrl/Alt/Shift.
+func _mod_key(code: int, ctrl: bool, alt: bool) -> InputEventKey:
+	var ev := InputEventKey.new()
+	ev.keycode = code
+	ev.ctrl_pressed = ctrl
+	ev.alt_pressed = alt
+	ev.shift_pressed = ctrl or alt
+	ev.pressed = true
+	return ev
+
+
 func _kbd_buttons() -> Dictionary:
 	var out := {}
 	for b in Kbd.buttons(_main._own_rect(), _main.kb_shift):
@@ -1272,9 +1284,12 @@ func _case_sym_layer_hint() -> void:
 		_check(false, "%s: the test level lost its symbol" % tag)
 		return
 	var want: String = _main._current()
-	var digit: String = Kbd.digit_for(want)
-	_check(digit != "", "%s: «%s» has no Shift+digit way" % [tag, want])
-	if digit == "":
+	var combo := Kbd.combo_for(want, _main.kb_lang)
+	var need_shift: bool = not combo.is_empty() and bool(combo[1])
+	var digit: String = String(combo[0]) if not combo.is_empty() else ""
+	_check(not combo.is_empty(), "%s: «%s» has no way on the board" % [tag, want])
+	if not need_shift:
+		_check(false, "%s: «%s» is not taught with Shift (%s)" % [tag, want, str(combo)])
 		return
 	var hint: String = _main._hint_text()
 	_check(hint.contains("Shift"), "%s: the hint does not teach Shift (%s)" % [tag, hint])
@@ -1675,26 +1690,74 @@ func _case_shift_hands() -> void:
 	_common(tag)
 
 
-## 43. Обратный слеш: клавиша есть (как на настоящей) и печатается.
-## В текстах его нет, поэтому просто жмём: либо принимается, либо
-## ровно одна честная метка — главное, что знак доходит до игры.
+## 43. Обратный слеш: своей клавиши у него нет — он живёт на ключе
+## слева от правого шифта, в английской раскладке и с шифтом, как на
+## настоящей (требование автора 10.2026: «у обратного слеша тоже есть
+## перегрузка»). Проверяем и доску, и подсказку, и что игра знак
+## принимает.
 func _case_backslash_key() -> void:
 	_fresh(0, 1)
 	_kbd_on()
 	var tag := "backslash"
 	var btns := _kbd_buttons()
-	if not btns.has("\\"):
-		_check(false, "%s: no backslash key" % tag)
+	if not btns.has("/"):
+		_check(false, "%s: no key left of the right shift" % tag)
 		return
+	var combo := Kbd.combo_for("\\", "en")
+	_check(
+		not combo.is_empty() and String(combo[0]) == "/" and bool(combo[1])
+		and String(combo[2]) == "en",
+		"%s: the backslash is not taught as en+shift on that key (%s)" % [tag, str(combo)]
+	)
+	_check(
+		Kbd.press_out("/", "en", true) == "\\",
+		"%s: that key does not type the backslash in english" % tag
+	)
+	_check(
+		Kbd.small_legends("/", "ru", false).has("\\"),
+		"%s: the backslash is not printed on the key" % tag
+	)
 	var marks0: int = _main.errors.size()
 	var ok0: int = _main.typed_ok
-	_main._own_press(btns["\\"])
+	_main.kb_lang = "en"
+	_main._own_press(btns["Shift"])
 	_tick(tag)
+	_main._own_press(btns["/"])
+	_tick(tag)
+	_main.kb_shift = false
+	_main.kb_lang = "ru"
 	_common(tag)
 	_check(
 		_main.typed_ok == ok0 + 1 or _main.errors.size() == marks0 + 1,
 		"%s: the backslash press vanished" % tag
 	)
+
+
+## 44. Смена языка ввода сочетанием клавиш (Ctrl+Shift или Alt+Shift,
+## как в Windows) — синоним глобуса: своя доска обязана переехать на
+## другой алфавит, иначе игра учит не той букве (жалоба автора 10.2026).
+func _case_lang_hotkey() -> void:
+	_fresh(0, 1)
+	_kbd_on()
+	var tag := "lang hotkey"
+	var before: String = _main.kb_lang
+	_main.call("_unhandled_key_input", _mod_key(KEY_SHIFT, true, false))
+	_check(_main.kb_lang != before, "%s: ctrl+shift did not switch the input language" % tag)
+	var after: String = _main.kb_lang
+	# Тот же ключ без модификатора — обычный шифт доски, язык не трогаем.
+	_main.kb_shift = false
+	_main.call("_unhandled_key_input", _key(KEY_SHIFT))
+	_check(_main.kb_lang == after, "%s: a plain shift changed the language" % tag)
+	# Alt+Shift — вторая форма того же сочетания.
+	_main.call("_unhandled_key_input", _mod_key(KEY_SHIFT, false, true))
+	_check(_main.kb_lang != after, "%s: alt+shift did not switch back" % tag)
+	# Сочетание с обычной клавишей — не переключение (иначе Ctrl+Shift+S
+	# на компьютере ронял бы язык при каждом сохранении).
+	var keep: String = _main.kb_lang
+	_main.call("_unhandled_key_input", _mod_key(KEY_S, true, false))
+	_check(_main.kb_lang == keep, "%s: ctrl+shift+letter switched the language" % tag)
+	_main.kb_lang = "ru"
+	_main.kb_shift = false
 
 
 ## 18. Автопунктуация IME: точка с настоящим keycode, когда игра ждёт
@@ -2029,6 +2092,7 @@ func _process(_dt: float) -> bool:
 	_case_reflow_typed_cells()
 	_case_shift_hands()
 	_case_backslash_key()
+	_case_lang_hotkey()
 	_case_chaos(1500)
 	_cases = 40
 	_check(_steps > 1200, "the test really played (coverage: %d steps)" % _steps)

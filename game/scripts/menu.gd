@@ -123,17 +123,12 @@ func _own_press(pos: Vector2) -> bool:
 	elif act == "пробел":
 		pass  # в имени пробелов не бывает
 	else:
-		# Шифт + цифра даёт знак (как на настоящей клавиатуре), а буква
-		# идёт на языке ввода: та же клавиша в английском даёт латиницу.
-		var out := Kbd.shift_digit(act) if kb_shift else ""
+		# Шифт + клавиша — знак или заглавная, буква идёт на языке
+		# ввода (та же клавиша в английском даёт латиницу).
+		var ch := Kbd.press_out(act, kb_lang, kb_shift)
 		kb_shift = false
-		var ch := out if out != "" else act
-		if kb_lang == "en":
-			var en := Kbd.pair_of(ch.to_lower())
-			if en != "":
-				ch = en.to_upper() if act == act.to_upper() and act != act.to_lower() else en
 		if input_text.length() < S.MAX_NAME_LENGTH:
-			input_text += ch
+			input_text += ch if ch != "" else act
 	queue_redraw()
 	get_viewport().set_input_as_handled()
 	return true
@@ -255,6 +250,16 @@ func _reload() -> void:
 	queue_redraw()
 
 
+
+## Переключает ли это событие язык ввода? В Windows раскладку меняют
+## Ctrl+Shift или Alt+Shift, и доке в том, что система их поймает, нет —
+## слушаем сами. Ловим только сами модификаторы: сочетание с обычной
+## клавишей (Ctrl+Shift+S) — это не переключение раскладки.
+func _lang_hotkey(ke: InputEventKey) -> bool:
+	if not ke.shift_pressed or not (ke.ctrl_pressed or ke.alt_pressed):
+		return false
+	return ke.keycode == KEY_SHIFT or ke.keycode == KEY_CTRL or ke.keycode == KEY_ALT
+
 func _unhandled_key_input(event: InputEvent) -> void:
 	var ke := event as InputEventKey
 	if ke == null:
@@ -298,6 +303,13 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		_eaten()
 		return
 	# F2 — вернуться в игру тем же игроком, кого открыли меню.
+	# Смена языка ввода сочетанием клавиш (Ctrl+Shift / Alt+Shift) —
+	# тот же синоним, что глобус (см. _lang_hotkey в игре).
+	if _lang_hotkey(ke):
+		kb_lang = "en" if kb_lang == "ru" else "ru"
+		queue_redraw()
+		_eaten()
+		return
 	if ke.keycode == KEY_F2:
 		chosen.emit(resume_user)
 		_eaten()

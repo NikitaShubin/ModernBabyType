@@ -987,11 +987,30 @@ func _skip_inactive() -> void:
 		_advance()
 
 
+
+## Переключает ли это событие язык ввода? В Windows раскладку меняют
+## Ctrl+Shift или Alt+Shift, и доке в том, что система их поймает, нет —
+## слушаем сами. Ловим только сами модификаторы: сочетание с обычной
+## клавишей (Ctrl+Shift+S) — это не переключение раскладки.
+func _lang_hotkey(ke: InputEventKey) -> bool:
+	if not ke.shift_pressed or not (ke.ctrl_pressed or ke.alt_pressed):
+		return false
+	return ke.keycode == KEY_SHIFT or ke.keycode == KEY_CTRL or ke.keycode == KEY_ALT
+
 func _unhandled_key_input(event: InputEvent) -> void:
 	var ke := event as InputEventKey
 	if ke == null:
 		return
 	if not ke.pressed or ke.echo:
+		return
+	# Смена языка ввода сочетанием клавиш (Ctrl+Shift / Alt+Shift — так
+	# переключают раскладку в Windows) должна двигать и нашу доску: раньше
+	# подсветка оставалась от старого языка, и игра учила не той букве
+	# (жалоба автора 10.2026). Глобус и это сочетание — синоним.
+	if _lang_hotkey(ke):
+		kb_lang = "en" if kb_lang == "ru" else "ru"
+		queue_redraw()
+		get_viewport().set_input_as_handled()
 		return
 	_poke_idle()
 	if ke.keycode == KEY_ESCAPE:
@@ -1752,17 +1771,17 @@ func _hint_parts() -> Array:
 			{"s": cur, "cap": true},
 		]
 
-	# Символа нет на этом слое — учим настоящему вводу: знаки идут
-	# шифтом с верхней цифры (Shift+6 даёт «:»). Обычные буквы проверять
-	# незачем: на буквенном слое они есть всегда.
-	if not Kbd.is_plain_letter(cur) and not Kbd.has_key(kb_shift, cur):
-		var digit := Kbd.digit_for(cur)
-		if digit != "":
+	# Знак без буквы: учим настоящему вводу — шифт с той клавиши, где
+	# он живёт (Shift+6 даёт «:», Shift+ю — точку). Обычные буквы
+	# проверять незачем: на буквенном слое они есть всегда.
+	if not Kbd.is_plain_letter(cur):
+		var combo := Kbd.combo_for(cur, kb_lang)
+		if not combo.is_empty() and bool(combo[1]):
 			return [
 				{"s": "Жми:", "cap": false},
 				{"s": "Shift", "cap": true},
 				{"s": "+", "cap": false},
-				{"s": digit, "cap": true},
+				{"s": String(combo[0]), "cap": true},
 			]
 	return []
 
@@ -2122,24 +2141,23 @@ func _hint_keys() -> Array:
 		return []
 	if cur == " ":
 		return ["пробел:Л" if last_hand == "П" else "пробел:П"]
-	if _is_latin(cur) != (kb_lang == "en"):
+	return _keys_for(cur)
+
+
+## Какие клавиши подсветить для знака. Единый путь на все легенды доски
+## (Kbd.combo_for): у букв это сама клавиша, у заглавных — шифт с ней,
+## у знаков — та клавиша и тот шифт, где знак живёт (точка — шифт с «ю»,
+## запятая — ключ слева от шифта, «?» — Shift+7), а если знак достаётся
+## только чужой раскладкой — сперва глобус.
+func _keys_for(sym: String) -> Array:
+	var combo := Kbd.combo_for(sym, kb_lang)
+	if combo.is_empty():
+		return []
+	if String(combo[2]) != kb_lang:
 		return ["глобус"]
-	if _is_latin(cur):
-		# Латиница при включённом английском: клавиша подписана
-		# по-русски, а пара у неё латинская — подсвечиваем физическую.
-		var ru := Kbd.pair_of(cur.to_lower())
-		if ru != "":
-			if _exact() and cur == cur.to_upper():
-				return [_opp_shift(ru), ru]
-			return [ru]
-	if _exact() and cur == cur.to_upper() and cur != cur.to_lower():
-		return [_opp_shift(cur.to_lower()), cur.to_lower()]
-	if not Kbd.is_plain_letter(cur) and not Kbd.has_key(kb_shift, cur):
-		# Знаки — шифтом с верхней цифры (настоящая клавиатура).
-		var digit := Kbd.digit_for(cur)
-		if digit != "":
-			return [_opp_shift(digit), digit]
-	return [cur]
+	if bool(combo[1]):
+		return [_opp_shift(String(combo[0])), String(combo[0])]
+	return [String(combo[0])]
 
 
 ## Шифт противоположной руки от клавиши: буква/цифра левой зоны — правый
@@ -2195,17 +2213,11 @@ func _own_press(pos: Vector2) -> bool:
 		kb_shift = false
 		_type_char(" ")
 	else:
-		# Шифт + цифра даёт знак (как на настоящей клавиатуре), шифт
-		# при этом гаснет — как после заглавной буквы. А буква идёт на
-		# языке ввода: та же клавиша в английском даёт латиницу.
-		var out := Kbd.shift_digit(act) if kb_shift else ""
+		# Шифт + клавиша — знак или заглавная, буква идёт на языке
+		# ввода; шифт гаснет, как на настоящей клавиатуре.
+		var ch := Kbd.press_out(act, kb_lang, kb_shift)
 		kb_shift = false
-		var ch := out if out != "" else act
-		if kb_lang == "en":
-			var en := Kbd.pair_of(ch.to_lower())
-			if en != "":
-				ch = en.to_upper() if act == act.to_upper() and act != act.to_lower() else en
-		_type_char(ch)
+		_type_char(ch if ch != "" else act)
 	queue_redraw()
 	get_viewport().set_input_as_handled()
 	return true

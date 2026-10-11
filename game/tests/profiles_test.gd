@@ -1110,6 +1110,14 @@ func _part19_menu_typing() -> void:
 	_check(String(_menu.input_text) != text_before or String(_menu.input_text).length() >= 1,
 		"own keyboard types into the field")
 	_menu.input_text = ""
+	# Смена языка ввода сочетанием клавиш — тот же синоним, что глобус
+	# (жалоба автора 10.2026: «на смену языка ввода сочетанием клавиш
+	# виртуальная клавиатура не реагирует»).
+	_menu.kb_lang = "ru"
+	_menu.call("_unhandled_key_input", _mod(KEY_SHIFT, true, false))
+	_check(String(_menu.kb_lang) == "en", "the menu follows ctrl+shift")
+	_menu.call("_unhandled_key_input", _mod(KEY_SHIFT, false, true))
+	_check(String(_menu.kb_lang) == "ru", "and alt+shift brings it back")
 	_menu.input_active = false
 
 
@@ -1216,6 +1224,18 @@ func _letters_on_screen() -> int:
 func _key(code: int) -> InputEventKey:
 	var ev := InputEventKey.new()
 	ev.keycode = code
+	ev.pressed = true
+	return ev
+
+
+## Модификаторное событие как от настоящей клавиатуры (Ctrl+Shift,
+## Alt+Shift — так в Windows переключают язык ввода).
+func _mod(code: int, ctrl: bool, alt: bool) -> InputEventKey:
+	var ev := InputEventKey.new()
+	ev.keycode = code
+	ev.ctrl_pressed = ctrl
+	ev.alt_pressed = alt
+	ev.shift_pressed = ctrl or alt
 	ev.pressed = true
 	return ev
 

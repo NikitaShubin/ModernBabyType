@@ -292,6 +292,7 @@ func _process(_dt: float) -> bool:
 		_check(_main.state == "playing", "no catch from far behind")
 		_run_part2()
 		_text_coverage()
+		_legend_roundtrip()
 		_report()
 		return true
 	return false
@@ -309,16 +310,15 @@ func _text_coverage() -> void:
 	# Прямо клавишей, заглавной через шифт или знаком через шифт
 	# (Shift+6 даёт «:», Shift+. — запятую).
 	var direct := {}
-	var shifted := {}
-	# Доска одна (русская физическая): язык меняет ввод и подсветку,
-	# а не ряды. Shift даёт заглавные и знаки.
+	# Всё, что вообще вводится доской: обе раскладки, оба состояния
+	# шифта. Раньше здесь считали только «цифра + один знак», а на
+	# клавише знаков больше трёх (требование автора 10.2026).
 	for b in K.buttons(Rect2(0, 0, 1200, 500), false):
-			var s := String(b["s"])
-			direct[s] = true
-			shifted[s.to_upper()] = true
-			var sym := K.shift_digit(s)
-			if sym != "":
-				shifted[sym] = true
+		for lang in ["ru", "en"]:
+			for sh in [false, true]:
+				var out := K.press_out(String(b["s"]), lang, sh)
+				if out != "":
+					direct[out] = true
 	direct[" "] = true
 	var missing := {}
 	var dir := DirAccess.open("res://texts")
@@ -335,7 +335,7 @@ func _text_coverage() -> void:
 							var ch := line.substr(i, 1)
 							if ch == "":
 								continue
-							if not direct.has(ch) and not shifted.has(ch):
+							if not direct.has(ch):
 								missing[ch] = true
 			f = dir.get_next()
 		dir.list_dir_end()
@@ -344,6 +344,66 @@ func _text_coverage() -> void:
 	_check(K.pair_of("й") == "q" and K.pair_of("q") == "й", "yo-q pair both ways")
 	_check(K.pair_of("э") == "'" and K.pair_of(";") == "ж", "edge pairs")
 	_check(K.pair_of("ё") == "`" and K.pair_of("5") == "", "digits have no language pair")
+
+
+## Легенды доски: у клавиши бывает до четырёх знаков (требование автора
+## 10.2026 — «на некоторых кнопках не 2, а 3 знака, а слева от правого
+## шифта вообще 4»), и каждый напечатанный знак обязан набираться. Если
+## знак напечатан, но не набирается — игра требует невозможного.
+func _legend_roundtrip() -> void:
+	for b in K.buttons(Rect2(0, 0, 1200, 500), false):
+		var key := String(b["s"])
+		for lg in K.legends(key):
+			var sym := String(lg)
+			_check(sym != "", "empty legend on %s" % key)
+			if sym == "":
+				continue
+			var combo := K.combo_for(sym, "ru")
+			_check(
+				not combo.is_empty()
+				and K.press_out(String(combo[0]), String(combo[2]), bool(combo[1])) == sym,
+				"«%s» (on %s) is reachable: %s" % [sym, key, str(combo)]
+			)
+	# Что лежит на конкретных клавишах — настоящая раскладка.
+	_check(
+		K.legends("/") == [",", ".", "/", "\\"],
+		"the key left of the right shift carries four signs"
+	)
+	_check(K.legends("2") == ["2", "\"", "2", "@"], "digit 2 carries both layouts' signs")
+	_check(K.legends("ю") == ["ю", "Ю", ".", ">"], "ю keeps its capital, the dot is typed on its own key")
+	_check(K.legends("ё") == ["ё", "Ё", "`", "~"], "ё is a letter key with the backquote pair")
+	_check(
+		K.legends("х") == ["х", "Х", "[", "{"] and K.legends("э") == ["э", "Э", "'", "\""],
+		"keys whose latin pair is punctuation carry the us shift sign"
+	)
+	# Одна клавиша — две буквы: по центру та, что язык сейчас даёт.
+	_check(
+		K.press_out("ф", "ru", false) == "ф" and K.press_out("ф", "en", false) == "a",
+		"the same key types its own letter in each layout"
+	)
+	_check(
+		K.small_legends("ф", "ru", false) == ["a"],
+		"the other layout's letter is shown small"
+	)
+	_check(
+		K.small_legends("ф", "en", false) == ["ф"],
+		"switching the language swaps which letter stands in the middle"
+	)
+	_check(K.combo_for(".") == ["/", true, "ru"], "the dot is taught as shift on its own key")
+	_check(K.combo_for(",") == ["/", false, "ru"], "the comma is a key of its own")
+	_check(K.combo_for("?") == ["7", true, "ru"], "the question mark is shift+7")
+	_check(K.combo_for(":") == ["6", true, "ru"], "the colon is shift+6")
+	_check(K.combo_for("a") == ["ф", false, "en"], "latin is taught through its own key")
+	# Низ доски: слева Ctrl/Win/Alt, справа от пробела — Alt и Ctrl
+	# (требование автора 10.2026), знаков там больше нет.
+	var bottom := K.bottom_row(false)
+	var bi := bottom.find("пробел")
+	_check(
+		bottom.rfind("Alt") > bi and bottom.rfind("Ctrl") > bi,
+		"alt and ctrl sit to the right of space"
+	)
+	for gone in [".", "-", "\\"]:
+		_check(not bottom.has(gone), "«%s» left the bottom row" % gone)
 
 
 func _report() -> void:

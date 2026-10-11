@@ -230,6 +230,28 @@ func _a_idle_hint() -> void:
 	_main._relayout()
 
 
+## Легенды клавиш: по центру то, что вводится сейчас, по углам остальные
+## (требование автора 10.2026 — на цифрах три знака, на ключе слева от
+## правого шифта четыре). Три кадра: русский без шифта, русский с
+## шифтом и английский — видно, что центральная буква меняется.
+func _a_kb_ru() -> void:
+	_win(Vector2i(820, 1180))
+	_main._force_touch = true
+	_main.kb_lang = "ru"
+	_main.kb_shift = false
+	_set_text("Мама мыла раму:", "Аня, где ёлка?", 0)
+	_main._relayout()
+
+
+func _a_kb_ru_shift() -> void:
+	_main.kb_shift = true
+
+
+func _a_kb_en() -> void:
+	_main.kb_shift = false
+	_main.kb_lang = "en"
+
+
 func _a_sym_hint() -> void:
 	_win(Vector2i(820, 1180))
 	_main._force_touch = true
@@ -431,4 +453,8 @@ func _plan() -> void:
 		["25-sym-hint", _a_sym_hint, 30],
 		# 16. Подсветка клавиши после простоя.
 		["26-idle-hint", _a_idle_hint, 30],
+		# 17. Легенды клавиш: русский, русский с шифтом, английский.
+		["27-kbd-ru", _a_kb_ru, 30],
+		["28-kbd-ru-shift", _a_kb_ru_shift, 20],
+		["29-kbd-en", _a_kb_en, 20],
 	]

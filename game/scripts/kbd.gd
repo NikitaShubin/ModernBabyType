@@ -27,24 +27,132 @@ const ROW_DIGITS_RU: Array = ["ё", "1", "2", "3", "4", "5", "6", "7", "8", "9",
 ## ряда. Отдельных клавиш Tab/Caps/Enter-слева нет (им нечего делать в
 ## игре), поэтому ступеньки идут от края — честная адаптация narrow-рядов,
 ## а не копия вслепую.
+## Ключ слева от правого шифта — знаковый: в русской раскладке он «,» и
+## «?», в английской «/» и «\» (четыре знака на одной клавише, как на
+## настоящей — требование автора 10.2026).
 const ROWS_RU: Array = [
 	["й", "ц", "у", "к", "е", "н", "г", "ш", "щ", "з", "х", "ъ"],
 	["ф", "ы", "в", "а", "п", "р", "о", "л", "д", "ж", "э", "↵"],
-	["Shift", "я", "ч", "с", "м", "и", "т", "ь", "б", "ю", ".", "ShiftR"],
+	["Shift", "я", "ч", "с", "м", "и", "т", "ь", "б", "ю", "/", "ShiftR"],
 ]
 
 ## Отдельных латинских рядов больше нет: доска одна (русская физическая),
 ## а латиница набирается теми же клавишами (см. пару RU_EN и kb_lang).
 
-## Низ доски: язык, пробел и прямые знаки. Слоя ?123 больше нет: все
-## знаки идут шифтом с цифр или прямыми клавишами, как на настоящей
-## (решение 10.2026). Запятая — тоже шифтом (Shift+.): отдельной клавиши
-## нет. В меню вместо «?» — ввод (↵): имя надо чем-то заканчивать.
+## Низ доски: язык, пробел и служебные клавиши настоящей клавиатуры.
+## Слева Ctrl, Win, Alt — как на PC; справа от пробела Alt и Ctrl, как
+## на настоящей (требование автора 10.2026). Всё это в наборе не
+## участвует: подпись приглушена, нажатие мимо. В меню последней
+## клавишей вместо Ctrl — ввод (↵): имя надо чем-то заканчивать.
 static func bottom_row(enter: bool) -> Array:
-	var last := "↵" if enter else "\\"
 	if enter:
-		return ["Ctrl", "Win", "Alt", "глобус", "пробел", last]
-	return ["Ctrl", "Win", "Alt", "глобус", "пробел", ".", "-", last]
+		return ["Ctrl", "Win", "Alt", "глобус", "пробел", "Alt", "↵"]
+	return ["Ctrl", "Win", "Alt", "глобус", "пробел", "Alt", "Ctrl"]
+
+
+## Знаки с цифр в русской раскладке (ЙЦУКЕН, «Русская» в Windows):
+## 1→! 2→" 3→№ 4→; 5→% 6→: 7→? 8→* 9→( 0→) -→_ =→+
+const RU_SHIFT := {
+	"1": "!", "2": "\"", "3": "№", "4": ";", "5": "%",
+	"6": ":", "7": "?", "8": "*", "9": "(", "0": ")",
+	"-": "_", "=": "+",
+}
+
+## Те же клавиши в английской: часть символов совпадает, часть другая
+## (2→@ 3→# 4→$ 6→^ 7→&) — из-за этого на цифровой клавише три знака.
+const EN_SHIFT := {
+	"1": "!", "2": "@", "3": "#", "4": "$", "5": "%",
+	"6": "^", "7": "&", "8": "*", "9": "(", "0": ")",
+	"-": "_", "=": "+",
+}
+
+## Клавиши с перегрузкой (требование автора 10.2026: на некоторых
+## клавишах не два, а три знака, а на ключе слева от правого шифта
+## вообще четыре). «ё» — буква, чья пара в английской раскладке обратный
+## апостроф; ключ слева от правого шифта — «,» и точка по-русски,
+## «/» и обратный слеш по-английски (точка нужна текстам, а «?» и так
+## живёт на Shift+7).
+## Порядок: [русская, русская+шифт, английская, английская+шифт].
+const OVERLOAD := {
+	"/": [",", ".", "/", "\\"],
+}
+
+## Знаки с шифтом у тех клавиш, чья пара в английской раскладке — сама
+## пунктуация (на настоящей: { выше [, } выше ], : выше ;, " выше ',
+## < выше ,, > выше .). Для букв это заглавная, и там to_upper() достаёт.
+const US_SHIFT := {
+	"[": "{", "]": "}", ";": ":", "'": "\"", ",": "<", ".": ">",
+	"/": "?", "\\": "|", "`": "~",
+}
+
+
+## Легенды клавиши: [русская, русская+шифт, английская, английская+шифт].
+## Настоящая раскладка, а не придумка: у цифр часть знаков с шифтом в
+## двух языках разная (2 → " / @, 3 → № / #, 4 → ; / $, 6 → : / ^,
+## 7 → ? / &), поэтому на клавише три знака, а не два (требование
+## автора 10.2026). У букв это заглавные + пара раскладки.
+static func legends(s: String) -> Array:
+	if OVERLOAD.has(s):
+		return Array(OVERLOAD[s])
+	if RU_SHIFT.has(s):
+		return [s, String(RU_SHIFT[s]), s, String(EN_SHIFT[s])]
+	var pair := pair_of(s)
+	if pair != "" and s.length() == 1:
+		return [s, s.to_upper(), pair, String(US_SHIFT.get(pair, pair.to_upper()))]
+	return []
+
+
+## Что введёт нажатие этой клавиши при данном языке и шифте. Пустая
+## строка — служебная клавиша (Shift, ↵, ←, глобус, Ctrl…): её разбирает
+## вызывающий.
+static func press_out(s: String, lang: String, shift: bool) -> String:
+	var lg := legends(s)
+	if lg.is_empty():
+		return ""
+	return String(lg[(2 if lang == "en" else 0) + (1 if shift else 0)])
+
+
+## Чем набрать знак: [клавиша, нужен_шифт, язык]. Пусто — нечем набрать.
+## Язык может отличаться от текущего: подсказка тогда сначала зовёт глобус,
+## а потом уже клавишу (знаки вроде «?» живут в чужой раскладке).
+## Сначала ищем в том языке, который включён — так подсказка выбирает
+## привычную руке комбинацию, а не единственную.
+static func combo_for(sym: String, prefer := "ru") -> Array:
+	if sym == "":
+		return []
+	var other := "en" if prefer == "ru" else "ru"
+	for want in [prefer, other]:
+		# Сначала без шифта: запятая — это своя клавиша, а не Shift+б
+		# (хотя и так можно). Потом с шифтом.
+		var idx := [0, 1] if want == "ru" else [2, 3]
+		for i in idx:
+			for row in all_rows(false):
+				for label in row:
+					var lg := legends(String(label))
+					# Служебные клавиши (шифт, пробел, глобус, Ctrl) легенд
+					# не имеют — их пропускаем, а не читаем по индексу.
+					if lg.size() <= i:
+						continue
+					if String(lg[i]) == sym:
+						return [String(label), i % 2 == 1, want]
+	return []
+
+
+## Мелкие подписи на клавише: все легенды, кроме активной. У букв —
+## только основания обеих раскладок (заглавные не мельчат: шифт и так
+## виден на доске), у знаков — все, их бывает по четыре.
+static func small_legends(s: String, lang: String, shift: bool) -> Array:
+	var lg := legends(s)
+	if lg.is_empty():
+		return []
+	var act := press_out(s, lang, shift)
+	var cands: Array = [lg[0], lg[2]] if (pair_of(s) != "" and s.length() == 1) else lg
+	var out: Array = []
+	for v in cands:
+		var t := String(v)
+		if t != act and not out.has(t):
+			out.append(t)
+	return out
 
 
 ## Все ряды слоя сверху вниз (цифры + верх + низ).
@@ -100,29 +208,9 @@ static func pair_of(s: String) -> String:
 ## настоящей клавиатуре (решение 10.2026).
 
 
-## Есть ли такая клавиша на этом слое? Игра так учит ребёнка, если
-## символа на текущем слое нет: «:» и «-» живут только на знаках, а
-## подсказка молчала «Жми: :» — набирать было нечем (визуальный прогон
-## 10.2026).
-##
-## Смотрим ТОЛЬКО подписи рядов, без прямоугольников: подсказка
-## пересчитывается каждый кадр, и пятьдесят выделенных Rect2 и словарей
-## на кадр — это мусор в куче на телефоне (проверено: было именно так).
-static func has_key(shift: bool, s: String) -> bool:
-	if s == "":
-		return false
-	for row in all_rows(false):
-		for label in row:
-			var lab := String(label)
-			if shift and lab.length() == 1 and lab != "←" and lab != "Shift" and lab != "ShiftR":
-				lab = lab.to_upper()
-			if lab == s:
-				return true
-	return false
-
-
 ## Обычная буква или пробел — на буквенном слое есть всегда, проверять
-## нечего.
+## нечего. Знаки сюда не относятся: на буквенных клавишах их нет, они
+## живут на цифрах и на ключе слева от правого шифта (см. combo_for).
 static func is_plain_letter(s: String) -> bool:
 	if s.length() != 1:
 		return false
@@ -133,66 +221,6 @@ static func is_plain_letter(s: String) -> bool:
 	if lo == "ё":
 		return true
 	return lo >= "а" and lo <= "я" or lo >= "a" and lo <= "z"
-
-
-## Шифт + цифра верхней строки — как на настоящей клавиатуре: знаки
-## препинания там набираются шифтом, а не слоем ?123 (а мы учим человека
-## реальной, а не виртуальной клавиатуре — решение 10.2026). Пусто —
-## цифра без пары (или не цифра вовсе).
-static func shift_digit(s: String) -> String:
-	match s:
-		"1":
-			return "!"
-		"2":
-			return "\""
-		"3":
-			return "№"
-		"4":
-			return ";"
-		"5":
-			return "%"
-		"6":
-			return ":"
-		"7":
-			return "?"
-		"8":
-			return "*"
-		"9":
-			return "("
-		"0":
-			return ")"
-		".":
-			return ","
-	return ""
-
-
-## Обратная к shift_digit: какой клавишей с шифтом набрать этот знак.
-## Пусто — знак так не набирается.
-static func digit_for(sym: String) -> String:
-	match sym:
-		"!":
-			return "1"
-		"\"":
-			return "2"
-		"№":
-			return "3"
-		";":
-			return "4"
-		"%":
-			return "5"
-		":":
-			return "6"
-		"?":
-			return "7"
-		"*":
-			return "8"
-		"(":
-			return "9"
-		")":
-			return "0"
-		",":
-			return "."
-	return ""
 
 
 ## Широкие кнопки (долей ширины ряда): пробел тройной, шифт
@@ -460,18 +488,32 @@ static func draw(
 		var f := key_fs
 		if s == "пробел":
 			f = maxi(int(float(fs) * 0.75), int(rh * 0.24))
-		if s == "Shift" or s == "ShiftR":
-			# «Shift» обязано влезать в узкую клавишу (на маленьком экране
-			# шифт едва шире пальца): кегль ужимается под ширину.
+		if shown.length() > 1:
+			# Слова на служебных клавишах (Shift, Ctrl, Win, Alt) обязаны
+			# влезать в узкую клавишу: на маленьком экране шифт едва шире
+			# пальца, а «Ctrl» ещё и обрезался краем экрана.
 			while f > 10:
 				var probe := font.get_string_size(shown, HORIZONTAL_ALIGNMENT_LEFT, -1.0, f).x
 				if probe <= r.size.x - 12.0:
 					break
 				f -= 2
+		# Клавиша со знаками: по центру — та, что вводится сейчас (язык
+		# и шифт), по углам мелко — остальные. При смене языка центральная
+		# подпись меняется местами с угловой (требование автора 10.2026:
+		# раньше по центру всегда стояла русская буква).
+		if not legends(s).is_empty():
+			# У букв второй раскладки почти тот же размер, как у первой
+			# (на настоящей клавиатуре они напечатаны одинаково), у знаков
+			# — мельче: их на клавише по три-четыре.
+			if pair_of(s) != "" and s.length() == 1:
+				sub_fs = maxi(int(float(f) * 0.66), int(rh * 0.24))
+			_draw_legends(ci, r, font, s, lang, shift, f, sub_fs, ink, dim)
+			continue
+		# Служебная клавиша: одна подпись по центру. Заблокированные
+		# (Ctrl/Win/Alt) в наборе не участвуют — приглушены, чтобы не
+		# звать палец.
 		var tw := font.get_string_size(shown, HORIZONTAL_ALIGNMENT_LEFT, -1.0, f).x
 		var th := font.get_height(f)
-		# Заблокированные (Ctrl/Win/Alt): в наборе не участвуют, подпись
-		# приглушена, чтобы не звали палец.
 		var blocked := s == "Ctrl" or s == "Win" or s == "Alt"
 		ci.draw_string(
 			font,
@@ -479,29 +521,50 @@ static func draw(
 			" " if s == "пробел" else shown,
 			HORIZONTAL_ALIGNMENT_LEFT, -1.0, f, dim if blocked else ink
 		)
-		# Вторая подпись клавиши: пара из другой раскладки (у букв) или
-		# знак с шифтом (у цифр). Активная светится ярче.
-		var sub := ""
-		var sub_on := false
-		var pair := pair_of(s)
-		if pair != "" and s.length() == 1:
-			sub = pair
-			# Активна та раскладка, чей язык включён.
-			var ru := (s >= "а" and s <= "я") or s == "ё" or (s >= "А" and s <= "Я") or s == "Ё"
-			sub_on = (lang != "ru") if ru else (lang == "ru")
-		elif s.length() == 1:
-			var sym := shift_digit(s)
-			if sym != "":
-				sub = sym
-				sub_on = shift
-		if sub != "":
-			var stw := font.get_string_size(sub, HORIZONTAL_ALIGNMENT_LEFT, -1.0, sub_fs).x
-			ci.draw_string(
-				font,
-				Vector2(r.end.x - stw - 7.0, r.position.y + float(font.get_height(sub_fs)) * 0.85),
-				sub, HORIZONTAL_ALIGNMENT_LEFT, -1.0, sub_fs,
-				ink if sub_on else dim
-			)
+
+
+## Подписи клавиши со знаками: активная — по центру крупно, остальные
+## по трём углам мелко и приглушённо (на настоящей клавиатуре на
+## клавише тоже несколько знаков: у цифр три, у ключа слева от правого
+## шифта четыре). Кегль каждой ужимается под свой угол, иначе знак
+## вылез бы за клавишу.
+static func _draw_legends(
+	ci: CanvasItem, r: Rect2, font: Font, s: String, lang: String, shift: bool,
+	f: int, sub_fs: int, ink: Color, dim: Color
+) -> void:
+	var main := press_out(s, lang, shift)
+	var tw := font.get_string_size(main, HORIZONTAL_ALIGNMENT_LEFT, -1.0, f).x
+	ci.draw_string(
+		font,
+		Vector2(r.get_center().x - tw * 0.5, r.get_center().y + float(font.get_height(f)) * 0.3),
+		main, HORIZONTAL_ALIGNMENT_LEFT, -1.0, f, ink
+	)
+	var smalls := small_legends(s, lang, shift)
+	for i in smalls.size():
+		var t := String(smalls[i])
+		var zone := _corner(r, i)
+		var sf := sub_fs
+		while sf > 8 and font.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, sf).x > zone.size.x:
+			sf -= 1
+		var w := font.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, sf).x
+		ci.draw_string(
+			font, Vector2(zone.get_center().x - w * 0.5, zone.get_center().y + float(font.get_height(sf)) * 0.3),
+			t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, sf, dim
+		)
+
+
+## Зона угловой подписи: верхний левый, верхний правый, нижний левый —
+## как на настоящей клавише. Места под центральную подпись не режем.
+static func _corner(r: Rect2, i: int) -> Rect2:
+	var pad := 3.0
+	var w := r.size.x * 0.34
+	var h := r.size.y * 0.32
+	match i:
+		1:
+			return Rect2(r.end.x - w - pad, r.position.y + pad, w, h)
+		2:
+			return Rect2(r.position.x + pad, r.end.y - h - pad, w, h)
+	return Rect2(r.position.x + pad, r.position.y + pad, w, h)
 
 
 ## Сторона подсветки для клавиши: «Л»/«П» из записи «подпись:Л/П»,
