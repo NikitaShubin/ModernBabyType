@@ -86,6 +86,8 @@ var kb_lang := "ru"
 var kb_morph := 1.0
 var kb_morph_from := ""
 const KB_MORPH_T := 0.22
+## Состояние шифта, из которого шёл перелёт.
+var kb_morph_shift := false
 var kb_shift := false
 var kb_key_sb: StyleBoxFlat
 ## Ручной режим ночи из настроек: 0 день, 1 ночь, -1 авто (система).
@@ -106,7 +108,7 @@ func _draw_own_kb() -> void:
 	Kbd.draw(
 		self, _own_rect(), kb_lang, kb_shift, true, mono,
 		int(30.0 * k), kb_key_sb, selbox_sb, _uitext(), [], null, _dim(),
-		kb_morph, kb_morph_from
+		kb_morph, kb_morph_from, kb_morph_shift
 	)
 
 
@@ -123,7 +125,7 @@ func _own_press(pos: Vector2) -> bool:
 		# даёт другую букву, подсветка перетекает.
 		_set_kb_lang("en" if kb_lang == "ru" else "ru")
 	elif act == "шифт":
-		kb_shift = not kb_shift
+		_set_kb_shift(not kb_shift)
 	elif act == "ввод":
 		_enter()
 	elif act == "пробел":
@@ -270,10 +272,24 @@ func _follow_keyboard_lang(ch: String) -> void:
 
 ## Смена языка ввода с перелётом подписей: старая центральная буква
 ## уходит в свой угол, нужная выходит из другого угла в центр.
+## Щипок шифта: у знаков — перелёт, у букв перелёта нет (автор
+## 10.2026: между большой и малой нет мягкого перехода). Проверка на
+## букве живёт в Kbd.draw.
+func _set_kb_shift(v: bool) -> void:
+	if v == kb_shift:
+		return
+	kb_morph_from = kb_lang
+	kb_morph_shift = kb_shift
+	kb_morph = 0.0
+	kb_shift = v
+	queue_redraw()
+
+
 func _set_kb_lang(lang: String) -> void:
 	if lang == kb_lang:
 		return
 	kb_morph_from = kb_lang
+	kb_morph_shift = kb_shift
 	kb_morph = 0.0
 	kb_lang = lang
 	queue_redraw()

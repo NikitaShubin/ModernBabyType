@@ -1774,12 +1774,25 @@ func _case_lang_state() -> void:
 	_main.call("_unhandled_key_input", _key(KEY_1, "!".unicode_at(0)))
 	_tick(tag)
 	_check(_main.kb_lang == "ru", "%s: a sign switched the language" % tag)
-	# Щипок шифта — тоже не язык, и перелёта на нём нет (автор: «для
-	# смены регистра анимация не нужна»).
-	_main.call("_unhandled_key_input", _key(KEY_SHIFT))
+	# Щипок шифта на самой доске язык не трогает, но перелёт запускает:
+	# у букв его не будет (между большой и малой мягкого перехода нет —
+	# автор 10.2026), у знаков будет.
+	var btns := _kbd_buttons()
+	_main._own_press(btns["Shift"])
 	_tick(tag)
 	_check(_main.kb_lang == "ru", "%s: shift switched the language" % tag)
-	_check(_main.kb_morph >= 1.0, "%s: shift started a morph" % tag)
+	_check(
+		bool(_main.kb_shift) and float(_main.kb_morph) < 1.0,
+		"%s: shift did not start the sign morph" % tag
+	)
+	_check(
+		not bool(_main.kb_morph_shift) and String(_main.kb_morph_from) == "ru",
+		"%s: the morph does not remember the pre-shift state" % tag
+	)
+	_check(
+		not Kbd.animates("ф", "ru", false, "ru") and Kbd.animates("2", "ru", false, "ru"),
+		"%s: letters must not animate on shift, signs must" % tag
+	)
 	_main.kb_shift = false
 	_main.kb_morph = 1.0
 	_main.kb_morph_from = ""

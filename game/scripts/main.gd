@@ -158,6 +158,8 @@ var kb_lang := "ru"
 ## Старый язык помним, чтобы знать, откуда летел символ.
 var kb_morph := 1.0
 var kb_morph_from := ""
+## Состояние шифта, из которого шёл перелёт.
+var kb_morph_shift := false
 var kb_shift := false
 var kb_key_sb: StyleBoxFlat
 var kb_on_sb: StyleBoxFlat
@@ -1017,8 +1019,22 @@ func _set_kb_lang(lang: String) -> void:
 	if lang == kb_lang:
 		return
 	kb_morph_from = kb_lang
+	kb_morph_shift = kb_shift
 	kb_morph = 0.0
 	kb_lang = lang
+	queue_redraw()
+
+
+## Щипок шифта: у знаков — перелёт (старый уходит, новый приходит), у
+## букв перелёта нет (автор 10.2026: между большой и малой нет мягкого
+## перехода). Проверка на букве живёт в Kbd.draw.
+func _set_kb_shift(v: bool) -> void:
+	if v == kb_shift:
+		return
+	kb_morph_from = kb_lang
+	kb_morph_shift = kb_shift
+	kb_morph = 0.0
+	kb_shift = v
 	queue_redraw()
 
 
@@ -2211,7 +2227,7 @@ func _draw_own_kb() -> void:
 	Kbd.draw(
 		self, _own_rect(), kb_lang, kb_shift, false, mono,
 		int(30.0 * k), kb_key_sb, kb_on_sb, _ui_ink(), hi, kb_hi_sb, _ui_dim(),
-		kb_morph, kb_morph_from
+		kb_morph, kb_morph_from, kb_morph_shift
 	)
 
 
@@ -2241,7 +2257,7 @@ func _own_press(pos: Vector2) -> bool:
 		# букву, подсветка перетекает (синонимичные действия).
 		_set_kb_lang("en" if kb_lang == "ru" else "ru")
 	elif act == "шифт":
-		kb_shift = not kb_shift
+		_set_kb_shift(not kb_shift)
 	elif act == "пробел":
 		kb_shift = false
 		_type_char(" ")

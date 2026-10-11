@@ -31,8 +31,8 @@ const ROW_DIGITS_RU: Array = ["ё", "1", "2", "3", "4", "5", "6", "7", "8", "9",
 ## «?», в английской «/» и «\» (четыре знака на одной клавише, как на
 ## настоящей — требование автора 10.2026).
 const ROWS_RU: Array = [
-	["й", "ц", "у", "к", "е", "н", "г", "ш", "щ", "з", "х", "ъ"],
-	["ф", "ы", "в", "а", "п", "р", "о", "л", "д", "ж", "э", "\\", "↵"],
+	["й", "ц", "у", "к", "е", "н", "г", "ш", "щ", "з", "х", "ъ", "\\"],
+	["ф", "ы", "в", "а", "п", "р", "о", "л", "д", "ж", "э", "↵"],
 	["Shift", "я", "ч", "с", "м", "и", "т", "ь", "б", "ю", ".", "ShiftR"],
 ]
 
@@ -66,13 +66,14 @@ const EN_SHIFT := {
 	"-": "_", "=": "+",
 }
 
-## Клавиши, где русский знак не совпадает с английским (таблица
-## /usr/share/X11/xkb/symbols/ru, раскладка «Русская», та же, что в
-## Windows): клавиша слева от правого шифта — точка и запятая, а
-## обратный слеш и прямой слеш — ОТДЕЛЬНАЯ клавиша слева от ввода
-## (автор 10.2026: «ты неправильно разместил прямой и обратный слеши
-## на одной кнопке»). По-английски на тех же клавишах «/» с «?» и
-## «\\» с «|».
+## Клавиши, где русский знак не совпадает с английским. Таблица взята
+## не из головы: скомпилированная карта этой машины
+## (`xkbcomp -xkb` для pc+ru(winkeys) — раскладка «Русская», ровно та,
+## что в Windows). Из неё: клавиша прямого слеша — ТРЕТЬЯ В ВЕРХНЕМ
+## БУКВЕННОМ РЯДУ, сразу после «ъ» (в английской на ней «\\» и «|»);
+## клавиша слева от правого шифта — точка и запятая (в английской «/»
+## и «?»). Двух слешей на одной клавиши быть не может — автор на это
+## указал (10.2026), и таблица это подтверждает.
 ## Порядок: [русская, русская+шифт, английская, английская+шифт].
 const OVERLOAD := {
 	".": [".", ",", "/", "?"],
@@ -148,13 +149,48 @@ static func small_legends(s: String, lang: String, shift: bool) -> Array:
 	if lg.is_empty():
 		return []
 	var act := press_out(s, lang, shift)
-	var cands: Array = [lg[0], lg[2]] if (pair_of(s) != "" and s.length() == 1) else lg
+	var cands: Array = [lg[0], lg[2]] if _is_letter_key(s) else lg
 	var out: Array = []
 	for v in cands:
 		var t := String(v)
 		if t != act and not out.has(t):
 			out.append(t)
 	return out
+
+
+## Должна ли клавиша перелетать? Смена раскладки — все клавиши. А вот
+## щипок шифта — только знаки: у буквы большой и малый варианты не разные
+## знаки, мягкого перехода между ними нет (автор 10.2026: «анимация не
+## нужна при нажатии шифта в случае букв… в случае всех остальных знаков —
+## всё как обычно»).
+static func animates(s: String, from_lang: String, from_shift: bool, to_lang: String) -> bool:
+	if from_lang == "":
+		return false
+	return not (from_lang == to_lang and _is_letter_key(s))
+
+
+## Буквенная клавиша (у неё пара раскладок, а не набор знаков).
+static func _is_letter_key(s: String) -> bool:
+	return s.length() == 1 and pair_of(s) != ""
+
+
+## Свой угол знака: по РОЛИ в легендах, а не по месту в списке мелких.
+## Иначе все буквы делят один угол (автор 10.2026: «у каждого знака на
+## клавише свой угол, и она должна из него выходить в центр и
+## возвращаться назад в свой угол»). Углы: 0 — левый верхний,
+## 1 — правый верхний, 2 — левый нижний, 3 — правый нижний.
+## У буквенных клавиш рисуются только основания двух раскладок:
+## русская — в левом верхнем, латинская — в левом нижнем.
+static func corner_for(s: String, sym: String) -> int:
+	if sym == "":
+		return 0
+	var lg := legends(s)
+	if lg.is_empty():
+		return 0
+	if _is_letter_key(s):
+		return 0 if String(lg[0]) == sym else 2
+	var i := lg.find(sym)
+	return i if i >= 0 else 0
 
 
 ## Все ряды слоя сверху вниз (цифры + верх + низ).
@@ -473,7 +509,7 @@ static func draw(
 	ci: CanvasItem, area: Rect2, lang: String, shift: bool,
 	enter: bool, font: Font, fs: int, sb: StyleBox, sb_on: StyleBox, ink: Color,
 	hi: Array = [], hi_sb: StyleBox = null, ink_dim: Color = Color(0, 0, 0, 0),
-	morph := 1.0, morph_from := ""
+	morph := 1.0, morph_from := "", morph_shift := false
 ) -> void:
 	# hi — подписи клавиш, которые игра подсвечивает после простоя
 	# (вместо текстовой подсказки «Нажми К»). hi_sb рисует их вызыватель
@@ -482,10 +518,12 @@ static func draw(
 	# противоположной руки) с мягкой градиентной границей.
 	# ink_dim — приглушённые чернила для неактивных подписей: у каждой
 	# буквы напечатаны обе раскладки, активная светится ярче.
-	# morph (0..1) и morph_from — перелёт при смене языка ввода: старая
-	# центральная подпись уходит в свой угол, новая выходит из другого
-	# угла в центр (требование автора 10.2026). morph_from пустой или
-	# morph = 1 — перелёта нет.
+	# morph (0..1), morph_from и morph_shift — перелёт: старая
+	# центральная подпись уходит в свой угол, новая выходит из своего
+	# в центр (требование автора 10.2026). morph_from пустой или
+	# morph = 1 — перелёта нет. На щипке шифта буквы перелёта не имеют
+	# (автор: между большой и малой нет мягкого перехода) — знаки
+	# перелетают как обычно.
 	var gap := 8.0
 	var rh := (area.size.y - gap * 4.0) / 5.0
 	var key_fs := maxi(fs, int(rh * 0.40))
@@ -530,7 +568,7 @@ static func draw(
 			# — мельче: их на клавише по три-четыре.
 			if pair_of(s) != "" and s.length() == 1:
 				sub_fs = maxi(int(float(f) * 0.66), int(rh * 0.24))
-			_draw_legends(ci, r, font, s, lang, shift, f, sub_fs, ink, dim, morph, morph_from)
+			_draw_legends(ci, r, font, s, lang, shift, f, sub_fs, ink, dim, morph, morph_from, morph_shift)
 			continue
 		# Служебная клавиша: одна подпись по центру. Заблокированные
 		# (Ctrl/Win/Alt) в наборе не участвуют — приглушены, чтобы не
@@ -553,11 +591,15 @@ static func draw(
 ## вылез бы за клавишу.
 static func _draw_legends(
 	ci: CanvasItem, r: Rect2, font: Font, s: String, lang: String, shift: bool,
-	f: int, sub_fs: int, ink: Color, dim: Color, morph := 1.0, morph_from := ""
+	f: int, sub_fs: int, ink: Color, dim: Color, morph := 1.0, morph_from := "",
+	morph_shift := false
 ) -> void:
 	var main := press_out(s, lang, shift)
-	if morph < 1.0 and morph_from != "" and morph_from != lang:
-		if _draw_morph(ci, r, font, s, lang, shift, f, sub_fs, ink, dim, morph, morph_from):
+	if morph < 1.0 and morph_from != "":
+		if animates(s, morph_from, morph_shift, lang) and _draw_morph(
+			ci, r, font, s, lang, shift, f, sub_fs, ink, dim, morph, morph_from,
+			morph_shift
+		):
 			return
 	var tw := font.get_string_size(main, HORIZONTAL_ALIGNMENT_LEFT, -1.0, f).x
 	ci.draw_string(
@@ -568,7 +610,7 @@ static func _draw_legends(
 	var smalls := small_legends(s, lang, shift)
 	for i in smalls.size():
 		var t := String(smalls[i])
-		var zone := _corner(r, i)
+		var zone := _corner(r, corner_for(s, t))
 		var sf := sub_fs
 		while sf > 8 and font.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, sf).x > zone.size.x:
 			sf -= 1
@@ -588,21 +630,19 @@ static func _draw_legends(
 ## перелёт на щипке шифта (требование автора 10.2026).
 static func _draw_morph(
 	ci: CanvasItem, r: Rect2, font: Font, s: String, lang: String, shift: bool,
-	f: int, sub_fs: int, ink: Color, dim: Color, morph: float, morph_from: String
+	f: int, sub_fs: int, ink: Color, dim: Color, morph: float, morph_from: String,
+	morph_shift: bool
 ) -> bool:
-	var old_main := press_out(s, morph_from, shift)
+	var old_main := press_out(s, morph_from, morph_shift)
 	var main := press_out(s, lang, shift)
 	if old_main == main:
 		return false
-	var smalls := small_legends(s, lang, shift)
 	var center := r.get_center()
-	# Уходящая идёт в тот угол, где она теперь живёт; приходящая
-	# выходит из другого угла, чтобы в полёте не наложиться на неё.
-	var ci_out := smalls.find(old_main)
-	if ci_out < 0:
-		ci_out = 0
-	var from_corner := _corner(r, 2)
-	var to_corner := _corner(r, ci_out).get_center()
+	# У каждого знака свой угол по роли в легендах (см. corner_for):
+	# уходящая уходит в свой, приходящая выходит из своего — в полёте
+	# они не накладываются, и каждая возвращается туда же.
+	var from_corner := _corner(r, corner_for(s, main))
+	var to_corner := _corner(r, corner_for(s, old_main)).get_center()
 	_draw_glyph(ci, font, old_main, center.lerp(to_corner, morph),
 		lerpf(float(f), float(sub_fs), morph), ink.lerp(dim, morph))
 	_draw_glyph(ci, font, main, from_corner.get_center().lerp(center, morph),
@@ -622,17 +662,19 @@ static func _draw_glyph(
 	)
 
 
-## Зона угловой подписи: верхний левый, верхний правый, нижний левый —
-## как на настоящей клавише. Места под центральную подпись не режем.
+## Зона угловой подписи: четыре угла, как на настоящей клавише. Места
+## под центральную подпись не режем.
 static func _corner(r: Rect2, i: int) -> Rect2:
 	var pad := 3.0
 	var w := r.size.x * 0.34
-	var h := r.size.y * 0.32
+	var h := r.size.y * 0.30
 	match i:
 		1:
 			return Rect2(r.end.x - w - pad, r.position.y + pad, w, h)
 		2:
 			return Rect2(r.position.x + pad, r.end.y - h - pad, w, h)
+		3:
+			return Rect2(r.end.x - w - pad, r.end.y - h - pad, w, h)
 	return Rect2(r.position.x + pad, r.position.y + pad, w, h)
 
 

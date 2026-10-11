@@ -264,6 +264,16 @@ func _a_kb_switch_end() -> void:
 	_main.kb_morph = 1.0
 
 
+## Перелёт на щипке шифта: у букв его нет (автор 10.2026 — между
+## большой и малой нет мягкого перехода), у знаков он есть: «2» уходит,
+## «\"» приходит в центр. Кадр — середина перелёта.
+func _a_kb_shift_morph() -> void:
+	_main.kb_lang = "ru"
+	_main.kb_morph = 1.0
+	_main._set_kb_shift(true)
+	_main.kb_morph = 0.2
+
+
 func _a_sym_hint() -> void:
 	_win(Vector2i(820, 1180))
 	_main._force_touch = true
@@ -472,4 +482,6 @@ func _plan() -> void:
 		# 18. Перелёт подписей при смене языка ввода.
 		["30-kbd-morph", _a_kb_switch_mid, 20],
 		["31-kbd-morph-end", _a_kb_switch_end, 20],
+		# 19. Перелёт на щипке шифта: у знаков есть, у букв нет.
+		["32-kbd-shift-morph", _a_kb_shift_morph, 2],
 	]

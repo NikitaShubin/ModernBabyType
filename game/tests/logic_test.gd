@@ -293,6 +293,7 @@ func _process(_dt: float) -> bool:
 		_run_part2()
 		_text_coverage()
 		_legend_roundtrip()
+		_layout_positions()
 		_report()
 		return true
 	return false
@@ -414,6 +415,44 @@ func _legend_roundtrip() -> void:
 	for gone in ["-", "\\"]:
 		_check(not bottom.has(gone), "«%s» left the bottom row" % gone)
 
+
+## Раскладка взята с настоящей таблицы (скомпилированная карта этой
+## машины, pc+ru(winkeys)). Клавиша прямого слеша — третья в верхнем
+## буквенном ряду, сразу после «ъ»; точка с запятой — последняя перед
+## правым шифтом. Ни на одной клавише двух слешей быть не может
+## (автор 10.2026: «ещё осталась клавиша, имеющая оба слеша»).
+func _layout_positions() -> void:
+	var rows := K.all_rows(false)
+	_check(rows[1][12] == "\\", "the backslash key follows х/ъ in the top letter row")
+	_check(rows[1].size() == 13, "the top letter row holds 12 letters plus the backslash")
+	_check(rows[2].size() == 12, "the home row is 11 letters plus enter")
+	_check(rows[3][10] == ".", "the dot key sits left of the right shift")
+	# Обратного слеша больше ни на какой клавише нет: он живёт только на
+	# своей (автор 10.2026: «ещё осталась клавиша, имеющая оба слеша»).
+	var with_bs := ""
+	for b in K.buttons(Rect2(0, 0, 1200, 500), false):
+		for lg in K.legends(String(b["s"])):
+			if String(lg) == "\\":
+				with_bs = String(b["s"])
+	_check(with_bs == "\\", "the backslash lives only on its own key")
+	_check(
+		K.legends(".") == [".", ",", "/", "?"],
+		"the dot key carries dot, comma, slash and question — no backslash"
+	)
+	# Угол у знака — по роли в легендах, а не по месту в списке мелких:
+	# иначе все буквы делят один угол (автор 10.2026).
+	_check(K.corner_for("ф", "ф") == 0, "the russian letter sits top-left")
+	_check(K.corner_for("ф", "a") == 2, "the latin letter has its own corner")
+	_check(K.corner_for("2", "2") == 0, "the digit keeps the top-left corner")
+	_check(K.corner_for("2", "\"") == 1, "the russian sign keeps the top-right corner")
+	_check(K.corner_for("2", "@") == 3, "the english sign keeps the bottom-right corner")
+	# Перелёт: смена раскладки — все клавиши; щипок шифта — только знаки
+	# (автор: между большой и малой буквой мягкого перехода нет).
+	_check(K.animates("ф", "en", false, "ru"), "a letter animates on a layout switch")
+	_check(not K.animates("ф", "ru", false, "ru"), "a letter does not animate on shift")
+	_check(K.animates("2", "ru", false, "ru"), "a sign animates on shift")
+	_check(not K.animates(".", "ru", false, "ru"), "a punctuation key animates on shift")
+	_check(not K.animates("ф", "", false, "ru"), "no morph source means no animation")
 
 func _report() -> void:
 	if _failures.is_empty():
