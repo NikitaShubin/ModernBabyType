@@ -380,7 +380,10 @@ func _legend_roundtrip() -> void:
 	)
 	_check(K.legends("2") == ["2", "\"", "2", "@"], "digit 2 carries both layouts' signs")
 	_check(K.legends("ю") == ["ю", "Ю", ".", ">"], "ю keeps its capital next to its latin dot")
-	_check(K.legends("ё") == ["ё", "Ё", "`", "~"], "ё is a letter key with the backquote pair")
+	_check(
+		K.legends("ё") == ["ё", "Ё", "ё", "Ё"],
+		"ё carries only its own pair, no latin backquote"
+	)
 	_check(
 		K.legends("х") == ["х", "Х", "[", "{"] and K.legends("э") == ["э", "Э", "'", "\""],
 		"keys whose latin pair is punctuation carry the us shift sign"
@@ -441,11 +444,14 @@ func _layout_positions() -> void:
 	)
 	# Угол у знака — по роли в легендах, а не по месту в списке мелких:
 	# иначе все буквы делят один угол (автор 10.2026).
+	# Раскладки стоят по главной диагонали (автор 10.2026): русская
+	# основа — левый верхний, английская — правый нижний; шифты —
+	# правый верхний и левый нижний.
 	_check(K.corner_for("ф", "ф") == 0, "the russian letter sits top-left")
-	_check(K.corner_for("ф", "a") == 2, "the latin letter has its own corner")
+	_check(K.corner_for("ф", "a") == 2, "the latin letter stands on the main diagonal")
 	_check(K.corner_for("2", "2") == 0, "the digit keeps the top-left corner")
 	_check(K.corner_for("2", "\"") == 1, "the russian sign keeps the top-right corner")
-	_check(K.corner_for("2", "@") == 3, "the english sign keeps the bottom-right corner")
+	_check(K.corner_for("2", "@") == 3, "the english sign keeps the bottom-left corner")
 	# Перелёт: смена раскладки — все клавиши; щипок шифта — только знаки
 	# (автор: между большой и малой буквой мягкого перехода нет).
 	_check(K.animates("ф", "en", false, "ru"), "a letter animates on a layout switch")

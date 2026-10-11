@@ -666,7 +666,11 @@ func _mod_key(code: int, ctrl: bool, alt: bool) -> InputEventKey:
 
 func _kbd_buttons() -> Dictionary:
 	var out := {}
-	for b in Kbd.buttons(_main._own_rect(), _main.kb_shift):
+	# Флаг ввода — как в игре: пока не все буквы открылись, клавиши
+	# ↵ на доске нет, и геометрия низа иначе.
+	for b in Kbd.buttons(
+		_main._own_rect(), _main.kb_shift, _main._kb_enter_shown()
+	):
 		var rect: Rect2 = b["r"]
 		var label := String(b["s"])
 		out[label] = rect.get_center()
@@ -1582,16 +1586,20 @@ func _case_idle_hint() -> void:
 
 
 ## Ставит зайца на первый пробел первой строки (для проверки половин).
+## Встать курсором на пробел — в любой строке, не только в первой: текст
+## уровня случаен, и пробел в первой строке не гарантирован (сценарий
+## половины пробела падал из-за этого).
 func _find_space_cell() -> bool:
-	var line: String = _main.display_lines[0]
-	for p in line.length():
-		if line.substr(p, 1) == " ":
-			_main.cursor_line = 0
-			_main.cursor_pos = p
-			_main.hero_r = _main._hero_pos()
-			_main.errors.clear()
-			_main.idle_t = _main._hint_delay() + 0.5
-			return _main._current() == " "
+	for l in _main.display_lines.size():
+		var line: String = _main.display_lines[l]
+		for p in line.length():
+			if line.substr(p, 1) == " ":
+				_main.cursor_line = l
+				_main.cursor_pos = p
+				_main.hero_r = _main._hero_pos()
+				_main.errors.clear()
+				_main.idle_t = _main._hint_delay() + 0.5
+				return _main._current() == " "
 	return false
 
 
@@ -1734,6 +1742,159 @@ func _case_backslash_key() -> void:
 		_main.typed_ok == ok0 + 1 or _main.errors.size() == marks0 + 1,
 		"%s: the backslash press vanished" % tag
 	)
+
+
+## 46. Клавиша ввода: пока часть букв серая, её на доске нет — вводить
+## нечего. Когда открылись все буквы уровня, снизу появляется ↵, и он
+## листает дальше (автор 10.2026: «к полной разблокировке всех клавиш эта
+## клавиша точно должна быть»).
+func _case_enter_key() -> void:
+	_fresh(0, 0)
+	_kbd_on()
+	var tag := "enter key"
+	# Серые буквы на месте — ввода нет.
+	_check(
+		not _main._kb_enter_shown(),
+		"%s: the enter key shows while letters are still grey" % tag
+	)
+	# Открываем все буквы текста (как это делает верный ввод).
+	for ch: String in _text_chars():
+		_main.active[ch] = true
+	_main.active[" "] = true
+	_check(
+		_main._kb_enter_shown(),
+		"%s: the enter key did not appear with all letters unlocked" % tag
+	)
+	var btns := _kbd_buttons()
+	if not btns.has("↵"):
+		_check(false, "%s: no enter key on the board" % tag)
+		return
+	# Пока текст не дописан, ввод на доске честно молчит (как физический).
+	var ok0: int = _main.typed_ok
+	_main._own_press(btns["↵"])
+	_tick(tag)
+	_check(
+		String(_main.state) == "playing",
+		"%s: the enter key advanced mid-text (state=%s)" % [tag, _main.state]
+	)
+	# Дописали уровень верно — ввод листает дальше.
+	for _i in 400:
+		if String(_main.state) == "won":
+			break
+		var want: String = _main._current()
+		if want == "":
+			break
+		_main._type_char(want)
+	_tick(tag)
+	if String(_main.state) == "won":
+		var btns2 := _kbd_buttons()
+		if btns2.has("↵"):
+			_main._own_press(btns2["↵"])
+			_tick(tag)
+			_check(
+				String(_main.state) != "won",
+				"%s: the enter key did not start the next level" % tag
+			)
+
+
+## Все непустые символы уровня — чтобы «открыть» их в active.
+func _text_chars() -> Array[String]:
+	var out: Array[String] = []
+	for line: String in _main.display_lines:
+		for i in line.length():
+			var ch: String = line.substr(i, 1)
+			if ch != "" and not out.has(ch):
+				out.append(ch)
+	return out
+
+
+## 47. Ночное небо живое: метеоры падают ночью и не летают днём
+## (автор 10.2026: «ночное небо слишком скучное… пусть ночью тоже
+## что-то будет»).
+func _case_night_meteors() -> void:
+	_fresh(0, 0)
+	var tag := "night meteors"
+	var m: Node = _main.get_node_or_null("Meadow")
+	if m == null:
+		for c in _main.get_children():
+			if c is Meadow:
+				m = c
+				break
+	if m == null:
+		_check(false, "%s: the meadow is missing" % tag)
+		return
+	# Днём метеоров нет.
+	m.night = false
+	m._meteor_cd = 0.0
+	m._meteors.clear()
+	for _i in 120:
+		m._process(1.0 / 60.0)
+	_check(
+		(m._meteors as Array).is_empty(),
+		"%s: meteors fly in the daytime (%d)" % [tag, (m._meteors as Array).size()]
+	)
+	# Ночью появляются и улетают за край.
+	m.night = true
+	m._meteor_cd = 0.0
+	for _i in 120:
+		m._process(1.0 / 60.0)
+	_check(
+		not (m._meteors as Array).is_empty(),
+		"%s: no meteor after two seconds of night sky" % tag
+	)
+	var first: Vector2 = (m._meteors as Array)[0][0]
+	m._process(0.2)
+	var moved: Vector2 = (m._meteors as Array)[0][0]
+	_check(moved.y > first.y, "%s: the meteor does not fall" % tag)
+	for _i in 900:
+		m._process(1.0 / 60.0)
+	_check(
+		(m._meteors as Array).size() <= 2,
+		"%s: the night sky is crowded (%d)" % [tag, (m._meteors as Array).size()]
+	)
+	# Смена на день разгоняет метеоры сразу.
+	m.night = false
+	m._apply_sky()
+	_check(
+		(m._meteors as Array).is_empty(),
+		"%s: meteors survived the switch to day" % tag
+	)
+
+
+## 45. Нажатая клавиша вспыхивает: человек должен видеть, что попал
+## именно в неё, а если промахнулся — что мимо. Вспышка гасится сама.
+func _case_press_flash() -> void:
+	_fresh(0, 1)
+	_kbd_on()
+	var tag := "press flash"
+	var btns := _kbd_buttons()
+	_main._own_press(btns["пробел"])
+	_tick(tag)
+	_check(
+		String(_main.kb_press) == "пробел" and float(_main.kb_press_t) > 0.0,
+		"%s: the pressed key does not light up (got «%s»)" % [tag, _main.kb_press]
+	)
+	# Гаснет сама, без новых нажатий.
+	for _i in 40:
+		_tick(tag)
+	_check(
+		float(_main.kb_press_t) <= 0.0,
+		"%s: the flash never faded (%.2f)" % [tag, _main.kb_press_t]
+	)
+	# Промахнулся — не засветилась ни одна клавиша.
+	_main.kb_press = ""
+	_main.kb_press_t = 0.0
+	_main._own_press(Vector2(-50.0, -50.0))
+	_check(
+		String(_main.kb_press) == "" and float(_main.kb_press_t) <= 0.0,
+		"%s: a miss outside the board lit something up" % tag
+	)
+	# Физический шифт меняет состояние доски мгновенно (автор 10.2026).
+	_main.kb_press_t = 0.0
+	_main.call("_unhandled_key_input", _key(KEY_SHIFT))
+	_check(bool(_main.kb_shift), "%s: the physical shift did not arm the board" % tag)
+	_main.call("_unhandled_key_input", _key(KEY_SHIFT))
+	_check(not bool(_main.kb_shift), "%s: the physical shift did not disarm the board" % tag)
 
 
 ## 44. Язык ввода доска берёт у СИСТЕМЫ, а не угадывает по сочетанию
@@ -2130,6 +2291,9 @@ func _process(_dt: float) -> bool:
 	_case_reflow_typed_cells()
 	_case_shift_hands()
 	_case_backslash_key()
+	_case_night_meteors()
+	_case_enter_key()
+	_case_press_flash()
 	_case_lang_state()
 	_case_chaos(1500)
 	_cases = 40

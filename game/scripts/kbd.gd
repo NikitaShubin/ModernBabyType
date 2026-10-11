@@ -78,6 +78,9 @@ const EN_SHIFT := {
 const OVERLOAD := {
 	".": [".", ",", "/", "?"],
 	"\\": ["\\", "/", "\\", "|"],
+	# «ё» — буква без английской пары: на настоящей русской раскладке
+	# на ней только «ё» и «Ё» (автор 10.2026: «у Ё ещё есть ~»).
+	"ё": ["ё", "Ё", "ё", "Ё"],
 }
 
 ## Знаки с шифтом у тех клавиш, чья пара в английской раскладке — сама
@@ -177,10 +180,12 @@ static func _is_letter_key(s: String) -> bool:
 ## Свой угол знака: по РОЛИ в легендах, а не по месту в списке мелких.
 ## Иначе все буквы делят один угол (автор 10.2026: «у каждого знака на
 ## клавише свой угол, и она должна из него выходить в центр и
-## возвращаться назад в свой угол»). Углы: 0 — левый верхний,
-## 1 — правый верхний, 2 — левый нижний, 3 — правый нижний.
-## У буквенных клавиш рисуются только основания двух раскладок:
-## русская — в левом верхнем, латинская — в левом нижнем.
+## возвращаться назад в свой угол»).
+## Раскладки стоят по главной диагонали (автор 10.2026: «кириллица и
+## латинница в противоположных углах на главной диагонали, а ты загнал
+## их обеих в левые углы»): русская основа — левый верхний, русский
+## шифт — правый верхний, английская основа — правый нижний,
+## английский шифт — левый нижний.
 static func corner_for(s: String, sym: String) -> int:
 	if sym == "":
 		return 0
@@ -509,7 +514,8 @@ static func draw(
 	ci: CanvasItem, area: Rect2, lang: String, shift: bool,
 	enter: bool, font: Font, fs: int, sb: StyleBox, sb_on: StyleBox, ink: Color,
 	hi: Array = [], hi_sb: StyleBox = null, ink_dim: Color = Color(0, 0, 0, 0),
-	morph := 1.0, morph_from := "", morph_shift := false
+	morph := 1.0, morph_from := "", morph_shift := false,
+	press_sb: StyleBox = null, press_key := ""
 ) -> void:
 	# hi — подписи клавиш, которые игра подсвечивает после простоя
 	# (вместо текстовой подсказки «Нажми К»). hi_sb рисует их вызыватель
@@ -518,6 +524,8 @@ static func draw(
 	# противоположной руки) с мягкой градиентной границей.
 	# ink_dim — приглушённые чернила для неактивных подписей: у каждой
 	# буквы напечатаны обе раскладки, активная светится ярче.
+	# press_sb — заливка нажатой клавиши: человек должен видеть, что
+	# попал в ту самую клавишу (или промахнулся мимо всех).
 	# morph (0..1), morph_from и morph_shift — перелёт: старая
 	# центральная подпись уходит в свой угол, новая выходит из своего
 	# в центр (требование автора 10.2026). morph_from пустой или
@@ -533,6 +541,8 @@ static func draw(
 		var r := b["r"] as Rect2
 		var s := String(b["s"])
 		var box := sb_on if (s == "Shift" or s == "ShiftR") and shift else sb
+		if press_sb != null and s == press_key:
+			box = press_sb
 		var hi_side := _hi_side_for(s, hi)
 		var exact := hi_sb != null and s in hi
 		if exact:
@@ -607,6 +617,10 @@ static func _draw_legends(
 		Vector2(r.get_center().x - tw * 0.5, r.get_center().y + float(font.get_height(f)) * 0.3),
 		main, HORIZONTAL_ALIGNMENT_LEFT, -1.0, f, ink
 	)
+	# Рисочки под указательные пальцы: на настоящей клавиатуре клавиши
+	# «а» и «о» приподняты, их находят не глядя.
+	if s == "а" or s == "о":
+		_bump(ci, r, dim)
 	var smalls := small_legends(s, lang, shift)
 	for i in smalls.size():
 		var t := String(smalls[i])
@@ -672,9 +686,9 @@ static func _corner(r: Rect2, i: int) -> Rect2:
 		1:
 			return Rect2(r.end.x - w - pad, r.position.y + pad, w, h)
 		2:
-			return Rect2(r.position.x + pad, r.end.y - h - pad, w, h)
-		3:
 			return Rect2(r.end.x - w - pad, r.end.y - h - pad, w, h)
+		3:
+			return Rect2(r.position.x + pad, r.end.y - h - pad, w, h)
 	return Rect2(r.position.x + pad, r.position.y + pad, w, h)
 
 
@@ -711,6 +725,17 @@ static func _draw_half(ci: CanvasItem, r: Rect2, side: String, sb: StyleBox) -> 
 			c.a *= (1.0 - t) * 0.6
 			var w := 22.0 / 6.0
 			ci.draw_rect(Rect2(r.position.x + half - (float(i) + 1.0) * w, r.position.y, w + 1.0, r.size.y), c)
+
+
+## Тактильный рисочек на «а» и «о»: на настоящей клавиатуре под указательными
+## пальцами клавиши чуть приподняты — их находят не глядя. Рисуем
+## короткую черту у нижнего края клавиши.
+static func _bump(ci: CanvasItem, r: Rect2, ink: Color) -> void:
+	var w := r.size.x * 0.42
+	var h := maxf(2.0, r.size.y * 0.035)
+	var x := r.get_center().x - w * 0.5
+	var y := r.end.y - h - r.size.y * 0.10
+	ci.draw_rect(Rect2(x, y, w, h), ink)
 
 
 ## Глобус кнопки языка: круг, вертикальный меридиан-эллипс и горизонталь.

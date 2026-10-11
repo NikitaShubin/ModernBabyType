@@ -88,8 +88,15 @@ var kb_morph_from := ""
 const KB_MORPH_T := 0.22
 ## Состояние шифта, из которого шёл перелёт.
 var kb_morph_shift := false
+## Клавиша под пальцем и сколько она ещё горит: человек должен видеть,
+## что нажал ту самую клавишу (или промахнулся мимо всех).
+var kb_press := ""
+var kb_press_t := 0.0
+const KB_PRESS_T := 0.22
 var kb_shift := false
 var kb_key_sb: StyleBoxFlat
+## Заливка нажатой клавиши (та же краска ночью).
+var kb_press_sb: StyleBoxFlat
 ## Ручной режим ночи из настроек: 0 день, 1 ночь, -1 авто (система).
 ## Кнопка крутит по кругу день → ночь → авто.
 var nmode := -1
@@ -108,8 +115,16 @@ func _draw_own_kb() -> void:
 	Kbd.draw(
 		self, _own_rect(), kb_lang, kb_shift, true, mono,
 		int(30.0 * k), kb_key_sb, selbox_sb, _uitext(), [], null, _dim(),
-		kb_morph, kb_morph_from, kb_morph_shift
+		kb_morph, kb_morph_from, kb_morph_shift, kb_press_sb, kb_press
 	)
+
+
+## Вспышка нажатой клавиши: человек должен видеть, что попал именно в неё
+## (а если промахнулся — что не попал ни в одну). Гасится сама.
+func _flash(key: String) -> void:
+	kb_press = key
+	kb_press_t = KB_PRESS_T
+	queue_redraw()
 
 
 func _own_press(pos: Vector2) -> bool:
@@ -118,6 +133,7 @@ func _own_press(pos: Vector2) -> bool:
 	var act := Kbd.hit(_own_rect(), kb_shift, true, pos)
 	if act == "":
 		return false
+	_flash(act)
 	if act == "стереть":
 		input_text = input_text.left(maxi(0, input_text.length() - 1))
 	elif act == "язык":
@@ -161,6 +177,8 @@ func _ready() -> void:
 	row_idle_sb = Ui.panel_sb(Color(1, 1, 1, 0.45), 12.0)
 	box_sb = Ui.panel_sb(Color("#ffffff"), 10.0, INK, 2.0, false)
 	kb_key_sb = Ui.panel_sb(Color("#ffffff"), 10.0, INK, 2.0, false)
+	# Нажатая клавиша — заметная заливка: попал или промахнулся.
+	kb_press_sb = Ui.panel_sb(Color("#ffd98a"), 10.0, INK, 2.5, false)
 	selbox_sb = Ui.panel_sb(Color("#a9c6ec"), 10.0, INK, 2.0, false)
 	hint_sb = Ui.panel_sb(Color(1, 1, 1, 0.72), 14.0, Color("#e0d5bd"), 1.5, false)
 	_meadow = Meadow.new()
@@ -343,6 +361,13 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	# автора 10.2026).
 	if ke.unicode > 0:
 		_follow_keyboard_lang(String.chr(ke.unicode))
+	# Физический шифт — тоже шифт доски: состояние клавиш должно меняться
+	# сразу, как его меняет щипок на самой доске (автор 10.2026: «нажатие
+	# шифта должно сразу менять состояние клавиш»). Отпускание приходит
+	# отдельным событием с pressed = false — его мы уже отсеяли выше.
+	if ke.keycode == KEY_SHIFT:
+		_set_kb_shift(not kb_shift)
+		return
 	if ke.keycode == KEY_F2:
 		chosen.emit(resume_user)
 		_eaten()
@@ -419,6 +444,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 func _process(dt: float) -> void:
 	if kb_morph < 1.0:
 		kb_morph = minf(1.0, kb_morph + dt / KB_MORPH_T)
+		queue_redraw()
+	if kb_press_t > 0.0:
+		kb_press_t = maxf(0.0, kb_press_t - dt)
 		queue_redraw()
 	_poll_update()
 
@@ -1273,6 +1301,8 @@ func _apply_night() -> void:
 		hint_sb.border_color = Color("#3a4a6b")
 		kb_key_sb.bg_color = Color("#232c44")
 		kb_key_sb.border_color = Color("#8b93a8")
+		kb_press_sb.bg_color = Color("#6b5a2a")
+		kb_press_sb.border_color = Color("#8b93a8")
 	else:
 		row_idle_sb.bg_color = Color(1, 1, 1, 0.45)
 		box_sb.bg_color = Color("#ffffff")
@@ -1283,6 +1313,8 @@ func _apply_night() -> void:
 		hint_sb.border_color = Color("#e0d5bd")
 		kb_key_sb.bg_color = Color("#ffffff")
 		kb_key_sb.border_color = INK
+		kb_press_sb.bg_color = Color("#ffd98a")
+		kb_press_sb.border_color = INK
 	if _meadow != null:
 		_meadow.night = night
 		_meadow._apply_sky()

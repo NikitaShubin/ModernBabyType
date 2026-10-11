@@ -160,9 +160,16 @@ var kb_morph := 1.0
 var kb_morph_from := ""
 ## Состояние шифта, из которого шёл перелёт.
 var kb_morph_shift := false
+## Клавиша под пальцем и сколько она ещё горит: человек должен видеть,
+## что нажал ту самую клавишу (или промахнулся мимо всех).
+var kb_press := ""
+var kb_press_t := 0.0
+const KB_PRESS_T := 0.22
 var kb_shift := false
 var kb_key_sb: StyleBoxFlat
 var kb_on_sb: StyleBoxFlat
+## Заливка нажатой клавиши: та же краска ночью.
+var kb_press_sb: StyleBoxFlat
 var kb_hi_sb: StyleBoxFlat
 
 
@@ -315,6 +322,8 @@ func _ready() -> void:
 	bar_fill_sb = Ui.panel_sb(Color("#7fb069"), 5.0)
 	kb_key_sb = Ui.panel_sb(Color("#fffdf6"), 10.0, Color("#4a4438"), 2.0, false)
 	kb_on_sb = Ui.panel_sb(Color("#a9c6ec"), 10.0, Color("#4a4438"), 2.0, false)
+	# Нажатая клавиша — заметная заливка: попал или промахнулся.
+	kb_press_sb = Ui.panel_sb(Color("#ffd98a"), 10.0, Color("#4a4438"), 2.5, false)
 	kb_hi_sb = Ui.panel_sb(Color("#ffd75e"), 10.0, Color("#4a4438"), 2.0, false)
 	card_p = _panel_node(card_sb)
 	hud_p = _panel_node(pill_sb)
@@ -373,6 +382,8 @@ func _apply_night() -> void:
 		kb_hi_sb.border_color = Color("#ffd75e")
 		kb_on_sb.bg_color = Color("#8ab4e0")
 		kb_on_sb.border_color = Color("#8b93a8")
+		kb_press_sb.bg_color = Color("#6b5a2a")
+		kb_press_sb.border_color = Color("#8b93a8")
 		# Ночью буквы светлые, а заяц и ёж — белые спрайты: без контура
 		# буква, попавшая на спрайт, терялась (видел на эмуляторе).
 		for tl in text_labels:
@@ -393,6 +404,8 @@ func _apply_night() -> void:
 		kb_hi_sb.bg_color = Color("#ffd75e")
 		kb_hi_sb.border_color = Color("#4a4438")
 		kb_on_sb.bg_color = Color("#a9c6ec")
+		kb_press_sb.bg_color = Color("#ffd98a")
+		kb_press_sb.border_color = Color("#4a4438")
 		kb_on_sb.border_color = Color("#4a4438")
 		# Днём буквы тёмные на светлой карточке — контур не нужен.
 		for tl in text_labels:
@@ -1055,6 +1068,13 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	# глобусу состояние не перебивает.
 	if ke.unicode > 0:
 		_follow_keyboard_lang(String.chr(ke.unicode))
+	# Физический шифт — тоже шифт доски: состояние клавиш должно меняться
+	# сразу, как его меняет щипок на самой доске (автор 10.2026: «нажатие
+	# шифта должно сразу менять состояние клавиш»). Отпускание приходит
+	# отдельным событием с pressed = false — его мы уже отсеяли выше.
+	if ke.keycode == KEY_SHIFT:
+		_set_kb_shift(not kb_shift)
+		return
 	_poke_idle()
 	if ke.keycode == KEY_ESCAPE:
 		if menu_open:
@@ -1518,6 +1538,9 @@ func _process(dt: float) -> void:
 	# тянуть игру.
 	if kb_morph < 1.0:
 		kb_morph = minf(1.0, kb_morph + dt / KB_MORPH_T)
+		queue_redraw()
+	if kb_press_t > 0.0:
+		kb_press_t = maxf(0.0, kb_press_t - dt)
 		queue_redraw()
 	# Высота раскладки — всегда своя клавиатура: система больше не
 	# участвует, замеров и подстройки нет, раскладка не прыгает сама.
@@ -2225,22 +2248,50 @@ func _draw_own_kb() -> void:
 		c.a = 0.45 + 0.35 * pulse
 		kb_hi_sb.bg_color = c
 	Kbd.draw(
-		self, _own_rect(), kb_lang, kb_shift, false, mono,
+		self, _own_rect(), kb_lang, kb_shift, _kb_enter_shown(), mono,
 		int(30.0 * k), kb_key_sb, kb_on_sb, _ui_ink(), hi, kb_hi_sb, _ui_dim(),
-		kb_morph, kb_morph_from, kb_morph_shift
+		kb_morph, kb_morph_from, kb_morph_shift, kb_press_sb, kb_press
 	)
 
 
 ## Нажатие на свою клавишу: символ — в _type_char, стереть — в _backspace,
 ## слой — дальше по кругу, шифт — флип. Напрямую, без key-событий: IME тут
 ## не участвует вообще, composing-переписям неоткуда взяться.
+## Вспышка нажатой клавиши: человек должен видеть, что попал именно в неё
+## (а если промахнулся — что не попал ни в одну). Гасится сама.
+func _flash(key: String) -> void:
+	kb_press = key
+	kb_press_t = KB_PRESS_T
+	queue_redraw()
+
+
+## Показывает ли доска ввод ↵. Пока часть букв текста ещё серая
+## (проходится сама), ввода на доске нет — и вводить нечего. Когда
+## открылись все буквы уровня (или он пройден), снизу появляется ↵,
+## как на настоящей клавиатуре (автор 10.2026: «к полной разблокировке
+## всех клавиш эта клавиша точно должна быть»).
+func _kb_enter_shown() -> bool:
+	if state == "won" or state == "lost":
+		return true
+	if display_lines.is_empty():
+		return false
+	for line in display_lines:
+		for i in line.length():
+			var ch := line.substr(i, 1)
+			if ch != " " and not _is_active(ch):
+				return false
+	return true
+
+
 func _own_press(pos: Vector2) -> bool:
 	if not _own_shown():
 		return false
 	_poke_idle()
-	var act := Kbd.hit(_own_rect(), kb_shift, false, pos)
+	var act := Kbd.hit(_own_rect(), kb_shift, _kb_enter_shown(), pos)
 	if act == "":
 		return false
+	# Вспышка сразу на любую нажатую клавишу — человек видит, куда попал.
+	_flash(act)
 	if act == "ввод":
 		# Как физический Enter: на финале — дальше, в партии молчит.
 		if state != "playing":

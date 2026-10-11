@@ -18,6 +18,12 @@ var night := false
 ## Птицы: [pos, phase, size, dir, age]. Летают только днём.
 var _birds: Array = []
 var _bird_cd := 4.0
+## Метеоры: [pos, dir, len, life, speed]. Падают только ночью — днём небо
+## и так живое (птицы, облака), а ночью оно было пустое и скучное
+## (автор 10.2026: «ночное небо слишком скучное, надо добавить метеоритов
+## или комет… пусть ночью тоже что-то будет»).
+var _meteors: Array = []
+var _meteor_cd := 3.0
 
 
 func _ready() -> void:
@@ -41,9 +47,11 @@ func _apply_sky() -> void:
 		grad.set_color(1, Color("#f7f3e8"))
 	_sky.gradient = grad
 	# Смена дня/ночи разгоняет стаю сразу: ночные птицы не летают,
-	# дневные при ночи не нужны.
+	# дневные при ночи не нужны. С метеорами так же.
 	_birds.clear()
 	_bird_cd = 6.0
+	_meteors.clear()
+	_meteor_cd = 3.5
 	queue_redraw()
 
 
@@ -58,6 +66,24 @@ func _process(dt: float) -> void:
 	if not night and _bird_cd <= 0.0 and _birds.size() < 3:
 		_bird_cd = randf_range(8.0, 16.0)
 		_spawn_bird()
+	# Метеоры — только ночью, не чаще одной штуки в 6–13 секунд и не
+	# больше двух в небе: безмятечность важнее зрелищности.
+	if night:
+		_meteor_cd -= dt
+		if _meteor_cd <= 0.0 and _meteors.size() < 2:
+			_meteor_cd = randf_range(6.0, 13.0)
+			_spawn_meteor()
+		for i in range(_meteors.size() - 1, -1, -1):
+			var m: Array = _meteors[i]
+			var mv := (m[1] as Vector2) * float(m[4]) * dt
+			m[0] = (m[0] as Vector2) + mv
+			m[3] = float(m[3]) + dt
+			# Гасим на верхней трети неба: ниже метеор всё равно уходит
+			# под карточку с текстом, где его не видно.
+			var ms := get_viewport_rect().size
+			if (m[0] as Vector2).y > ms.y * 0.45 or (m[0] as Vector2).x < -80.0 \
+				or (m[0] as Vector2).x > ms.x + 80.0:
+				_meteors.remove_at(i)
 	for i in range(_birds.size() - 1, -1, -1):
 		var b: Array = _birds[i]
 		b[0] = (b[0] as Vector2) + Vector2(float(b[3]) * _bird_speed(), 0.0) * dt
@@ -87,6 +113,43 @@ func _spawn_bird() -> void:
 	_birds.append([
 		pos, randf() * TAU, randf_range(9.0, 14.0) * _scale(), dir, 0.0
 	])
+
+
+## Новый метеор: падает сверху по диагонали вниз, хвост смотрит назад
+## по движению. Длина и скорость — с разбросом, чтобы два подряд не
+## были копией.
+func _spawn_meteor() -> void:
+	var s := get_viewport_rect().size
+	if s.x <= 0.0 or s.y <= 0.0:
+		return
+	var sc := _scale()
+	var side := 1.0 if randf() < 0.5 else -1.0
+	var dir := Vector2(side * randf_range(0.30, 0.75), 1.0).normalized()
+	_meteors.append([
+		Vector2(randf_range(s.x * 0.12, s.x * 0.88), -20.0 * sc),
+		dir, randf_range(40.0, 90.0) * sc, 0.0, randf_range(260.0, 420.0) * sc
+	])
+
+
+## Метеор: яркая голова и хвост из четырёх отрезков с падающей
+## прозрачностью. Затухает по краям полёта: на чём-то исчезает резко.
+func _draw_meteors() -> void:
+	var sc := _scale()
+	for m in _meteors:
+		var p: Vector2 = m[0]
+		var dir: Vector2 = m[1]
+		var life: float = float(m[3])
+		var ln: float = float(m[2])
+		var fade := clampf(life * 2.0, 0.0, 1.0)
+		for i in 4:
+			var t0 := float(i) / 4.0
+			var t1 := float(i + 1) / 4.0
+			draw_line(
+				p - dir * ln * t1, p - dir * ln * t0,
+				Color(1.0, 0.97, 0.88, (1.0 - t0) * 0.80 * fade),
+				(2.8 - 0.5 * float(i)) * sc
+			)
+		draw_circle(p, 2.6 * sc, Color(1.0, 0.99, 0.95, fade))
 
 
 ## Чайка-галочка: два крыла-дуги, машут синусом от фазы и возраста.
@@ -146,6 +209,8 @@ func _draw() -> void:
 	if night:
 		_draw_stars(s)
 		_draw_moon(s)
+		# Метеоры — по небу, до холмов: падая, они не летят над землёй.
+		_draw_meteors()
 	else:
 		_draw_sun(s)
 	# Холмы — поверх звёзд: небо кончается там, где начинается земля,

@@ -255,6 +255,28 @@ func _a_kb_en() -> void:
 ## Перелёт подписей при смене языка ввода: старая центральная буква ушла
 ## в свой угол и тускнеет, новая выходит из другого угла в центр
 ## (требование автора 10.2026). Два кадра: середина перелёта и конец.
+## Ночь с метеором: небо должно быть живым и ночью (автор 10.2026).
+func _a_night_meteor() -> void:
+	_win(Vector2i(820, 1180))
+	_main._force_touch = true
+	_main.night = true
+	_main.call("_apply_night")
+	for c in _main.get_children():
+		if c is Meadow:
+			(c as Meadow).night = true
+			(c as Meadow)._apply_sky()
+			(c as Meadow)._meteor_cd = 0.0
+			# Ставим метеор на середину неба: иначе он либо улетел за
+			# 14 кадров, либо спрятался за карточкой с текстом.
+			(c as Meadow)._spawn_meteor()
+			if not (c as Meadow)._meteors.is_empty():
+				var met: Array = (c as Meadow)._meteors[0]
+				met[0] = Vector2(230.0, 110.0)
+				met[1] = Vector2(0.62, 1.0).normalized()
+				met[3] = 0.4
+	_main._relayout()
+
+
 func _a_kb_switch_mid() -> void:
 	_main._set_kb_lang("en")
 	_main.kb_morph = 0.35
@@ -484,4 +506,6 @@ func _plan() -> void:
 		["31-kbd-morph-end", _a_kb_switch_end, 20],
 		# 19. Перелёт на щипке шифта: у знаков есть, у букв нет.
 		["32-kbd-shift-morph", _a_kb_shift_morph, 2],
+		# 20. Ночь: небо с метеором.
+		["33-night-meteor", _a_night_meteor, 14],
 	]
