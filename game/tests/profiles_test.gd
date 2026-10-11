@@ -1110,14 +1110,17 @@ func _part19_menu_typing() -> void:
 	_check(String(_menu.input_text) != text_before or String(_menu.input_text).length() >= 1,
 		"own keyboard types into the field")
 	_menu.input_text = ""
-	# Смена языка ввода сочетанием клавиш — тот же синоним, что глобус
-	# (жалоба автора 10.2026: «на смену языка ввода сочетанием клавиш
-	# виртуальная клавиатура не реагирует»).
+	# Доска меню следует за раскладкой системы по пришедшей букве, а не
+	# по сочетанию клавиш: переключатель у человека какой угодно
+	# (требование автора 10.2026).
 	_menu.kb_lang = "ru"
-	_menu.call("_unhandled_key_input", _mod(KEY_SHIFT, true, false))
-	_check(String(_menu.kb_lang) == "en", "the menu follows ctrl+shift")
-	_menu.call("_unhandled_key_input", _mod(KEY_SHIFT, false, true))
-	_check(String(_menu.kb_lang) == "ru", "and alt+shift brings it back")
+	_menu.input_active = true
+	_menu.call("_unhandled_key_input", _key_event("b"))
+	_check(String(_menu.kb_lang) == "en", "a latin key switches the menu board")
+	_check(float(_menu.kb_morph) < 1.0, "and starts the legend morph")
+	_menu.call("_unhandled_key_input", _key_event("б"))
+	_check(String(_menu.kb_lang) == "ru", "a cyrillic key brings it back")
+	_menu.input_text = ""
 	_menu.input_active = false
 
 

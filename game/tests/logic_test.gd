@@ -365,12 +365,20 @@ func _legend_roundtrip() -> void:
 				"«%s» (on %s) is reachable: %s" % [sym, key, str(combo)]
 			)
 	# Что лежит на конкретных клавишах — настоящая раскладка.
+	# Таблица /usr/share/X11/xkb/symbols/ru, «Русская»: точка и запятая —
+	# на клавише слева от правого шифта, прямой и обратный слеш — на
+	# ОТДЕЛЬНОЙ клавиши слева от ввода (автор 10.2026: «ты неправильно
+	# разместил прямой и обратный слеши на одной кнопке»).
 	_check(
-		K.legends("/") == [",", ".", "/", "\\"],
-		"the key left of the right shift carries four signs"
+		K.legends(".") == [".", ",", "/", "?"],
+		"the key left of the right shift is the dot"
+	)
+	_check(
+		K.legends("\\") == ["\\", "/", "\\", "|"],
+		"the backslash is a key of its own, left of enter"
 	)
 	_check(K.legends("2") == ["2", "\"", "2", "@"], "digit 2 carries both layouts' signs")
-	_check(K.legends("ю") == ["ю", "Ю", ".", ">"], "ю keeps its capital, the dot is typed on its own key")
+	_check(K.legends("ю") == ["ю", "Ю", ".", ">"], "ю keeps its capital next to its latin dot")
 	_check(K.legends("ё") == ["ё", "Ё", "`", "~"], "ё is a letter key with the backquote pair")
 	_check(
 		K.legends("х") == ["х", "Х", "[", "{"] and K.legends("э") == ["э", "Э", "'", "\""],
@@ -389,8 +397,9 @@ func _legend_roundtrip() -> void:
 		K.small_legends("ф", "en", false) == ["ф"],
 		"switching the language swaps which letter stands in the middle"
 	)
-	_check(K.combo_for(".") == ["/", true, "ru"], "the dot is taught as shift on its own key")
-	_check(K.combo_for(",") == ["/", false, "ru"], "the comma is a key of its own")
+	_check(K.combo_for(".") == [".", false, "ru"], "the dot is its own key, no shift")
+	_check(K.combo_for(",") == [".", true, "ru"], "the comma is shift on that key")
+	_check(K.combo_for("\\") == ["\\", false, "ru"], "the backslash is typed without shift")
 	_check(K.combo_for("?") == ["7", true, "ru"], "the question mark is shift+7")
 	_check(K.combo_for(":") == ["6", true, "ru"], "the colon is shift+6")
 	_check(K.combo_for("a") == ["ф", false, "en"], "latin is taught through its own key")
@@ -402,7 +411,7 @@ func _legend_roundtrip() -> void:
 		bottom.rfind("Alt") > bi and bottom.rfind("Ctrl") > bi,
 		"alt and ctrl sit to the right of space"
 	)
-	for gone in [".", "-", "\\"]:
+	for gone in ["-", "\\"]:
 		_check(not bottom.has(gone), "«%s» left the bottom row" % gone)
 
 

@@ -1533,7 +1533,11 @@ func _case_idle_hint() -> void:
 			pass
 		else:
 			_check(keys == [cur], "%s: highlights %s, expected [%s]" % [tag, str(keys), cur])
-	# Пробел — половиной по правилу противоположной руки.
+	# Пробел — половиной по правилу противоположной руки. Встаём на
+	# пробел ВСЕГДА: раньше это делалось только в ветке не-заглавной, и
+	# как только случайный текст давал под курсором заглавную, проверки
+	# ниже смотрели на букву и падали.
+	_check(_find_space_cell(), "%s: no space cell for the half highlight" % tag)
 	_main.last_hand = "Л"
 	_check(_main._hint_keys() == ["пробел:П"], "%s: after a left letter: %s" % [tag, str(_main._hint_keys())])
 	_main.last_hand = "П"
@@ -1690,42 +1694,41 @@ func _case_shift_hands() -> void:
 	_common(tag)
 
 
-## 43. Обратный слеш: своей клавиши у него нет — он живёт на ключе
-## слева от правого шифта, в английской раскладке и с шифтом, как на
-## настоящей (требование автора 10.2026: «у обратного слеша тоже есть
-## перегрузка»). Проверяем и доску, и подсказку, и что игра знак
-## принимает.
+## 43. Прямой и обратный слеши — на РАЗНЫХ клавишах, как на настоящей
+## (автор 10.2026: «ты неправильно разместил их на одной кнопке»):
+## клавиша слева от ввода — обратный слеш, а слева от правого шифта —
+## точка с запятой. По таблице XKB (ru/winkeys). Проверяем и доску, и
+## то, что игра знак принимает.
 func _case_backslash_key() -> void:
 	_fresh(0, 1)
 	_kbd_on()
 	var tag := "backslash"
 	var btns := _kbd_buttons()
-	if not btns.has("/"):
-		_check(false, "%s: no key left of the right shift" % tag)
-		return
-	var combo := Kbd.combo_for("\\", "en")
+	for need in ["\\", "."]:
+		if not btns.has(need):
+			_check(false, "%s: no key «%s»" % [tag, need])
+			return
 	_check(
-		not combo.is_empty() and String(combo[0]) == "/" and bool(combo[1])
-		and String(combo[2]) == "en",
-		"%s: the backslash is not taught as en+shift on that key (%s)" % [tag, str(combo)]
+		Kbd.legends("\\") == ["\\", "/", "\\", "|"],
+		"%s: the backslash key carries backslash, slash, backslash and bar" % tag
 	)
 	_check(
-		Kbd.press_out("/", "en", true) == "\\",
-		"%s: that key does not type the backslash in english" % tag
+		Kbd.legends(".") == [".", ",", "/", "?"],
+		"%s: the key left of the right shift is the dot and the comma" % tag
+	)
+	var combo := Kbd.combo_for("\\", "ru")
+	_check(
+		not combo.is_empty() and String(combo[0]) == "\\" and not bool(combo[1]),
+		"%s: the backslash is not a plain key in russian (%s)" % [tag, str(combo)]
 	)
 	_check(
-		Kbd.small_legends("/", "ru", false).has("\\"),
-		"%s: the backslash is not printed on the key" % tag
+		Kbd.combo_for("/") == ["\\", true, "ru"],
+		"%s: the slash is shift on the backslash key" % tag
 	)
 	var marks0: int = _main.errors.size()
 	var ok0: int = _main.typed_ok
-	_main.kb_lang = "en"
-	_main._own_press(btns["Shift"])
+	_main._own_press(btns["\\"])
 	_tick(tag)
-	_main._own_press(btns["/"])
-	_tick(tag)
-	_main.kb_shift = false
-	_main.kb_lang = "ru"
 	_common(tag)
 	_check(
 		_main.typed_ok == ok0 + 1 or _main.errors.size() == marks0 + 1,
@@ -1733,31 +1736,53 @@ func _case_backslash_key() -> void:
 	)
 
 
-## 44. Смена языка ввода сочетанием клавиш (Ctrl+Shift или Alt+Shift,
-## как в Windows) — синоним глобуса: своя доска обязана переехать на
-## другой алфавит, иначе игра учит не той букве (жалоба автора 10.2026).
-func _case_lang_hotkey() -> void:
+## 44. Язык ввода доска берёт у СИСТЕМЫ, а не угадывает по сочетанию
+## клавиш: переключатель раскладки у человека какой угодно (Ctrl+Shift,
+## Alt+Shift, Win+Space, Caps), а вот буква всегда однозначно говорит,
+## что система сейчас отдаёт. Пришла латинская буква — доска переехала
+## на латиницу (требование автора 10.2026), пришла русская — обратно.
+## Знаки, цифры и щипок шифта язык не трогают. Плюс перелёт подписей:
+## старая буква уходит в угол, новая выходит в центр (требование
+## автора: «старая становится меньше и уходит в свой край»).
+func _case_lang_state() -> void:
 	_fresh(0, 1)
 	_kbd_on()
-	var tag := "lang hotkey"
-	var before: String = _main.kb_lang
-	_main.call("_unhandled_key_input", _mod_key(KEY_SHIFT, true, false))
-	_check(_main.kb_lang != before, "%s: ctrl+shift did not switch the input language" % tag)
-	var after: String = _main.kb_lang
-	# Тот же ключ без модификатора — обычный шифт доски, язык не трогаем.
-	_main.kb_shift = false
-	_main.call("_unhandled_key_input", _key(KEY_SHIFT))
-	_check(_main.kb_lang == after, "%s: a plain shift changed the language" % tag)
-	# Alt+Shift — вторая форма того же сочетания.
-	_main.call("_unhandled_key_input", _mod_key(KEY_SHIFT, false, true))
-	_check(_main.kb_lang != after, "%s: alt+shift did not switch back" % tag)
-	# Сочетание с обычной клавишей — не переключение (иначе Ctrl+Shift+S
-	# на компьютере ронял бы язык при каждом сохранении).
-	var keep: String = _main.kb_lang
-	_main.call("_unhandled_key_input", _mod_key(KEY_S, true, false))
-	_check(_main.kb_lang == keep, "%s: ctrl+shift+letter switched the language" % tag)
+	var tag := "lang state"
 	_main.kb_lang = "ru"
+	# Латинская буква с физической клавиатуры.
+	_main.call("_unhandled_key_input", _key(KEY_NONE, "a".unicode_at(0)))
+	_tick(tag)
+	_check(_main.kb_lang == "en", "%s: a latin key did not switch the board" % tag)
+	_check(_main.kb_morph < 1.0, "%s: no morph after the switch" % tag)
+	_check(
+		String(_main.kb_morph_from) == "ru",
+		"%s: the morph does not remember the old language (%s)" % [tag, _main.kb_morph_from]
+	)
+	# Перелёт доезжает сам и не зависает на середине.
+	for _i in 20:
+		_tick(tag)
+	_check(is_equal_approx(_main.kb_morph, 1.0), "%s: the morph never finished" % tag)
+	# Русская буква — обратно.
+	_main.call("_unhandled_key_input", _key(KEY_NONE, "я".unicode_at(0)))
+	_tick(tag)
+	_check(_main.kb_lang == "ru", "%s: a cyrillic key did not switch back" % tag)
+	# Знаки и цифры язык не трогают: они есть в обеих раскладках.
+	_main.kb_morph = 1.0
+	_main.call("_unhandled_key_input", _key(KEY_7, "7".unicode_at(0)))
+	_tick(tag)
+	_check(_main.kb_lang == "ru", "%s: a digit switched the language" % tag)
+	_main.call("_unhandled_key_input", _key(KEY_1, "!".unicode_at(0)))
+	_tick(tag)
+	_check(_main.kb_lang == "ru", "%s: a sign switched the language" % tag)
+	# Щипок шифта — тоже не язык, и перелёта на нём нет (автор: «для
+	# смены регистра анимация не нужна»).
+	_main.call("_unhandled_key_input", _key(KEY_SHIFT))
+	_tick(tag)
+	_check(_main.kb_lang == "ru", "%s: shift switched the language" % tag)
+	_check(_main.kb_morph >= 1.0, "%s: shift started a morph" % tag)
 	_main.kb_shift = false
+	_main.kb_morph = 1.0
+	_main.kb_morph_from = ""
 
 
 ## 18. Автопунктуация IME: точка с настоящим keycode, когда игра ждёт
@@ -2092,7 +2117,7 @@ func _process(_dt: float) -> bool:
 	_case_reflow_typed_cells()
 	_case_shift_hands()
 	_case_backslash_key()
-	_case_lang_hotkey()
+	_case_lang_state()
 	_case_chaos(1500)
 	_cases = 40
 	_check(_steps > 1200, "the test really played (coverage: %d steps)" % _steps)

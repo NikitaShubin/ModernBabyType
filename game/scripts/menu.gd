@@ -81,6 +81,11 @@ var k := 1.0
 ## Отступ от верха под вырез камеры (как в игре, см. Ui.top_inset).
 var top_safe := 0.0
 var kb_lang := "ru"
+## Перелёт подписей при смене языка ввода (как в игре): старая буква
+## уходит в угол, новая выходит в центр.
+var kb_morph := 1.0
+var kb_morph_from := ""
+const KB_MORPH_T := 0.22
 var kb_shift := false
 var kb_key_sb: StyleBoxFlat
 ## Ручной режим ночи из настроек: 0 день, 1 ночь, -1 авто (система).
@@ -100,7 +105,8 @@ func _draw_own_kb() -> void:
 		return
 	Kbd.draw(
 		self, _own_rect(), kb_lang, kb_shift, true, mono,
-		int(30.0 * k), kb_key_sb, selbox_sb, _uitext(), [], null, _dim()
+		int(30.0 * k), kb_key_sb, selbox_sb, _uitext(), [], null, _dim(),
+		kb_morph, kb_morph_from
 	)
 
 
@@ -115,7 +121,7 @@ func _own_press(pos: Vector2) -> bool:
 	elif act == "язык":
 		# Глобус реально меняет язык ввода (см. игру): та же клавиша
 		# даёт другую букву, подсветка перетекает.
-		kb_lang = "en" if kb_lang == "ru" else "ru"
+		_set_kb_lang("en" if kb_lang == "ru" else "ru")
 	elif act == "шифт":
 		kb_shift = not kb_shift
 	elif act == "ввод":
@@ -251,14 +257,26 @@ func _reload() -> void:
 
 
 
-## Переключает ли это событие язык ввода? В Windows раскладку меняют
-## Ctrl+Shift или Alt+Shift, и доке в том, что система их поймает, нет —
-## слушаем сами. Ловим только сами модификаторы: сочетание с обычной
-## клавишей (Ctrl+Shift+S) — это не переключение раскладки.
-func _lang_hotkey(ke: InputEventKey) -> bool:
-	if not ke.shift_pressed or not (ke.ctrl_pressed or ke.alt_pressed):
-		return false
-	return ke.keycode == KEY_SHIFT or ke.keycode == KEY_CTRL or ke.keycode == KEY_ALT
+## Доска следует за раскладкой физической клавиатуры (см. игру).
+func _follow_keyboard_lang(ch: String) -> void:
+	if ch.length() != 1:
+		return
+	var lo := ch.to_lower()
+	if lo == "ё" or (lo >= "а" and lo <= "я"):
+		_set_kb_lang("ru")
+	elif lo >= "a" and lo <= "z":
+		_set_kb_lang("en")
+
+
+## Смена языка ввода с перелётом подписей: старая центральная буква
+## уходит в свой угол, нужная выходит из другого угла в центр.
+func _set_kb_lang(lang: String) -> void:
+	if lang == kb_lang:
+		return
+	kb_morph_from = kb_lang
+	kb_morph = 0.0
+	kb_lang = lang
+	queue_redraw()
 
 func _unhandled_key_input(event: InputEvent) -> void:
 	var ke := event as InputEventKey
@@ -303,13 +321,12 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		_eaten()
 		return
 	# F2 — вернуться в игру тем же игроком, кого открыли меню.
-	# Смена языка ввода сочетанием клавиш (Ctrl+Shift / Alt+Shift) —
-	# тот же синоним, что глобус (см. _lang_hotkey в игре).
-	if _lang_hotkey(ke):
-		kb_lang = "en" if kb_lang == "ru" else "ru"
-		queue_redraw()
-		_eaten()
-		return
+	# Раскладку физической клавиатуры мы не угадываем по сочетанию:
+	# переключатель у человека какой угодно. Следим за СОСТОЯНИЕМ —
+	# пришла буква, значит система отдаёт этот алфавит (требование
+	# автора 10.2026).
+	if ke.unicode > 0:
+		_follow_keyboard_lang(String.chr(ke.unicode))
 	if ke.keycode == KEY_F2:
 		chosen.emit(resume_user)
 		_eaten()
@@ -383,7 +400,10 @@ func _unhandled_key_input(event: InputEvent) -> void:
 
 	queue_redraw()
 	_eaten()
-func _process(_dt: float) -> void:
+func _process(dt: float) -> void:
+	if kb_morph < 1.0:
+		kb_morph = minf(1.0, kb_morph + dt / KB_MORPH_T)
+		queue_redraw()
 	_poll_update()
 
 

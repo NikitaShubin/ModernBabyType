@@ -252,6 +252,18 @@ func _a_kb_en() -> void:
 	_main.kb_lang = "en"
 
 
+## Перелёт подписей при смене языка ввода: старая центральная буква ушла
+## в свой угол и тускнеет, новая выходит из другого угла в центр
+## (требование автора 10.2026). Два кадра: середина перелёта и конец.
+func _a_kb_switch_mid() -> void:
+	_main._set_kb_lang("en")
+	_main.kb_morph = 0.35
+
+
+func _a_kb_switch_end() -> void:
+	_main.kb_morph = 1.0
+
+
 func _a_sym_hint() -> void:
 	_win(Vector2i(820, 1180))
 	_main._force_touch = true
@@ -457,4 +469,7 @@ func _plan() -> void:
 		["27-kbd-ru", _a_kb_ru, 30],
 		["28-kbd-ru-shift", _a_kb_ru_shift, 20],
 		["29-kbd-en", _a_kb_en, 20],
+		# 18. Перелёт подписей при смене языка ввода.
+		["30-kbd-morph", _a_kb_switch_mid, 20],
+		["31-kbd-morph-end", _a_kb_switch_end, 20],
 	]

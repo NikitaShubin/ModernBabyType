@@ -32,8 +32,8 @@ const ROW_DIGITS_RU: Array = ["ё", "1", "2", "3", "4", "5", "6", "7", "8", "9",
 ## настоящей — требование автора 10.2026).
 const ROWS_RU: Array = [
 	["й", "ц", "у", "к", "е", "н", "г", "ш", "щ", "з", "х", "ъ"],
-	["ф", "ы", "в", "а", "п", "р", "о", "л", "д", "ж", "э", "↵"],
-	["Shift", "я", "ч", "с", "м", "и", "т", "ь", "б", "ю", "/", "ShiftR"],
+	["ф", "ы", "в", "а", "п", "р", "о", "л", "д", "ж", "э", "\\", "↵"],
+	["Shift", "я", "ч", "с", "м", "и", "т", "ь", "б", "ю", ".", "ShiftR"],
 ]
 
 ## Отдельных латинских рядов больше нет: доска одна (русская физическая),
@@ -66,15 +66,17 @@ const EN_SHIFT := {
 	"-": "_", "=": "+",
 }
 
-## Клавиши с перегрузкой (требование автора 10.2026: на некоторых
-## клавишах не два, а три знака, а на ключе слева от правого шифта
-## вообще четыре). «ё» — буква, чья пара в английской раскладке обратный
-## апостроф; ключ слева от правого шифта — «,» и точка по-русски,
-## «/» и обратный слеш по-английски (точка нужна текстам, а «?» и так
-## живёт на Shift+7).
+## Клавиши, где русский знак не совпадает с английским (таблица
+## /usr/share/X11/xkb/symbols/ru, раскладка «Русская», та же, что в
+## Windows): клавиша слева от правого шифта — точка и запятая, а
+## обратный слеш и прямой слеш — ОТДЕЛЬНАЯ клавиша слева от ввода
+## (автор 10.2026: «ты неправильно разместил прямой и обратный слеши
+## на одной кнопке»). По-английски на тех же клавишах «/» с «?» и
+## «\\» с «|».
 ## Порядок: [русская, русская+шифт, английская, английская+шифт].
 const OVERLOAD := {
-	"/": [",", ".", "/", "\\"],
+	".": [".", ",", "/", "?"],
+	"\\": ["\\", "/", "\\", "|"],
 }
 
 ## Знаки с шифтом у тех клавиш, чья пара в английской раскладке — сама
@@ -225,6 +227,18 @@ static func is_plain_letter(s: String) -> bool:
 
 ## Широкие кнопки (долей ширины ряда): пробел тройной, шифт
 ## и стереть полуторные (как у Яндекс-клавиатуры), остальные обычные.
+## Клавиш питчем в ряду: всё, кроме широких служебных (шифты, стереть,
+## пробел) и ввода — ввод получает остаток ряда, а не питч.
+static func _plain_count(row: Array) -> int:
+	var n := 0
+	for label in row:
+		var s := String(label)
+		if s == "↵" or _span(s) != 1.0:
+			continue
+		n += 1
+	return n
+
+
 static func _span(label: String) -> float:
 	if label == "пробел":
 		return 3.0
@@ -300,17 +314,21 @@ static func buttons(area: Rect2, shift: bool, enter := false) -> Array:
 	var ru_lr := 0.0
 	if rows.size() >= 5:
 		var w := area.size.x
-		# Питч один на всё, включая цифры: 12 букв, ступеньки ф/я,
-		# симметричные шифты от 32px, стереть от 48px.
-		ru_p = minf((w - 11.0 * gap) / 12.0, (w - 11.0 * gap - 64.0) / 10.0)
-		ru_p = minf(ru_p, (5.0 * w - 55.0 * gap - 192.0) / 56.0)
-		ru_p = minf(ru_p, (w - 11.0 * gap - 32.0) / 11.25)
-		ru_p = minf(ru_p, (w - 11.0 * gap - 80.0) / 10.0)
-		# Ввод не меньше 1.2 питча (жалоба: слишком маленький Enter).
-		ru_p = minf(ru_p, (5.0 * w - 55.0 * gap) / 63.2)
+		# Сколько клавиш питчем в каждом ряду — считаем по САМИМ рядам,
+		# а не константами: после правок раскладки (клавиша слеша слева
+		# от ввода) константы разъехались и ввод схлопнулся в 7px.
+		var n1 := _plain_count(rows[1])
+		var n2 := _plain_count(rows[2])
+		var n3 := _plain_count(rows[3])
+		# Верхний буквенный ряд: питчем влезает целиком.
+		ru_p = (w - float(n1) * gap) / float(n1)
+		# Средний ряд и низ: ступенька слева, n2 клавиш питчем, ввод не
+		# меньше 1.2 питча, шифты делят остаток пополам. Из этого:
+		# p ≤ (5w − (6·n2 − n3)·gap) / (6·n2 − n3 + 7.2).
+		var k := 6.0 * float(n2) - float(n3)
+		ru_p = minf(ru_p, (5.0 * w - k * gap) / (k + 7.2))
 		ru_p = maxf(ru_p, 16.0)
-		ru_lr = (w - 10.0 * ru_p - 11.0 * gap) * 0.5
-		ru_lr = maxf(ru_lr, 32.0)
+		ru_lr = maxf((w - float(n3) * (ru_p + gap)) * 0.5, 32.0)
 		ru_a = ru_lr / 3.0
 	for ri in rows.size():
 		var row: Array = rows[ri]
@@ -454,7 +472,8 @@ static func hit(area: Rect2, shift: bool, enter: bool, pos: Vector2) -> String:
 static func draw(
 	ci: CanvasItem, area: Rect2, lang: String, shift: bool,
 	enter: bool, font: Font, fs: int, sb: StyleBox, sb_on: StyleBox, ink: Color,
-	hi: Array = [], hi_sb: StyleBox = null, ink_dim: Color = Color(0, 0, 0, 0)
+	hi: Array = [], hi_sb: StyleBox = null, ink_dim: Color = Color(0, 0, 0, 0),
+	morph := 1.0, morph_from := ""
 ) -> void:
 	# hi — подписи клавиш, которые игра подсвечивает после простоя
 	# (вместо текстовой подсказки «Нажми К»). hi_sb рисует их вызыватель
@@ -463,6 +482,10 @@ static func draw(
 	# противоположной руки) с мягкой градиентной границей.
 	# ink_dim — приглушённые чернила для неактивных подписей: у каждой
 	# буквы напечатаны обе раскладки, активная светится ярче.
+	# morph (0..1) и morph_from — перелёт при смене языка ввода: старая
+	# центральная подпись уходит в свой угол, новая выходит из другого
+	# угла в центр (требование автора 10.2026). morph_from пустой или
+	# morph = 1 — перелёта нет.
 	var gap := 8.0
 	var rh := (area.size.y - gap * 4.0) / 5.0
 	var key_fs := maxi(fs, int(rh * 0.40))
@@ -507,7 +530,7 @@ static func draw(
 			# — мельче: их на клавише по три-четыре.
 			if pair_of(s) != "" and s.length() == 1:
 				sub_fs = maxi(int(float(f) * 0.66), int(rh * 0.24))
-			_draw_legends(ci, r, font, s, lang, shift, f, sub_fs, ink, dim)
+			_draw_legends(ci, r, font, s, lang, shift, f, sub_fs, ink, dim, morph, morph_from)
 			continue
 		# Служебная клавиша: одна подпись по центру. Заблокированные
 		# (Ctrl/Win/Alt) в наборе не участвуют — приглушены, чтобы не
@@ -530,9 +553,12 @@ static func draw(
 ## вылез бы за клавишу.
 static func _draw_legends(
 	ci: CanvasItem, r: Rect2, font: Font, s: String, lang: String, shift: bool,
-	f: int, sub_fs: int, ink: Color, dim: Color
+	f: int, sub_fs: int, ink: Color, dim: Color, morph := 1.0, morph_from := ""
 ) -> void:
 	var main := press_out(s, lang, shift)
+	if morph < 1.0 and morph_from != "" and morph_from != lang:
+		if _draw_morph(ci, r, font, s, lang, shift, f, sub_fs, ink, dim, morph, morph_from):
+			return
 	var tw := font.get_string_size(main, HORIZONTAL_ALIGNMENT_LEFT, -1.0, f).x
 	ci.draw_string(
 		font,
@@ -551,6 +577,49 @@ static func _draw_legends(
 			font, Vector2(zone.get_center().x - w * 0.5, zone.get_center().y + float(font.get_height(sf)) * 0.3),
 			t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, sf, dim
 		)
+
+
+## Перелёт при смене языка: старая центральная подпись уменьшается,
+## тускнеет и уходит в свой угол, новая выходит из другого угла,
+## растёт и ярчает до центра. Возвращает true, если перелёт был (тогда
+## обычный рисунок не рисуется). Ключи, у которых подпись не меняется
+## (цифры: «2» и в русской, и в английской даёт «2»), перелёта не
+## имеют. Смена регистра сюда не попадает: вызывающий не запускает
+## перелёт на щипке шифта (требование автора 10.2026).
+static func _draw_morph(
+	ci: CanvasItem, r: Rect2, font: Font, s: String, lang: String, shift: bool,
+	f: int, sub_fs: int, ink: Color, dim: Color, morph: float, morph_from: String
+) -> bool:
+	var old_main := press_out(s, morph_from, shift)
+	var main := press_out(s, lang, shift)
+	if old_main == main:
+		return false
+	var smalls := small_legends(s, lang, shift)
+	var center := r.get_center()
+	# Уходящая идёт в тот угол, где она теперь живёт; приходящая
+	# выходит из другого угла, чтобы в полёте не наложиться на неё.
+	var ci_out := smalls.find(old_main)
+	if ci_out < 0:
+		ci_out = 0
+	var from_corner := _corner(r, 2)
+	var to_corner := _corner(r, ci_out).get_center()
+	_draw_glyph(ci, font, old_main, center.lerp(to_corner, morph),
+		lerpf(float(f), float(sub_fs), morph), ink.lerp(dim, morph))
+	_draw_glyph(ci, font, main, from_corner.get_center().lerp(center, morph),
+		lerpf(float(sub_fs), float(f), morph), dim.lerp(ink, morph))
+	return true
+
+
+## Глиф по центру точки, кеглем и чернилами на выбор.
+static func _draw_glyph(
+	ci: CanvasItem, font: Font, txt: String, at: Vector2, f: float, col: Color
+) -> void:
+	var fi := int(f)
+	var w := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fi).x
+	ci.draw_string(
+		font, Vector2(at.x - w * 0.5, at.y + float(font.get_height(fi)) * 0.3),
+		txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fi, col
+	)
 
 
 ## Зона угловой подписи: верхний левый, верхний правый, нижний левый —

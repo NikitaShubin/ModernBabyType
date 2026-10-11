@@ -154,6 +154,10 @@ var meadow: Meadow = null
 ## меняются (доска одна, русская физическая): меняется подсветка букв и
 ## то, какая буква вводится клавишей. Системную не вызываем вообще.
 var kb_lang := "ru"
+## Перелёт подписей при смене языка ввода: 0 — только начали, 1 — доехал.
+## Старый язык помним, чтобы знать, откуда летел символ.
+var kb_morph := 1.0
+var kb_morph_from := ""
 var kb_shift := false
 var kb_key_sb: StyleBoxFlat
 var kb_on_sb: StyleBoxFlat
@@ -892,7 +896,9 @@ func _new_level() -> void:
 	# «после смены уровня нажимал правильную букву, реакции не было»).
 
 	# Слой и шифт своей клавиатуры сбрасываем: новый уровень — чистые буквы.
-	kb_lang = "ru"
+	_set_kb_lang("ru")
+	kb_morph_from = ""
+	kb_morph = 1.0
 	kb_shift = false
 	# И предупреждение о CapsLock: новый текст — новая жизнь.
 	_caps_warn = false
@@ -988,14 +994,36 @@ func _skip_inactive() -> void:
 
 
 
-## Переключает ли это событие язык ввода? В Windows раскладку меняют
-## Ctrl+Shift или Alt+Shift, и доке в том, что система их поймает, нет —
-## слушаем сами. Ловим только сами модификаторы: сочетание с обычной
-## клавишей (Ctrl+Shift+S) — это не переключение раскладки.
-func _lang_hotkey(ke: InputEventKey) -> bool:
-	if not ke.shift_pressed or not (ke.ctrl_pressed or ke.alt_pressed):
-		return false
-	return ke.keycode == KEY_SHIFT or ke.keycode == KEY_CTRL or ke.keycode == KEY_ALT
+## Доска следует за раскладкой физической клавиатуры. Следим за
+## алфавитом пришедшей буквы, а не за сочетанием клавиш: переключатель у
+## человека может быть каким угодно, а буква всегда однозначно говорит,
+## что система сейчас отдаёт.
+func _follow_keyboard_lang(ch: String) -> void:
+	if ch.length() != 1:
+		return
+	var lo := ch.to_lower()
+	var cyr: bool = lo == "ё" or (lo >= "а" and lo <= "я")
+	var lat: bool = lo >= "a" and lo <= "z"
+	if cyr:
+		_set_kb_lang("ru")
+	elif lat:
+		_set_kb_lang("en")
+
+
+## Сменить язык ввода доски с перелётом подписей. Смена регистра
+## (шифт) перелёт не запускает — там просто меняется крупная буква
+## (требование автора 10.2026).
+func _set_kb_lang(lang: String) -> void:
+	if lang == kb_lang:
+		return
+	kb_morph_from = kb_lang
+	kb_morph = 0.0
+	kb_lang = lang
+	queue_redraw()
+
+
+## Длительность перелёта, секунды.
+const KB_MORPH_T := 0.22
 
 func _unhandled_key_input(event: InputEvent) -> void:
 	var ke := event as InputEventKey
@@ -1003,15 +1031,14 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		return
 	if not ke.pressed or ke.echo:
 		return
-	# Смена языка ввода сочетанием клавиш (Ctrl+Shift / Alt+Shift — так
-	# переключают раскладку в Windows) должна двигать и нашу доску: раньше
-	# подсветка оставалась от старого языка, и игра учила не той букве
-	# (жалоба автора 10.2026). Глобус и это сочетание — синоним.
-	if _lang_hotkey(ke):
-		kb_lang = "en" if kb_lang == "ru" else "ru"
-		queue_redraw()
-		get_viewport().set_input_as_handled()
-		return
+	# Раскладку физической клавиатуры мы не угадываем по сочетанию —
+	# оно у каждой системы своё (Ctrl+Shift, Alt+Shift, Win+Space, Caps).
+	# Следим за СОСТОЯНИЕМ: пришла буква — значит система сейчас отдаёт
+	# этот алфавит, и доска обязана показать его же (требование автора
+	# 10.2026). Своя экранная клавиатура событий не шлёт, поэтому тап по
+	# глобусу состояние не перебивает.
+	if ke.unicode > 0:
+		_follow_keyboard_lang(String.chr(ke.unicode))
 	_poke_idle()
 	if ke.keycode == KEY_ESCAPE:
 		if menu_open:
@@ -1471,6 +1498,11 @@ func _process(dt: float) -> void:
 	dt = minf(dt, MAX_FRAME_DT)
 	time += dt
 	idle_t += dt
+	# Перелёт подписей после смены языка ввода: короткий, чтобы не
+	# тянуть игру.
+	if kb_morph < 1.0:
+		kb_morph = minf(1.0, kb_morph + dt / KB_MORPH_T)
+		queue_redraw()
 	# Высота раскладки — всегда своя клавиатура: система больше не
 	# участвует, замеров и подстройки нет, раскладка не прыгает сама.
 	var oh := _own_h()
@@ -2178,7 +2210,8 @@ func _draw_own_kb() -> void:
 		kb_hi_sb.bg_color = c
 	Kbd.draw(
 		self, _own_rect(), kb_lang, kb_shift, false, mono,
-		int(30.0 * k), kb_key_sb, kb_on_sb, _ui_ink(), hi, kb_hi_sb, _ui_dim()
+		int(30.0 * k), kb_key_sb, kb_on_sb, _ui_ink(), hi, kb_hi_sb, _ui_dim(),
+		kb_morph, kb_morph_from
 	)
 
 
@@ -2206,7 +2239,7 @@ func _own_press(pos: Vector2) -> bool:
 	elif act == "язык":
 		# Глобус реально меняет язык ввода: та же клавиша даёт другую
 		# букву, подсветка перетекает (синонимичные действия).
-		kb_lang = "en" if kb_lang == "ru" else "ru"
+		_set_kb_lang("en" if kb_lang == "ru" else "ru")
 	elif act == "шифт":
 		kb_shift = not kb_shift
 	elif act == "пробел":
