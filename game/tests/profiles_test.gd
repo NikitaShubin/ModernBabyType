@@ -1142,14 +1142,11 @@ func _part21_own_keyboard() -> void:
 	var area: Rect2 = _menu.call("_own_rect")
 	_check(area.size.y > 0.0, "menu keyboard has height")
 	# Шифт + буква: заглавная в имени.
-	_menu.call("_own_press", _mkey(area, "ru", false, "⇧"))
+	_menu.call("_own_press", _mkey(area, "ru", false, "Shift"))
+	_check(bool(_menu.kb_shift), "left shift arms")
 	_menu.call("_own_press", _mkey(area, "ru", true, "П"))
 	_check(String(_menu.input_text) == "П", "shift gives uppercase")
-	# Слой знаков и обратно.
-	_menu.call("_own_press", _mkey(area, "ru", false, "?123"))
-	_check(String(_menu.kb_layer) == "sym", "menu switches to symbols")
-	_menu.call("_own_press", _mkey(area, "sym", false, "РУ"))
-	_check(String(_menu.kb_layer) == "ru", "symbols return to russian")
+	# Глобус туда-обратно (слоя знаков больше нет).
 	_menu.call("_own_press", _mkey(area, "ru", false, "глобус"))
 	_check(String(_menu.kb_layer) == "en", "globe switches to latin")
 	_menu.call("_own_press", _mkey(area, "en", false, "глобус"))

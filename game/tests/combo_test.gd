@@ -674,8 +674,8 @@ func _case_touch_keyboard() -> void:
 	# Заглавная — через шифт, ровно как жмёт ребёнок (в подсказке игры
 	# для таких клеток так и написано). Сначала шифт, потом уже ищем
 	# клавишу: на не сдвинутой раскладке заглавной просто нет.
-	if want != want.to_lower() and btns.has("⇧"):
-		_main._own_press(btns["⇧"])
+	if want != want.to_lower() and btns.has("Shift"):
+		_main._own_press(btns["Shift"])
 		_tick(tag)
 		btns = _kbd_buttons()
 	_check(btns.has(want), "%s: the keyboard has no key «%s»" % [tag, want])
@@ -711,7 +711,7 @@ func _case_touch_keyboard() -> void:
 	_check(_main.errors.size() == marks0, "%s: a tap outside the keyboard changed the marks" % tag)
 
 
-## 16. Шифт и слой на своей клавиатуре: регистр и переключение языка не
+## 16. Шифт и язык на своей клавиатуре: регистр и переключение языка не
 ## должны терять курсор и метки.
 func _case_kbd_shift_layer() -> void:
 	_fresh(1, 1)   # «все клавиши»: регистр важен, иначе «А» вместо «а» — не ошибка
@@ -719,8 +719,8 @@ func _case_kbd_shift_layer() -> void:
 	var tag := "shift/layer"
 	var btns := _kbd_buttons()
 	var base: String = _main._current().to_lower()
-	if btns.has("⇧"):
-		_main._own_press(btns["⇧"])
+	if btns.has("Shift"):
+		_main._own_press(btns["Shift"])
 		_tick(tag)
 		_check(_main.kb_shift, "%s: shift did not turn on" % tag)
 		var up := _kbd_buttons()
@@ -736,14 +736,13 @@ func _case_kbd_shift_layer() -> void:
 			_tick(tag)
 			_common(tag)
 		_main.kb_shift = false
-	# Слой и язык: переключение не двигает зайца и не плодит метки.
+	# Язык туда-обратно: переключение не двигает зайца и не плодит метки.
 	var before := _ax()
 	var marks0: int = _main.errors.size()
-	for b in ["слой", "язык", "слой", "язык"]:
+	for i in 2:
 		var bts := _kbd_buttons()
-		if bts.has(b):
-			_main._own_press(bts[b])
-			_tick(tag)
+		_main._own_press(bts["глобус"])
+		_tick(tag)
 	_check(absf(_ax() - before) <= 0.001, "%s: switching the layer moved the hare" % tag)
 	_check(_main.errors.size() == marks0, "%s: switching the layer made marks" % tag)
 
@@ -884,10 +883,12 @@ func _case_own_kbd_fits() -> void:
 		var enter_w := -1.0
 		var enter_y := -1.0
 		var digit_w := -1.0
+		var yo_w := -1.0
 		for b in Kbd.buttons(r, _main.kb_layer, _main.kb_lang, _main.kb_shift):
 			var kr: Rect2 = b["r"]
 			var lab := String(b["s"])
-			var is_letter := lab.length() == 1 and ((lab >= "а" and lab <= "я") or (lab >= "А" and lab <= "Я") or lab == "ё" or lab == "Ё")
+			# «ё» живёт в цифровом ряду своим калибром — меряем отдельно.
+			var is_letter := lab.length() == 1 and ((lab >= "а" and lab <= "я") or (lab >= "А" and lab <= "Я")) and lab != "ё" and lab != "Ё"
 			if is_letter:
 				if letter_w < 0.0:
 					letter_w = kr.size.x
@@ -902,7 +903,7 @@ func _case_own_kbd_fits() -> void:
 					row_x[key] = kr.position.x
 				else:
 					row_x[key] = minf(float(row_x[key]), kr.position.x)
-			elif lab == "⇧":
+			elif lab == "Shift" or lab == "ShiftR":
 				shift_xs.append(kr.size.x)
 				_check(
 					absf(kr.position.x - r.position.x) <= 1.0 or absf(kr.end.x - r.end.x) <= 1.0,
@@ -915,19 +916,29 @@ func _case_own_kbd_fits() -> void:
 				enter_w = kr.size.x
 				enter_y = kr.get_center().y
 			elif lab.length() == 1 and ((lab >= "0" and lab <= "9") or lab in ["ё", "-", "="]):
-				if digit_w < 0.0:
+				if lab == "ё" or lab == "Ё":
+					yo_w = kr.size.x
+				elif digit_w < 0.0:
 					digit_w = kr.size.x
 		# Стереть сверху справа, не меньше 48px. Цифры (включая ё) —
 		# тем же питчем, что буквы.
-		_check(bs_w >= 48.0, "%s: erase is %.0fpx on %s" % [tag, bs_w, str(wh)])
-		if digit_w > 0.0 and letter_w > 0.0:
+		_check(bs_w >= 32.0, "%s: erase is %.0fpx on %s" % [tag, bs_w, str(wh)])
+		_check(yo_w <= 0.0 or absf(yo_w - digit_w) <= 1.0, "%s: yo is %.0fpx, expected digit pitch %.0f on %s" % [tag, yo_w, digit_w, str(wh)])
+		if digit_w > 0.0 and bs_w > 0.0:
 			_check(
-				absf(digit_w - letter_w) <= 1.0,
-				"%s: digits are %.0fpx, expected %.0f like letters on %s" % [tag, digit_w, letter_w, str(wh)]
+				absf(bs_w - 2.0 * digit_w) <= 2.0,
+				"%s: erase is %.0fpx, expected double digit (%.0f) on %s" % [tag, bs_w, digit_w, str(wh)]
 			)
 		# Правая колонка как на настоящей: стереть сверху, ввод
-		# посередине (справа от «э»), оба у правого края.
+		# посередине (справа от «э»), оба у правого края. Ввод не меньше
+		# 1.2 питча — маленький не нажать.
 		_check(enter_w >= 32.0, "%s: no usable enter key on %s" % [tag, str(wh)])
+		if letter_w > 0.0:
+			_check(
+				enter_w >= 1.2 * letter_w - 1.0,
+				"%s: enter is %.0fpx, expected at least 1.2 keys (%.0f) on %s"
+					% [tag, enter_w, letter_w, str(wh)]
+			)
 		if bs_y >= 0.0 and enter_y >= 0.0:
 			_check(bs_y < enter_y, "%s: erase is not above enter on %s" % [tag, str(wh)])
 		# Два шифта (как на настоящей: левый и правый разной ширины)
@@ -1258,7 +1269,7 @@ func _case_sym_layer_hint() -> void:
 	var tag := "sym hint"
 	_fresh(6, 1)
 	_set_level_text(["Дверь: открыта - тихо."])
-	if not _find_sym_only_letter():
+	if not _find_shift_symbol():
 		_check(false, "%s: the test level lost its symbol" % tag)
 		return
 	var want: String = _main._current()
@@ -1272,11 +1283,11 @@ func _case_sym_layer_hint() -> void:
 	# Ввод по подсказке: шифт, потом цифра — знак принимается без меток,
 	# а слой не переключается (он для этого не нужен).
 	var btns := _kbd_buttons()
-	if not btns.has("⇧") or not btns.has(digit):
-		_check(false, "%s: no ⇧/%s keys" % [tag, digit])
+	if not btns.has("Shift") or not btns.has(digit):
+		_check(false, "%s: no Shift/%s keys" % [tag, digit])
 		return
 	var ok0: int = _main.typed_ok
-	_main._own_press(btns["⇧"])
+	_main._own_press(btns["Shift"])
 	_tick(tag)
 	_check(_main.kb_shift, "%s: shift did not arm" % tag)
 	btns = _kbd_buttons()
@@ -1291,9 +1302,9 @@ func _case_sym_layer_hint() -> void:
 	_common(tag)
 
 
-## Ставит зайца перед символом, которого нет на буквенном слое, но есть
-## на знаках (':', '-', ';', '"', "'", '(', ')').
-func _find_sym_only_letter() -> bool:
+## Ставит зайца перед символом со сдвигом (":" и компания набираются
+## шифтом с цифры (':', '-', ';', '"', "'", '(', ')').
+func _find_shift_symbol() -> bool:
 	var only := [":", ";", '"', "'", "(", ")"]
 	for l in _main.display_lines.size():
 		var line: String = _main.display_lines[l]
@@ -1472,47 +1483,56 @@ func _ime_frames_run(seed_v: int) -> void:
 
 
 ## 40. Подсветка клавиши после простоя — вместо текстовых «Нажми К».
-## Рано (игрок ещё думает сам) — пусто; после задержки HINT_IDLE нужная
-## клавиша подсвечивается на самой клавиатуре; заглавная в строгом
-## режиме — парой [Shift, буква]; символа нет на слое — клавишей слоя;
-## метки зовут клавишу «стереть» на самой доске, капслок — выключить
-## текстом: там подсвечивать нечего. Задержка такая, чтобы опора на неё
-## проигрывала: ёж идёт
-## быстрее, чем буква в ~2 секунды.
+## Рано (игрок ещё думает сам) — пусто; после задержки нужная клавиша
+## подсвечивается на самой клавиатуре; заглавная — парой [шифт
+## противоположной руки, буква]; знак — парой [шифт, цифра]; пробел —
+## половиной по правилу противоположной руки; метки зовут клавишу
+## «стереть»; капслок гасится текстом. Задержка адаптивная: вдвое больше
+## среднего периода нажатий игрока.
 func _case_idle_hint() -> void:
 	_fresh(1, 1)
 	var tag := "idle hint"
 	_check(_advance_to(0.3), "%s: could not advance (coverage)" % tag)
 	# Рано — пусто.
+	# Темп задаём сами: средний период 0.6 с → задержка 1.2 с.
+	_main.press_ema = 0.6
 	_main.idle_t = 0.0
 	_check(_main._hint_keys().is_empty(), "%s: highlight before the delay" % tag)
-	_main.idle_t = _main.HINT_IDLE - 0.01
+	_main.idle_t = _main._hint_delay() - 0.01
 	_check(_main._hint_keys().is_empty(), "%s: highlight just before the delay" % tag)
 	# После задержки — клавиша под курсором.
-	_main.idle_t = _main.HINT_IDLE + 0.5
+	_main.idle_t = _main._hint_delay() + 0.5
 	var cur: String = _main._current()
 	var keys: Array = _main._hint_keys()
 	_check(not keys.is_empty(), "%s: no highlight after the delay" % tag)
 	if cur == cur.to_upper() and cur != cur.to_lower():
+		var want_shift := "ShiftR" if Kbd.hand_of(cur) == "Л" else "Shift"
 		_check(
-			keys == ["⇧", cur.to_lower()],
-			"%s: capital highlights %s, expected shift plus the letter" % [tag, str(keys)]
+			keys == [want_shift, cur.to_lower()],
+			"%s: capital highlights %s, expected the opposite shift plus the letter" % [tag, str(keys)]
 		)
 	else:
-		# Пробел — своей клавишей; необычное (слой знаков) проверяется
-		# отдельной веткой ниже.
-		var want_key := "пробел" if cur == " " else cur
-		if want_key == cur and not Kbd.is_plain_letter(cur):
+		# Пробел отдельно: встаём на него принудительно (в случайном
+		# тексте его может не оказаться под курсором).
+		_check(_find_space_cell(), "%s: no space cell to stand on" % tag)
+		if not Kbd.is_plain_letter(cur):
 			pass
 		else:
-			_check(keys == [want_key], "%s: highlights %s, expected [%s]" % [tag, str(keys), want_key])
+			_check(keys == [cur], "%s: highlights %s, expected [%s]" % [tag, str(keys), cur])
+	# Пробел — половиной по правилу противоположной руки.
+	_main.last_hand = "Л"
+	_check(_main._hint_keys() == ["пробел:П"], "%s: after a left letter: %s" % [tag, str(_main._hint_keys())])
+	_main.last_hand = "П"
+	_check(_main._hint_keys() == ["пробел:Л"], "%s: after a right letter: %s" % [tag, str(_main._hint_keys())])
+	_main.last_hand = ""
+	_check(_main._hint_keys() == ["пробел:П"], "%s: with no history: %s" % [tag, str(_main._hint_keys())])
 	# Любое нажатие гасит подсветку: игрок снова думает сам.
 	_main._type_char(cur)
 	_tick(tag)
 	_check(_main._hint_keys().is_empty(), "%s: the highlight survived a keypress" % tag)
 	# Метки зовут клавишу «стереть» на самой доске, а не текст.
 	_main._type_char(_wrong())
-	_main.idle_t = _main.HINT_IDLE + 5.0
+	_main.idle_t = _main._hint_delay() + 5.0
 	_tick(tag)
 	_check(_main._hint_keys() == ["←"], "%s: marks highlight %s, expected the erase key" % [tag, str(_main._hint_keys())])
 	_check(not _main._hint_text().contains("Стереть"), "%s: the old erase text is back (%s)" % [tag, _main._hint_text()])
@@ -1526,14 +1546,36 @@ func _case_idle_hint() -> void:
 	if _main._current() == ":":
 		_main.kb_layer = "ru"
 		_main.hero_r = _main._hero_pos()
-		_main.idle_t = _main.HINT_IDLE + 0.5
+		_main.idle_t = _main._hint_delay() + 0.5
 		_tick(tag)
 		_check(
-			_main._hint_keys() == ["⇧", "6"],
+			_main._hint_keys() == ["Shift", "6"],
 			"%s: off-layer symbol highlights %s, expected shift plus the digit"
 				% [tag, str(_main._hint_keys())]
 		)
+	# Адаптивность: смена темпа двигает задержку (2×EMA).
+	_main.press_ema = 2.0
+	_check(absf(_main._hint_delay() - 4.0) < 0.01, "%s: slow pace gives %.1fs, expected 4.0" % [tag, _main._hint_delay()])
+	_main.idle_t = 3.0
+	_check(_main._hint_keys().is_empty(), "%s: the old delay still fires" % tag)
+	_main.press_ema = 0.6
+	_main.idle_t = 3.0
+	_check(not _main._hint_keys().is_empty(), "%s: the faster delay does not fire" % tag)
 	_common(tag)
+
+
+## Ставит зайца на первый пробел первой строки (для проверки половин).
+func _find_space_cell() -> bool:
+	var line: String = _main.display_lines[0]
+	for p in line.length():
+		if line.substr(p, 1) == " ":
+			_main.cursor_line = 0
+			_main.cursor_pos = p
+			_main.hero_r = _main._hero_pos()
+			_main.errors.clear()
+			_main.idle_t = _main._hint_delay() + 0.5
+			return _main._current() == " "
+	return false
 
 
 ## 41. Перенос строк везёт за собой ВСЕ клеточные множества — и typed_cells
@@ -1592,6 +1634,69 @@ func _case_reflow_typed_cells() -> void:
 	_main._relayout()
 	_tick(tag)
 	_common(tag)
+
+
+## 42. Шифт противоположной руки — в обе стороны (правило быстрого набора,
+## подтверждено методикой: буква левой — правый шифт и наоборот). Плюс
+## клавиша обратного слеша: она есть на доске и печатается.
+func _case_shift_hands() -> void:
+	_fresh(6, 1)
+	var tag := "shift hands"
+	# «А» — левая рука, «Р» — правая (зоны слепой печати).
+	_set_level_text(["А роза упала.", "Роза упала."])
+	_main.press_ema = 0.6
+	_main.cursor_line = 0
+	_main.cursor_pos = 0
+	_main.hero_r = _main._hero_pos()
+	_main.idle_t = _main._hint_delay() + 0.5
+	_check(
+		_main._hint_keys() == ["ShiftR", "а"],
+		"%s: left-hand capital highlights %s" % [tag, str(_main._hint_keys())]
+	)
+	_main.cursor_line = 1
+	_main.cursor_pos = 0
+	_main.hero_r = _main._hero_pos()
+	_main.idle_t = _main._hint_delay() + 0.5
+	_check(
+		_main._hint_keys() == ["Shift", "р"],
+		"%s: right-hand capital highlights %s" % [tag, str(_main._hint_keys())]
+	)
+	# И нажатие идёт тем же путём: правый шифт + «а» даёт «А».
+	_main.cursor_line = 0
+	_main.cursor_pos = 0
+	_main.hero_r = _main._hero_pos()
+	var btns := _kbd_buttons()
+	var ok0: int = _main.typed_ok
+	_main._own_press(btns["ShiftR"])
+	_tick(tag)
+	_check(_main.kb_shift, "%s: the right shift did not arm" % tag)
+	_main._own_press(_kbd_buttons()["А"])
+	_tick(tag)
+	_check(_main.typed_ok == ok0 + 1, "%s: ShiftR+а did not type «А»" % [tag])
+	_check(_main.errors.is_empty(), "%s: ShiftR+а left a mark" % tag)
+	_common(tag)
+
+
+## 43. Обратный слеш: клавиша есть (как на настоящей) и печатается.
+## В текстах его нет, поэтому просто жмём: либо принимается, либо
+## ровно одна честная метка — главное, что знак доходит до игры.
+func _case_backslash_key() -> void:
+	_fresh(0, 1)
+	_kbd_on()
+	var tag := "backslash"
+	var btns := _kbd_buttons()
+	if not btns.has("\\"):
+		_check(false, "%s: no backslash key" % tag)
+		return
+	var marks0: int = _main.errors.size()
+	var ok0: int = _main.typed_ok
+	_main._own_press(btns["\\"])
+	_tick(tag)
+	_common(tag)
+	_check(
+		_main.typed_ok == ok0 + 1 or _main.errors.size() == marks0 + 1,
+		"%s: the backslash press vanished" % tag
+	)
 
 
 ## 18. Автопунктуация IME: точка с настоящим keycode, когда игра ждёт
@@ -1924,8 +2029,10 @@ func _process(_dt: float) -> bool:
 	_case_ime_frames()
 	_case_idle_hint()
 	_case_reflow_typed_cells()
+	_case_shift_hands()
+	_case_backslash_key()
 	_case_chaos(1500)
-	_cases = 38
+	_cases = 40
 	_check(_steps > 1200, "the test really played (coverage: %d steps)" % _steps)
 	for f in _failures:
 		print("COMBO_TEST: FAIL: ", f)

@@ -155,8 +155,8 @@ func _a_touch_press() -> void:
 		btns[String(b["s"])] = rect.get_center()
 		if String(b["s"]) == "пробел":
 			btns[" "] = rect.get_center()
-	if want != want.to_lower() and btns.has("⇧"):
-		_main._own_press(btns["⇧"])
+	if want != want.to_lower() and btns.has("Shift"):
+		_main._own_press(btns["Shift"])
 	if btns.has(want):
 		_main._own_press(btns[want])
 	# Одна буква: допечатывать уровень не надо — на экране победы своей
@@ -167,7 +167,8 @@ func _a_touch_wrong() -> void:
 	var cur: String = _main._current()
 	_main._type_char("ы" if cur.to_lower() != "ы" else "ж")
 	# Простой — видно подсветку «стереть» на самой клавиатуре.
-	_main.idle_t = _main.HINT_IDLE + 5.0
+	_main.press_ema = 0.6
+	_main.idle_t = _main._hint_delay() + 5.0
 
 
 ## Долгое нажатие е→ё: ставим зайца перед «е» или «ь», жмём и отпускаем
@@ -205,10 +206,9 @@ func _a_rotate_back() -> void:
 ## Размер окна — И через DisplayServer, И у корня: get_viewport_rect()
 ## берёт размер окна, и под полноэкранным режимом один вызов не
 ## срабатывает (кадры «landscape» приезжали старого размера).
-## Кадры с новыми подсказками: «Долго жми е → ё» (на своей клавиатуре
-## клавиши «ё» нет вовсе) и «Жми: ?123 → :» (символ живёт только на
-## слое знаков). Текст уровня задаём сами — иначе кадр зависит от того,
-## выпал ли такой символ из случайного фрагмента.
+## Кадры с подсказками: своя «ё» и «Жми: Shift + 6» для «:».
+## Текст уровня задаём сами — иначе кадр зависит от того, выпал ли
+## такой символ из случайного фрагмента.
 func _a_yo_hint() -> void:
 	_win(Vector2i(820, 1180))
 	_main._force_touch = true
@@ -225,7 +225,8 @@ func _a_idle_hint() -> void:
 	_fresh(0, 0)
 	for i in 8:
 		_main._type_char(_main._current())
-	_main.idle_t = _main.HINT_IDLE + 5.0
+	_main.press_ema = 0.6
+	_main.idle_t = _main._hint_delay() + 5.0
 	_main._relayout()
 
 

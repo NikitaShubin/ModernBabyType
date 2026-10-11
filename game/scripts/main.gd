@@ -150,7 +150,7 @@ var meadow: Meadow = null
 ## Своя экранная клавиатура (модуль Kbd, решение автора 10.2026): вместо
 ## системной IME, которая коверкает ввод composing-перепиской. Видна
 ## в партии на сенсорных устройствах (на десктопе есть железная).
-## Слой клавиатуры держит kb_layer ("ru"/"sym"/"en"). Системную не вызываем вообще.
+## Слой клавиатуры держит kb_layer ("ru"/"en"). Системную не вызываем вообще.
 var kb_layer := "ru"
 var kb_lang := "ru"
 var kb_shift := false
@@ -160,12 +160,40 @@ var kb_hi_sb: StyleBoxFlat
 
 
 ## Простой, после которого клавиатура сама подсвечивает нужную клавишу
-## (вместо текстовой подсказки «Нажми К»). Задержка такая, чтобы игрок,
-## который ждёт подсветку на КАЖДОЙ букве, проиграл: ёж идёт быстрее
-## (1.1 знака/с против ~0.6 при ожидании). Опечатка таймер не сбрасывает:
-## паузу надо выдержать честно, а подсветка после ошибки нужнее всего.
-const HINT_IDLE := 1.2
+## (вместо текстовой подсказки «Нажми К»). Задержка адаптивная: вдвое
+## больше среднего периода нажатий игрока — подсказка приходит в его
+## темпе, но опора на неё всё равно проигрывает steady-набору (каждая
+## буква стоит две паузы плюс реакция). Опечатка таймер простоя не
+## сбрасывает: паузу надо выдержать честно.
 var idle_t := 0.0
+## Средний период нажатий (EMA, секунды) и момент последнего нажатия.
+## По ним считается задержка подсказки.
+var press_ema := 1.0
+var last_press_t := -1.0
+## Рука последней набранной буквы («Л»/«П»): пробел жмётся большим
+## пальцем противоположной (классическое правило слепой печати).
+var last_hand := ""
+
+
+## Задержка подсказки: вдвое больше среднего периода нажатий.
+func _hint_delay() -> float:
+	return clampf(press_ema * 2.0, 0.5, 6.0)
+
+
+## Отметить нажатие: простой в ноль, период — в среднее.
+func _mark_press() -> void:
+	_poke_idle()
+	if last_press_t >= 0.0:
+		var dt := time - last_press_t
+		if dt >= 0.0 and dt < 30.0:
+			press_ema = clampf(press_ema * 0.8 + dt * 0.2, 0.2, 4.0)
+	last_press_t = time
+
+
+## Просто шевеление (служебный тап, любая клавиша): простой в ноль,
+## темп не трогаем — иначе двойной замер на одно нажатие.
+func _poke_idle() -> void:
+	idle_t = 0.0
 ## Высота своей клавиатуры в пикселях канваса (0 — скрыта). Только
 ## раскладка: всё позиционируется от эффективной высоты _eff_h().
 var kb_h := 0.0
@@ -889,9 +917,8 @@ func _new_level() -> void:
 	typed_ok = 0
 	typed_bad = 0
 	elapsed = 0.0
-	idle_t = 0.0
-	if OS.get_name() != "Android":
-		print("DBGNEW new level, lines=", display_lines.size())
+	_poke_idle()
+	last_press_t = -1.0
 	grace_t = START_DELAY
 	# Ёж выкатывается позже: когда герой уйдёт на вторую строку,
 	# ёж появится строкой выше (enemy_line = 0) и покатится по следу.
@@ -966,7 +993,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		return
 	if not ke.pressed or ke.echo:
 		return
-	idle_t = 0.0
+	_poke_idle()
 	if ke.keycode == KEY_ESCAPE:
 		if menu_open:
 			# Открыто меню — ввод его: сюда попадаем, только если меню
@@ -1112,7 +1139,8 @@ var typed_cells: Dictionary = {}
 func _type_char(ch: String) -> void:
 	if state != "playing":
 		return  # уровень окончен: ввод ниже не считается
-	idle_t = 0.0
+	_mark_press()
+	last_hand = Kbd.hand_of(ch)
 	var expected := _current()
 	if expected == "":
 		return
@@ -1149,8 +1177,6 @@ func _type_char(ch: String) -> void:
 		# снимать было нечего.
 		errors[_key(cursor_line, cursor_pos)] = ch
 		typed_cells[_key(cursor_line, cursor_pos)] = true
-		if OS.get_name() != "Android":
-			print("DBGMARK mark ", _key(cursor_line, cursor_pos), " ch=", ch, " cursor=", cursor_line, cursor_pos)
 		typed_bad += 1
 		shake_t = SHAKE_T
 		_knockback()
@@ -1201,7 +1227,7 @@ func _knockback() -> void:
 ##     Автопропуск после отката НЕ делаем: заяц обязан стоять перед той
 ##     буквой, на которую откатился, иначе откат тут же проскочит мимо.
 func _backspace() -> void:
-	idle_t = 0.0
+	_mark_press()
 	var k := _key(cursor_line, cursor_pos)
 	if errors.has(k):
 		errors.erase(k)
@@ -1738,13 +1764,6 @@ func _hint_parts() -> Array:
 				{"s": "+", "cap": false},
 				{"s": digit, "cap": true},
 			]
-		if Kbd.has_key("sym", kb_lang, kb_shift, cur):
-			return [
-				{"s": "Жми:", "cap": false},
-				{"s": "?123", "cap": true},
-				{"s": "→", "cap": false},
-				{"s": cur, "cap": true},
-			]
 	return []
 
 
@@ -2081,10 +2100,19 @@ func _draw() -> void:
 ## доске. Заглавная в строгом режиме — парой [Shift, буква]; знак не со
 ## слоя — парой [Shift, цифра]; долгое нажатие — базовой клавишей (жест
 ## объясняет текст).
+## Подписи клавиш, которые подсветить после простоя. Шифт выбирается
+## по правилу противоположной руки (буква левой — правый шифт и наоборот,
+## подтверждено методикой слепой печати), пробел — большим пальцем руки,
+## противоположной от последней буквы (если истории нет — правым).
+## На финале после простоя подсвечивается ввод.
 func _hint_keys() -> Array:
-	if state != "playing" or idle_t < HINT_IDLE:
+	if idle_t < _hint_delay():
 		return []
 	if _caps_warn and _exact():
+		return []
+	if state == "won" or state == "lost":
+		return ["↵"]
+	if state != "playing":
 		return []
 	# Опечатка: жать надо «стереть» — подсвечиваем клавишу, а не текст.
 	if not errors.is_empty():
@@ -2093,20 +2121,23 @@ func _hint_keys() -> Array:
 	if cur == "":
 		return []
 	if cur == " ":
-		return ["пробел"]
+		return ["пробел:Л" if last_hand == "П" else "пробел:П"]
 	if _is_latin(cur) != (kb_layer == "en"):
 		return ["глобус"]
 	if _exact() and cur == cur.to_upper() and cur != cur.to_lower():
-		return ["⇧", cur.to_lower()]
+		return [_opp_shift(cur.to_lower()), cur.to_lower()]
 	if not Kbd.is_plain_letter(cur) and not Kbd.has_key(kb_layer, kb_lang, kb_shift, cur):
-		# Знаки — шифтом с верхней цифры (настоящая клавиатура), а не
-		# слоем ?123: мы учим человека реальной клавиатуре.
+		# Знаки — шифтом с верхней цифры (настоящая клавиатура).
 		var digit := Kbd.digit_for(cur)
 		if digit != "":
-			return ["⇧", digit]
-		if Kbd.has_key("sym", kb_lang, kb_shift, cur):
-			return ["?123"]
+			return [_opp_shift(digit), digit]
 	return [cur]
+
+
+## Шифт противоположной руки от клавиши: буква/цифра левой зоны — правый
+## шифт, правой — левый.
+func _opp_shift(s: String) -> String:
+	return "ShiftR" if Kbd.hand_of(s) == "Л" else "Shift"
 
 
 func _draw_own_kb() -> void:
@@ -2121,7 +2152,7 @@ func _draw_own_kb() -> void:
 		kb_hi_sb.bg_color = c
 	Kbd.draw(
 		self, _own_rect(), kb_layer, kb_lang, kb_shift, false, mono,
-		int(30.0 * k), kb_key_sb, kb_on_sb, _ui_ink(), hi, kb_hi_sb
+		int(30.0 * k), kb_key_sb, kb_on_sb, _ui_ink(), hi, kb_hi_sb, _ui_dim()
 	)
 
 
@@ -2131,7 +2162,7 @@ func _draw_own_kb() -> void:
 func _own_press(pos: Vector2) -> bool:
 	if not _own_shown():
 		return false
-	idle_t = 0.0
+	_poke_idle()
 	var act := Kbd.hit(_own_rect(), kb_layer, kb_lang, kb_shift, false, pos)
 	if act == "":
 		return false
@@ -2146,9 +2177,6 @@ func _own_press(pos: Vector2) -> bool:
 		return false
 	if act == "стереть":
 		_backspace()
-	elif act == "слой":
-		# Из знаков — назад на свой язык, иначе — в знаки.
-		kb_layer = kb_lang if kb_layer == "sym" else "sym"
 	elif act == "язык":
 		kb_lang = "en" if kb_lang == "ru" else "ru"
 		kb_layer = kb_lang
@@ -2175,6 +2203,11 @@ func _own_press(pos: Vector2) -> bool:
 ## подпись прогресса тонули в тёмном.
 func _ui_ink() -> Color:
 	return Color("#e8e4d8") if night else INK
+
+
+## Приглушённые чернила для неактивных подписей клавиш.
+func _ui_dim() -> Color:
+	return Color("#8b93a8") if night else Color("#4a4438").lightened(0.45)
 
 
 ## Десктоп — там, где нет системной клавиатуры (нет и клавиши F2

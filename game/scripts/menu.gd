@@ -100,7 +100,7 @@ func _draw_own_kb() -> void:
 		return
 	Kbd.draw(
 		self, _own_rect(), kb_layer, kb_lang, kb_shift, true, mono,
-		int(30.0 * k), kb_key_sb, selbox_sb, _uitext()
+		int(30.0 * k), kb_key_sb, selbox_sb, _uitext(), [], null, _dim()
 	)
 
 
@@ -112,9 +112,6 @@ func _own_press(pos: Vector2) -> bool:
 		return false
 	if act == "стереть":
 		input_text = input_text.left(maxi(0, input_text.length() - 1))
-	elif act == "слой":
-		# Из знаков — назад на свой язык, иначе — в знаки.
-		kb_layer = kb_lang if kb_layer == "sym" else "sym"
 	elif act == "язык":
 		kb_lang = "en" if kb_lang == "ru" else "ru"
 		kb_layer = kb_lang

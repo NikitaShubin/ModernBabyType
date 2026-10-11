@@ -291,6 +291,7 @@ func _process(_dt: float) -> bool:
 	elif _frame == 94:
 		_check(_main.state == "playing", "no catch from far behind")
 		_run_part2()
+		_text_coverage()
 		_report()
 		return true
 	return false
@@ -299,6 +300,50 @@ func _process(_dt: float) -> bool:
 ## Полоса детекции укола на одной строке (в символах оси).
 func _band() -> float:
 	return _main._touch_chars() + _main.CONTACT_SLACK
+
+
+## Каждый знак из текстов уровней обязан набираться с доски: прямо
+## клавишей (с учётом шифта) или шифтом с другой. Иначе игра попросит
+## то, что нечем нажать (слой ?123 убит, запасного пути нет).
+func _text_coverage() -> void:
+	# Прямо клавишей, заглавной через шифт или знаком через шифт
+	# (Shift+6 даёт «:», Shift+. — запятую).
+	var direct := {}
+	var shifted := {}
+	for layer in ["ru", "en"]:
+		var lang := "ru" if layer == "ru" else "en"
+		for b in K.buttons(Rect2(0, 0, 1200, 500), layer, lang, false):
+			var s := String(b["s"])
+			direct[s] = true
+			shifted[s.to_upper()] = true
+			var sym := K.shift_digit(s)
+			if sym != "":
+				shifted[sym] = true
+	direct[" "] = true
+	var missing := {}
+	var dir := DirAccess.open("res://texts")
+	if dir != null:
+		dir.list_dir_begin()
+		var f := dir.get_next()
+		while f != "":
+			if not dir.current_is_dir() and f.ends_with(".txt"):
+				var fa := FileAccess.open("res://texts/" + f, FileAccess.READ)
+				if fa != null:
+					while not fa.eof_reached():
+						var line := fa.get_line()
+						for i in line.length():
+							var ch := line.substr(i, 1)
+							if ch == "":
+								continue
+							if not direct.has(ch) and not shifted.has(ch):
+								missing[ch] = true
+			f = dir.get_next()
+		dir.list_dir_end()
+	_check(missing.is_empty(), "untypable characters in texts: %s" % str(missing.keys()))
+	# Пары двуязычных подписей (позиционное соответствие ЙЦУКЕН–QWERTY).
+	_check(K.pair_of("й") == "q" and K.pair_of("q") == "й", "yo-q pair both ways")
+	_check(K.pair_of("э") == "'" and K.pair_of(";") == "ж", "edge pairs")
+	_check(K.pair_of("ё") == "`" and K.pair_of("5") == "", "digits have no language pair")
 
 
 func _report() -> void:
@@ -326,9 +371,10 @@ func _expected_keys(ch: String) -> Array:
 	if ch == "":
 		return []
 	if ch == " ":
-		return ["пробел"]
+		return ["пробел:Л" if _main.last_hand == "П" else "пробел:П"]
 	if _main._exact() and ch == ch.to_upper() and ch != ch.to_lower():
-		return ["⇧", ch.to_lower()]
+		# Шифт противоположной руки (правило быстрого набора).
+		return [("ShiftR" if K.hand_of(ch) == "Л" else "Shift"), ch.to_lower()]
 	return [ch]
 
 
@@ -341,7 +387,8 @@ func _run_part1() -> void:
 	# клавиша подсвечивается на самой клавиатуре.
 	_check(_main._hint_text() == "", "no text hint for the letter")
 	_check(_main._hint_keys().is_empty(), "no highlight before the idle delay")
-	_main.idle_t = _main.HINT_IDLE + 0.5
+	_main.press_ema = 0.6
+	_main.idle_t = _main._hint_delay() + 0.5
 	_check(
 		_main._hint_keys() == _expected_keys(ch0),
 		"the board highlights the wanted key"
@@ -362,7 +409,8 @@ func _run_part1() -> void:
 	_check(_main.errors.size() == 1, "one error overlay")
 	_check(_main.shake_t > 0.0, "shake on typo")
 	_check(_main._hint_text() == "", "no text hint over the marks")
-	_main.idle_t = _main.HINT_IDLE + 0.5
+	_main.press_ema = 0.6
+	_main.idle_t = _main._hint_delay() + 0.5
 	_check(_main._hint_keys() == ["←"], "marks highlight the erase key")
 	_main.idle_t = 0.0
 	var t1 := _kb_target(b1[0], b1[1])
@@ -1016,10 +1064,11 @@ func _run_part2() -> void:
 		_main._caps_warn = false
 		_main.cursor_line = up_l
 		_main.cursor_pos = up_p
-		_main.idle_t = _main.HINT_IDLE + 0.5
+		_main.press_ema = 0.6
+		_main.idle_t = _main._hint_delay() + 0.5
 		_check(
-			_main._hint_keys() == ["⇧", _main._current().to_lower()],
-			"uppercase highlights shift plus the letter"
+			_main._hint_keys() == [(("ShiftR" if K.hand_of(_main._current()) == "Л" else "Shift")), _main._current().to_lower()],
+			"uppercase highlights the opposite shift plus the letter"
 		)
 		_main.idle_t = 0.0
 	# Строчная под курсором: одна кнопка, и строгий режим показывает
@@ -1043,7 +1092,8 @@ func _run_part2() -> void:
 	if low_l >= 0:
 		_main.cursor_line = low_l
 		_main.cursor_pos = low_p
-		_main.idle_t = _main.HINT_IDLE + 0.5
+		_main.press_ema = 0.6
+		_main.idle_t = _main._hint_delay() + 0.5
 		_check(
 			_main._hint_keys() == [_main._current()],
 			"lowercase highlights its own key"
