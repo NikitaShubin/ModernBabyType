@@ -76,6 +76,23 @@ func _back() -> void:
 
 
 ## Key-событие с настоящим keycode (F2, Enter, точка автопунктуации).
+## Отпускание мыши в точке: шифт держится, пока палец на клавише.
+func _release(pos: Vector2) -> InputEventMouseButton:
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_LEFT
+	ev.pressed = false
+	ev.position = pos
+	return ev
+
+
+## Физический ключ в состоянии «отпущен».
+func _release_key(code: int) -> InputEventKey:
+	var ev := InputEventKey.new()
+	ev.keycode = code
+	ev.pressed = false
+	return ev
+
+
 func _key(code: int, uni := 0) -> InputEventKey:
 	var ke := InputEventKey.new()
 	ke.pressed = true
@@ -1530,13 +1547,13 @@ func _case_idle_hint() -> void:
 			"%s: capital highlights %s, expected the opposite shift plus the letter" % [tag, str(keys)]
 		)
 	else:
+		# Сверяем подсветку ДО перехода на пробел: _find_space_cell двигает
+		# курсор, и keys после него относится уже к другой букве.
+		if cur != " " and Kbd.is_plain_letter(cur):
+			_check(keys == [cur], "%s: highlights %s, expected [%s]" % [tag, str(keys), cur])
 		# Пробел отдельно: встаём на него принудительно (в случайном
 		# тексте его может не оказаться под курсором).
 		_check(_find_space_cell(), "%s: no space cell to stand on" % tag)
-		if not Kbd.is_plain_letter(cur):
-			pass
-		else:
-			_check(keys == [cur], "%s: highlights %s, expected [%s]" % [tag, str(keys), cur])
 	# Пробел — половиной по правилу противоположной руки. Встаём на
 	# пробел ВСЕГДА: раньше это делалось только в ветке не-заглавной, и
 	# как только случайный текст давал под курсором заглавную, проверки
@@ -1717,8 +1734,8 @@ func _case_backslash_key() -> void:
 			_check(false, "%s: no key «%s»" % [tag, need])
 			return
 	_check(
-		Kbd.legends("\\") == ["\\", "/", "\\", "|"],
-		"%s: the backslash key carries backslash, slash, backslash and bar" % tag
+		Kbd.legends("\\") == ["\\", "|", "\\", "|"],
+		"%s: the backslash key holds the backslash and the bar" % tag
 	)
 	_check(
 		Kbd.legends(".") == [".", ",", "/", "?"],
@@ -1730,8 +1747,8 @@ func _case_backslash_key() -> void:
 		"%s: the backslash is not a plain key in russian (%s)" % [tag, str(combo)]
 	)
 	_check(
-		Kbd.combo_for("/") == ["\\", true, "ru"],
-		"%s: the slash is shift on the backslash key" % tag
+		Kbd.combo_for("/") == [".", false, "en"],
+		"%s: the slash lives on the dot key in english (%s)" % [tag, str(Kbd.combo_for("/"))]
 	)
 	var marks0: int = _main.errors.size()
 	var ok0: int = _main.typed_ok
@@ -1757,10 +1774,16 @@ func _case_enter_key() -> void:
 		not _main._kb_enter_shown(),
 		"%s: the enter key shows while letters are still grey" % tag
 	)
-	# Открываем все буквы текста (как это делает верный ввод).
-	for ch: String in _text_chars():
-		_main.active[ch] = true
+	# Открываем только центральный ряд букв текста — этого достаточно
+	# для появления ввода (автор 10.2026: «после того, как разблокирован
+	# весь центральный ряд букв, а не в самом конце»).
+	var home := 0
+	for row_ch in ["ф", "ы", "в", "а", "п", "р", "о", "л", "д", "ж", "э"]:
+		if _main._has_char(String(row_ch)):
+			_main.active[String(row_ch)] = true
+			home += 1
 	_main.active[" "] = true
+	_check(home > 0, "%s: the level has no home-row letters at all" % tag)
 	_check(
 		_main._kb_enter_shown(),
 		"%s: the enter key did not appear with all letters unlocked" % tag
@@ -1833,19 +1856,38 @@ func _case_night_meteors() -> void:
 		(m._meteors as Array).is_empty(),
 		"%s: meteors fly in the daytime (%d)" % [tag, (m._meteors as Array).size()]
 	)
-	# Ночью появляются и улетают за край.
+	# Ночью появляется. Ждём полсекунды, а не две: метеор живёт
+	# полутора-двумя секундами, и к концу окна он уже мог улететь — проверка
+	# на пустом небе мигала бы (в одном прогоне из шести так и вышло).
 	m.night = true
 	m._meteor_cd = 0.0
-	for _i in 120:
+	for _i in 30:
 		m._process(1.0 / 60.0)
 	_check(
 		not (m._meteors as Array).is_empty(),
-		"%s: no meteor after two seconds of night sky" % tag
+		"%s: no meteor in the first half second of night" % tag
 	)
+	# Падение проверяем на СВОЁМ метеоре: через две секунды тот, что был в
+	# небе с начала, уже улетел, и индекс уводил бы в пустоту.
+	m._meteors.clear()
+	m._spawn_meteor()
 	var first: Vector2 = (m._meteors as Array)[0][0]
-	m._process(0.2)
-	var moved: Vector2 = (m._meteors as Array)[0][0]
-	_check(moved.y > first.y, "%s: the meteor does not fall" % tag)
+	m._process(1.0 / 60.0)
+	_check(
+		not (m._meteors as Array).is_empty()
+		and ((m._meteors as Array)[0][0] as Vector2).y > first.y,
+		"%s: the meteor does not fall" % tag
+	)
+	# Улетает за край на своей жизни: пустой небо через четыре секунды.
+	m._meteors.clear()
+	m._meteor_cd = 1e9
+	m._spawn_meteor()
+	for _i in 240:
+		m._process(1.0 / 60.0)
+	_check(
+		(m._meteors as Array).is_empty(),
+		"%s: the meteor never left the sky" % tag
+	)
 	for _i in 900:
 		m._process(1.0 / 60.0)
 	_check(
@@ -1889,12 +1931,13 @@ func _case_press_flash() -> void:
 		String(_main.kb_press) == "" and float(_main.kb_press_t) <= 0.0,
 		"%s: a miss outside the board lit something up" % tag
 	)
-	# Физический шифт меняет состояние доски мгновенно (автор 10.2026).
+	# Физический шифт меняет состояние доски мгновенно и гаснет при
+	# отпускании (автор 10.2026: «нажимаю — загорается, отпускаю — гаснет»).
 	_main.kb_press_t = 0.0
 	_main.call("_unhandled_key_input", _key(KEY_SHIFT))
 	_check(bool(_main.kb_shift), "%s: the physical shift did not arm the board" % tag)
-	_main.call("_unhandled_key_input", _key(KEY_SHIFT))
-	_check(not bool(_main.kb_shift), "%s: the physical shift did not disarm the board" % tag)
+	_main.call("_unhandled_key_input", _release_key(KEY_SHIFT))
+	_check(not bool(_main.kb_shift), "%s: the physical shift stayed armed after release" % tag)
 
 
 ## 44. Язык ввода доска берёт у СИСТЕМЫ, а не угадывает по сочетанию
@@ -1935,10 +1978,27 @@ func _case_lang_state() -> void:
 	_main.call("_unhandled_key_input", _key(KEY_1, "!".unicode_at(0)))
 	_tick(tag)
 	_check(_main.kb_lang == "ru", "%s: a sign switched the language" % tag)
-	# Щипок шифта на самой доске язык не трогает, но перелёт запускает:
-	# у букв его не будет (между большой и малой мягкого перехода нет —
-	# автор 10.2026), у знаков будет.
+	# Шифт на самой доске ДЕРЖИТСЯ, а не защёлкивается: нажал — горит,
+	# отпустил — погас (автор 10.2026: «эффект должен быть во время
+	# удержания клавиши… нажимаю — загорается, отпускаю — гаснет»).
 	var btns := _kbd_buttons()
+	_main._own_press(btns["Shift"])
+	_tick(tag)
+	_check(bool(_main.kb_shift), "%s: the held shift did not arm" % tag)
+	_main._release_held()
+	_tick(tag)
+	_check(
+		not bool(_main.kb_shift) and String(_main.kb_held) == "",
+		"%s: the shift stayed armed after the finger left" % tag
+	)
+	# Физический шифт — так же: по нажатию и по отпусканию.
+	_main.call("_unhandled_key_input", _key(KEY_SHIFT))
+	_check(bool(_main.kb_shift), "%s: the physical shift did not arm" % tag)
+	_main.call("_unhandled_key_input", _release_key(KEY_SHIFT))
+	_check(not bool(_main.kb_shift), "%s: the physical shift stayed armed" % tag)
+	# Щипок шифта язык не трогает, но перелёт запускает: у букв его не
+	# будет (между большой и малой мягкого перехода нет — автор 10.2026),
+	# у знаков будет.
 	_main._own_press(btns["Shift"])
 	_tick(tag)
 	_check(_main.kb_lang == "ru", "%s: shift switched the language" % tag)

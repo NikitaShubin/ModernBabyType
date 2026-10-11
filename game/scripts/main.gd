@@ -164,6 +164,9 @@ var kb_morph_shift := false
 ## что нажал ту самую клавишу (или промахнулся мимо всех).
 var kb_press := ""
 var kb_press_t := 0.0
+## Клавиша, которую ДЕРЖАТ пальцем: шифт работает, пока его держат
+## (автор 10.2026: «нажимаю — загорается, отпускаю — гаснет»).
+var kb_held := ""
 const KB_PRESS_T := 0.22
 var kb_shift := false
 var kb_key_sb: StyleBoxFlat
@@ -512,6 +515,7 @@ func _reflow_text() -> void:
 		under = String(fresh[nl]).substr(np, 1)
 
 	display_lines = fresh
+	_refresh_home_chars()
 	cursor_line = int(rf["line"])
 	cursor_pos = int(rf["pos"])
 	_reindex_lines()
@@ -906,6 +910,7 @@ func _text_files() -> Array[String]:
 
 func _new_level() -> void:
 	display_lines = _fit_to_width(_load_text())
+	_refresh_home_chars()
 	# Клавиатуру пере-поднимаем: если уровень начат нажатием клавиши,
 	# сессия IME рвётся и буквы уходят в никуда (жалоба автора 10.2026:
 	# «после смены уровня нажимал правильную букву, реакции не было»).
@@ -1058,6 +1063,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	var ke := event as InputEventKey
 	if ke == null:
 		return
+	if ke.keycode == KEY_SHIFT and not ke.pressed:
+		_set_kb_shift(false)
+		return
 	if not ke.pressed or ke.echo:
 		return
 	# Раскладку физической клавиатуры мы не угадываем по сочетанию —
@@ -1073,7 +1081,10 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	# шифта должно сразу менять состояние клавиш»). Отпускание приходит
 	# отдельным событием с pressed = false — его мы уже отсеяли выше.
 	if ke.keycode == KEY_SHIFT:
-		_set_kb_shift(not kb_shift)
+		_set_kb_shift(ke.pressed)
+		if not ke.pressed:
+			kb_press = ""
+			kb_press_t = 0.0
 		return
 	_poke_idle()
 	if ke.keycode == KEY_ESCAPE:
@@ -2257,6 +2268,21 @@ func _draw_own_kb() -> void:
 ## Нажатие на свою клавишу: символ — в _type_char, стереть — в _backspace,
 ## слой — дальше по кругу, шифт — флип. Напрямую, без key-событий: IME тут
 ## не участвует вообще, composing-переписям неоткуда взяться.
+## Отпускание удерживаемой клавиши (шифта). Гасит и вспышку: палец
+## ушёл — подсветка ушла.
+func _release_held() -> void:
+	if kb_held == "":
+		return
+	var was := kb_held
+	kb_held = ""
+	if was == "шифт":
+		_set_kb_shift(false)
+	if kb_press == was:
+		kb_press = ""
+		kb_press_t = 0.0
+	queue_redraw()
+
+
 ## Вспышка нажатой клавиши: человек должен видеть, что попал именно в неё
 ## (а если промахнулся — что не попал ни в одну). Гасится сама.
 func _flash(key: String) -> void:
@@ -2275,12 +2301,39 @@ func _kb_enter_shown() -> bool:
 		return true
 	if display_lines.is_empty():
 		return false
-	for line in display_lines:
-		for i in line.length():
-			var ch := line.substr(i, 1)
-			if ch != " " and not _is_active(ch):
-				return false
+	# Ввод ждёт только центрального ряда — дом и верхний ряд текста он
+	# не касается (автор 10.2026: «разблокировал бы клавишу энтер после
+	# того, как разблокирован весь центральный ряд букв, а не в самом
+	# конце»).
+	for want in home_chars:
+		if not _is_active(want):
+			return false
 	return true
+
+
+## Есть ли такой символ в тексте уровня (без учёта регистра).
+func _has_char(want: String) -> bool:
+	for line: String in display_lines:
+		for i in line.length():
+			if line.substr(i, 1).to_lower() == want:
+				return true
+	return false
+
+
+## Центральный ряд букв ИМЕННО ЭТОГО текста. Считается на смену текста,
+## а не на кадр: `_kb_enter_shown` дёргается из отрисовки каждый кадр, и
+## одиннадцать прогонов по строкам там — лишняя работа.
+func _refresh_home_chars() -> void:
+	home_chars.clear()
+	for want in HOME_LETTERS:
+		if _has_char(want):
+			home_chars.append(want)
+
+
+## Центральный ряд доски — те буквы, по которым ввод разблокируется.
+const HOME_LETTERS: Array[String] = ["ф", "ы", "в", "а", "п", "р", "о", "л", "д", "ж", "э"]
+## Из них — те, что есть в текущем тексте уровня (см. `_refresh_home_chars`).
+var home_chars: Array[String] = []
 
 
 func _own_press(pos: Vector2) -> bool:
@@ -2292,6 +2345,12 @@ func _own_press(pos: Vector2) -> bool:
 		return false
 	# Вспышка сразу на любую нажатую клавишу — человек видит, куда попал.
 	_flash(act)
+	if act == "шифт":
+		# Шифт держится пальцем, а не защёлкивается: второй палец в это
+		# время жмёт букву (автор 10.2026). Kbd.hit отдаёт «шифт», а не
+		# подпись с клавиши.
+		kb_held = "шифт"
+		_set_kb_shift(true)
 	if act == "ввод":
 		# Как физический Enter: на финале — дальше, в партии молчит.
 		if state != "playing":
@@ -2308,7 +2367,7 @@ func _own_press(pos: Vector2) -> bool:
 		# букву, подсветка перетекает (синонимичные действия).
 		_set_kb_lang("en" if kb_lang == "ru" else "ru")
 	elif act == "шифт":
-		_set_kb_shift(not kb_shift)
+		_set_kb_shift(true)
 	elif act == "пробел":
 		kb_shift = false
 		_type_char(" ")
@@ -2420,6 +2479,10 @@ func _input(event: InputEvent) -> void:
 			pos = mb.position
 			has_pos = true
 		elif mb.button_index == MOUSE_BUTTON_LEFT and not mb.pressed:
+			# Палец отпущен: удерживаемый шифт гаснет. Именно так ведёт себя
+			# настоящая клавиша (автор 10.2026: «нажимаю — загорается,
+			# отпускаю — гаснет»), поэтому шифт на доске не защёлкивается.
+			_release_held()
 			return
 	if not has_pos:
 		return

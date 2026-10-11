@@ -92,6 +92,9 @@ var kb_morph_shift := false
 ## что нажал ту самую клавишу (или промахнулся мимо всех).
 var kb_press := ""
 var kb_press_t := 0.0
+## Клавиша, которую ДЕРЖАТ пальцем: шифт работает, пока его держат
+## (автор 10.2026: «нажимаю — загорается, отпускаю — гаснет»).
+var kb_held := ""
 const KB_PRESS_T := 0.22
 var kb_shift := false
 var kb_key_sb: StyleBoxFlat
@@ -127,6 +130,20 @@ func _flash(key: String) -> void:
 	queue_redraw()
 
 
+## Отпускание удерживаемой клавиши (шифта): гасит и удержание, и вспышку.
+func _release_held() -> void:
+	if kb_held == "":
+		return
+	var was := kb_held
+	kb_held = ""
+	if was == "шифт":
+		_set_kb_shift(false)
+	if kb_press == was:
+		kb_press = ""
+		kb_press_t = 0.0
+	queue_redraw()
+
+
 func _own_press(pos: Vector2) -> bool:
 	if not _own_shown() or not input_active:
 		return false
@@ -134,6 +151,12 @@ func _own_press(pos: Vector2) -> bool:
 	if act == "":
 		return false
 	_flash(act)
+	if act == "шифт":
+		# Шифт держится пальцем, а не защёлкивается: второй палец в это
+		# время жмёт букву (автор 10.2026: «нажимаю — загорается,
+		# отпускаю — гаснет»). Kbd.hit отдаёт «шифт», не подпись.
+		kb_held = "шифт"
+		_set_kb_shift(true)
 	if act == "стереть":
 		input_text = input_text.left(maxi(0, input_text.length() - 1))
 	elif act == "язык":
@@ -141,7 +164,7 @@ func _own_press(pos: Vector2) -> bool:
 		# даёт другую букву, подсветка перетекает.
 		_set_kb_lang("en" if kb_lang == "ru" else "ru")
 	elif act == "шифт":
-		_set_kb_shift(not kb_shift)
+		_set_kb_shift(true)
 	elif act == "ввод":
 		_enter()
 	elif act == "пробел":
@@ -316,6 +339,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	var ke := event as InputEventKey
 	if ke == null:
 		return
+	if ke.keycode == KEY_SHIFT and not ke.pressed:
+		_set_kb_shift(false)
+		return
 	if not ke.pressed or ke.echo:
 		return
 	# Скрытое меню клавиш не видит: иначе оно перехватывает ввод раньше
@@ -366,7 +392,10 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	# шифта должно сразу менять состояние клавиш»). Отпускание приходит
 	# отдельным событием с pressed = false — его мы уже отсеяли выше.
 	if ke.keycode == KEY_SHIFT:
-		_set_kb_shift(not kb_shift)
+		_set_kb_shift(ke.pressed)
+		if not ke.pressed:
+			kb_press = ""
+			kb_press_t = 0.0
 		return
 	if ke.keycode == KEY_F2:
 		chosen.emit(resume_user)
@@ -477,6 +506,9 @@ func _input(event: InputEvent) -> void:
 			pos = mb.position
 			has_pos = true
 		elif mb.button_index == MOUSE_BUTTON_LEFT and not mb.pressed:
+			# Палец отпущен — удерживаемый шифт гаснет (как на настоящей
+			# клавиатуре, автор 10.2026).
+			_release_held()
 			return
 	if not has_pos:
 		return

@@ -309,6 +309,9 @@ func _set_text(first: String, second: String, pos: int) -> void:
 	_main.display_lines = lines
 	_main.line_drops = []
 	_main._reindex_lines()
+	# Свой текст — свой набор букв центрального ряда (от него зависит,
+	# появится ли ↵ на доске).
+	_main._refresh_home_chars()
 	_main.active.clear()
 	for line in _main.display_lines:
 		for i in line.length():
