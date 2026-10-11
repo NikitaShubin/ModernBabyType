@@ -317,6 +317,10 @@ case "$MODE" in
 	# Тот же живой рендер, но драйвер ИГРАЕТ партию и снимает экран в
 	# ключевые события, печатая рядом состояние модели.
 	run_godot --path game --script res://tests/visual_driver.gd
+	# И меню тем же рендером: карточки игроков в портрете (их видно
+	# только на экране — headless меряет прямоугольники, но не видит,
+	# влезает ли в них текст).
+	run_godot --path game --script res://tests/menu_driver.gd
 	ls -la /tmp/opencode/vis-*.png
 	;;
 --preset)

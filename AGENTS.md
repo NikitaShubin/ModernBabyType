@@ -41,6 +41,20 @@
   - `game/scenes/main.tscn` + `game/scripts/main.gd` — игровой экран.
   - `game/scenes/menu.tscn` + `game/scripts/menu.gd` — меню игроков.
     Скрытое меню клавиш не видит, иначе перехватывает ввод раньше игры.
+    Список игроков живёт в двух раскладках: в портрете (`view_h >
+    view_w`) — карточки во всю ширину, на широком экране и десктопе —
+    таблица с колонками (решение 10.2026: в портрете шесть колонок
+    выжимали имя в многоточие из двух букв). Карточка: имя крупно во
+    всю ширину, ниже строка статистики, а в ней — три крупные кнопки
+    «Про», «Ё», ✕ в один ряд (галочки прижаты вниз, ✕ справа, так
+    они не перекрываются ни при каком k). Шапки колонок в карточках
+    нет, поэтому пояснение галки даёт само переключение чипа
+    (`hint_header`). Шаг блока (`_row_step`) — карточка в портрете,
+    строка в альбоме, и `_fit_k` обязан считать шаг той же функцией
+    (`_card_h_at`), иначе модель врёт и блок уезжает за край. Кнопки
+    действий («Играть», «Без профиля», ночь) делят ширину экрана
+    долями без минимумов: минимум на узком экране наезжал на соседнюю
+    кнопку, а подпись при нехватке места ужимается сама (`_button`).
   - `game/scripts/meadow.gd` — общий фон (небо, солнце, облака, холмы).
   - `game/scripts/balance.gd` — чистая логика сложности (без узлов сцены).
   - `game/scripts/save.gd` — профили в `user://modern_baby_type.cfg`.
@@ -124,6 +138,14 @@
     последний кадр доснят: иначе последний шаг молча выпадал:
     `DISPLAY=:99 tools/docker/build-game.sh --visual`.
     `game/tests/shot_driver.gd` — съёмка кадров анимации.
+    `game/tests/menu_driver.gd` — тот же живой рендер, но для меню:
+    карточки игроков в портрете, переключение галочки с пояснением,
+    поле ввода со своей клавиатурой, подтверждение удаления, ночь и
+    таблица в альбоме. Нужен потому, что headless-тесты меряют
+    прямоугольники, но не видят, влезает ли в них текст: именно так
+    нашлись уезжающий за край ряд кнопок и висящий сверху список.
+    Запускается вместе с `visual_driver.gd` (`--visual`), кадры
+    `/tmp/opencode/vis-menu-*.png`.
     Во всех тестах перед `add_child` ставятся `skip_menu = true` и
     `all_keys_override = 1`, иначе тест упрётся в меню (marks_test
     переключает режим сам — ему нужен и обычный, и «все клавиши»).
@@ -160,12 +182,13 @@ source .venv/bin/activate
 .venv/bin/gdparse game/scripts/balance.gd game/scripts/save.gd game/scripts/main.gd \
   game/scripts/menu.gd game/tests/logic_test.gd game/tests/profiles_test.gd \
   game/tests/marks_test.gd game/tests/combo_test.gd game/tests/chase_test.gd \
-  game/tests/shot_driver.gd game/tests/visual_driver.gd
+  game/tests/shot_driver.gd game/tests/visual_driver.gd \
+  game/tests/menu_driver.gd
 tools/docker/build-game.sh --test-only          # семь тестов
 tools/docker/build-game.sh --all                # тесты + 4 платформы
 tools/docker/build-game.sh --preset Android     # одна платформа
 tools/docker/build-game.sh --shot               # кадры анимации
-tools/docker/build-game.sh --visual             # кадры партии + модель
+tools/docker/build-game.sh --visual             # кадры партии + модель, потом меню
 ```
 
 Тесты: `LOGIC_TEST` (логика ввода), `PROFILES_TEST` (меню игроков),

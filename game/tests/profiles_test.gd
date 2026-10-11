@@ -69,6 +69,7 @@ func _process(_dt: float) -> bool:
 	_part24_rounded_corners()
 	_part25_corrupt_file()
 	_part26_update_modal_keys()
+	_part28_cards()
 	_part27_menu_chaos()
 	_report()
 	return true
@@ -761,17 +762,36 @@ func _part13_touch() -> void:
 	_menu.view_h = 915.0
 	_menu.k = 0.736
 	_check(_menu.call("_rows_top") > y_land, "portrait block sits lower")
-	# Длинное имя режется многоточием в ширину колонки, таблица цела.
-	# Чистая функция текста и геометрии — профиль создавать не надо.
+	# Длинное имя и ширина. Геометрия чистая: профиль создавать не надо,
+	# меряем только текст и прямоугольники.
+	#   — таблица (узкий альбом) режет имя многоточием;
+	#   — карточка (портрет) держит даже самое длинное имя, какое игра
+	#     вообще может создать (жалоба автора 10.2026: в портрете имя
+	#     уходило в многоточие из двух букв, колонок было шесть).
+	_menu.view_w = 700.0
+	_menu.view_h = 500.0
+	_menu.k = 1.0
 	var cut := String(_menu.call("_short_name", "Оченьдлинноеимя12"))
 	_check(cut.ends_with("…"), "long name truncates with ellipsis")
 	_check(
-		_menu.call("_text_size", cut, 30).x <= 412.0,
+		_menu.call("_text_size", cut, 30).x <= 700.0,
 		"truncated name fits the narrow screen"
 	)
 	_check(
 		String(_menu.call("_short_name", first)) == first,
 		"short name passes through"
+	)
+	_menu.view_w = 412.0
+	_menu.view_h = 915.0
+	_menu.k = 0.736
+	var whole := String(_menu.call("_short_name", "Оченьдлинноеимя12"))
+	_check(
+		whole == "Оченьдлинноеимя12",
+		"the card keeps a long name whole (got «%s»)" % whole
+	)
+	_check(
+		_menu.call("_text_size", whole, 30).x <= 412.0,
+		"the card keeps it inside the screen"
 	)
 	# Геометрия блока: строки не налезают, кнопки под полем и на экране.
 	# Отдельной галочки между строками и полем больше нет: «Про» живёт
@@ -1371,6 +1391,165 @@ func _part26_update_modal_keys() -> void:
 ## каждого события: меню живо, поле ввода и флаги не рассыпались, а
 ## выход (F2) работает ВСЕГДА — ребёнок не должен остаться в меню
 ## без возможности вернуться в игру.
+## Портрет: список игроков карточками, а не таблицей (решение 10.2026).
+## Это не косметика, а другая геометрия: карточка во всю ширину,
+## кнопки крупные и не наезжают ни на соседнюю карточку, ни друг на
+## друга; тап по карточке играет, тап по чипу — только флаг, шапки
+## колонок (объяснение галки) в карточках нет: пояснение приходит из
+## самого переключения. И главное — при полном количестве игроков
+## блок влезает в экран (карточка выше строки таблицы, поэтому
+## масштаб ужимается сильнее).
+func _part28_cards() -> void:
+	for u in S.user_list():
+		S.delete_user(u)
+	S.create_user("Таня")
+	S.create_user("Федя")
+	_menu.call("_reload")
+	_menu.visible = true
+	_menu.confirm_name = ""
+	_menu.input_active = false
+	_menu.sel = 0
+	_menu.sel_col = 0
+	# Телефон: портрет 1080x2280, тач включён (он и на телефоне).
+	# Размеры задаём руками: _relayout в headless подхватил бы мусорный
+	# вьюпорт 64x64 (как и остальные проверки здесь).
+	var was_touch: bool = Ui.force_touch
+	Ui.force_touch = true
+	_menu.top_safe = 0.0
+	_menu.view_w = 1080.0
+	_menu.view_h = 2280.0
+	_menu.k = clampf(minf(_menu.view_w / 1100.0, _menu.call("_menu_eff_h") / 650.0), 0.5, 2.5)
+	_check(bool(_menu.call("_cards")), "portrait draws cards")
+	_check(
+		Rect2(_menu.call("_row_tap_rect", 0)).size.x >= _menu.view_w * 0.8,
+		"a card spans the screen"
+	)
+	# Шапки колонок в карточках нет — тап по ней нечего ловить.
+	_check(
+		Rect2(_menu.call("_pro_head_rect")).size == Vector2.ZERO,
+		"no pro header to tap in cards"
+	)
+	_check(
+		Rect2(_menu.call("_yo_head_rect")).size == Vector2.ZERO,
+		"no yo header to tap in cards"
+	)
+	# Геометрия карточек: не налезают друг на друга, влезают в экран,
+	# кнопки внутри своей карточки, крупные и не пересекаются.
+	var c0 := Rect2(_menu.call("_card_rect", 0))
+	var c1 := Rect2(_menu.call("_card_rect", 1))
+	_check(not c0.intersects(c1), "cards do not overlap")
+	_check(c1.end.y <= _menu.view_h, "the last card fits on screen")
+	for i in _menu.users.size():
+		var card := Rect2(_menu.call("_card_rect", i))
+		var pro := Rect2(_menu.call("_pro_tap_rect", i))
+		var yo := Rect2(_menu.call("_yo_tap_rect", i))
+		var del := Rect2(_menu.call("_del_tap_rect", i))
+		for nm in [["Про", pro], ["Ё", yo], ["✕", del]]:
+			var r: Rect2 = nm[1]
+			_check(r.size.x >= 64.0 and r.size.y >= 64.0,
+				"%s in a card fits a finger (%.0fx%.0f)" % [nm[0], r.size.x, r.size.y])
+			_check(card.encloses(r), "%s sits inside its card" % nm[0])
+		_check(not pro.intersects(yo) and not yo.intersects(del) and not pro.intersects(del),
+			"card buttons do not overlap each other")
+	# Тап по карточке играет этим игроком, тап по чипу — только флаг
+	# (и объясняет галку: шапки-то нет).
+	var first := String(_menu.users[0])
+	var second := String(_menu.users[1])
+	_picked = ""
+	_menu.call("_input", _tap(c1.get_center()))
+	_check(_picked == second, "tap on a card plays as that user")
+	_picked = ""
+	_menu.call("_input", _tap(Rect2(_menu.call("_pro_tap_rect", 0)).get_center()))
+	_check(S.get_all_keys(first), "card chip turns all_keys on")
+	_check(_picked == "", "card chip does not play the profile")
+	_check(String(_menu.hint_header) == "pro",
+		"the chip explains its flag (cards have no header)")
+	_menu.call("_input", _tap(Rect2(_menu.call("_yo_tap_rect", 0)).get_center()))
+	_check(not S.get_yo_strict(first), "card yo chip relaxes strictness")
+	_check(String(_menu.hint_header) == "yo", "the yo chip explains itself too")
+	_menu.call("_input", _tap(Rect2(_menu.call("_del_tap_rect", 1)).get_center()))
+	_check(String(_menu.confirm_name) == second,
+		"the card cross opens the delete confirmation")
+	_menu.call("_input", _tap(Rect2(_menu.call("_confirm_no_rect")).get_center()))
+	_check(S.user_exists(second), "cancelling the confirmation keeps the profile")
+	# Много игроков: карточка выше строки, масштаб ужимается — но блок
+	# (карточки + поле + кнопки) обязан остаться на экране. _fit_k —
+	# то, что _relayout дергает на телефоне после поднятия плотности.
+	var many: Array[String] = []
+	for i in 12:
+		many.append("Ю%d" % i)
+	_menu.users = many
+	_menu.input_active = false
+	_menu.confirm_name = ""
+	_menu.view_w = 1080.0
+	_menu.view_h = 2280.0
+	_menu.k = _menu.call("_fit_k", 2.5, 0.7)
+	_check(bool(_menu.call("_cards")), "still cards with twelve players")
+	_check(
+		Rect2(_menu.call("_card_rect", 11)).end.y <= _menu.view_h,
+		"the twelfth card fits after fit"
+	)
+	_check(
+		Rect2(_menu.call("_play_tap_rect")).end.y <= _menu.view_h,
+		"action buttons fit after fit with cards"
+	)
+	# Короткий телефон (1080x1900): там запаса мало, и ужим должен
+	# дожать не только первые пиксели — шаг карточки зависит от k
+	# дважды (высота и кнопка под палец), поэтому одной-двух итераций
+	# мало: остаток не влезает.
+	for vh in [2280.0, 1900.0]:
+		_menu.view_w = 1080.0
+		_menu.view_h = vh
+		_menu.k = _menu.call("_fit_k", 2.5, 0.7)
+		_menu.input_active = false
+		_check(
+			Rect2(_menu.call("_card_rect", 11)).end.y <= vh,
+			"the twelfth card fits on a %.0f-tall phone" % vh
+		)
+		_check(
+			Rect2(_menu.call("_play_tap_rect")).end.y <= vh,
+			"buttons fit on a %.0f-tall phone" % vh
+		)
+	# Альбом — привычная таблица: карточек нет, шапка колонок есть.
+	_menu.users = many
+	_menu.view_w = 2280.0
+	_menu.view_h = 1080.0
+	_menu.k = 1.0
+	_check(not bool(_menu.call("_cards")), "landscape keeps the table")
+	_check(
+		Rect2(_menu.call("_pro_head_rect")).size.x > 0.0,
+		"the table still has the pro header"
+	)
+	# Ряд кнопок действий влезает в экран при ЛЮБОЙ ширине (в том числе
+	# в 64px, где рисует headless-тест) и нигде не наезжает друг на друга:
+	# раньше кнопки стояли на константах от центра и в портрете ночная
+	# уезжала за правый край (видно на кадрах визуального прогона).
+	for vw in [64.0, 320.0, 412.0, 700.0, 1080.0, 2280.0]:
+		_menu.view_w = vw
+		_menu.view_h = 915.0
+		_menu.k = 1.0
+		var play := Rect2(_menu.call("_play_tap_rect"))
+		var guest := Rect2(_menu.call("_guest_tap_rect"))
+		var night := Rect2(_menu.call("_night_tap_rect"))
+		_check(
+			play.position.x >= 0.0 and night.end.x <= vw,
+			"action buttons fit the screen width (vw=%.0f)" % vw
+		)
+		_check(
+			not play.intersects(guest) and not guest.intersects(night),
+			"action buttons do not overlap (vw=%.0f)" % vw
+		)
+	for u in S.user_list():
+		S.delete_user(u)
+	var empty: Array[String] = []
+	_menu.users = empty
+	Ui.force_touch = was_touch
+	_menu.view_w = 1100.0
+	_menu.view_h = 650.0
+	_menu.k = 1.0
+	_menu.top_safe = 0.0
+
+
 func _part27_menu_chaos() -> void:
 	for u in ["хаос-а", "хаос-б"]:
 		S.create_user(u)
