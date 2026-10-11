@@ -649,13 +649,12 @@ func _case_loss_with_marks() -> void:
 ## мимо key-событий (см. _own_press), поэтому проверять его отдельно.
 func _kbd_on() -> void:
 	_main._force_touch = true
-	_main.kb_layer = _main.kb_lang
 
 
 ## Центры клавиш своей клавиатуры: «буква → точка».
 func _kbd_buttons() -> Dictionary:
 	var out := {}
-	for b in Kbd.buttons(_main._own_rect(), _main.kb_layer, _main.kb_lang, _main.kb_shift):
+	for b in Kbd.buttons(_main._own_rect(), _main.kb_shift):
 		var rect: Rect2 = b["r"]
 		var label := String(b["s"])
 		out[label] = rect.get_center()
@@ -884,7 +883,7 @@ func _case_own_kbd_fits() -> void:
 		var enter_y := -1.0
 		var digit_w := -1.0
 		var yo_w := -1.0
-		for b in Kbd.buttons(r, _main.kb_layer, _main.kb_lang, _main.kb_shift):
+		for b in Kbd.buttons(r, _main.kb_shift):
 			var kr: Rect2 = b["r"]
 			var lab := String(b["s"])
 			# «ё» живёт в цифровом ряду своим калибром — меряем отдельно.
@@ -962,7 +961,7 @@ func _case_own_kbd_fits() -> void:
 		# Клавиши: квадратные (палец), внутри своей области, все на месте.
 		var btns := _kbd_buttons()
 		_check(btns.size() >= 40, "%s: only %d keys on %s" % [tag, btns.size(), str(wh)])
-		for b in Kbd.buttons(r, _main.kb_layer, _main.kb_lang, _main.kb_shift):
+		for b in Kbd.buttons(r, _main.kb_shift):
 			var kr: Rect2 = b["r"]
 			var lab := String(b["s"])
 			# Широкие по замыслу (пробел, глобус, шифт, стрелки) — их
@@ -1544,7 +1543,6 @@ func _case_idle_hint() -> void:
 			_main.cursor_pos = p
 			break
 	if _main._current() == ":":
-		_main.kb_layer = "ru"
 		_main.hero_r = _main._hero_pos()
 		_main.idle_t = _main._hint_delay() + 0.5
 		_tick(tag)

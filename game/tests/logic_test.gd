@@ -310,9 +310,9 @@ func _text_coverage() -> void:
 	# (Shift+6 даёт «:», Shift+. — запятую).
 	var direct := {}
 	var shifted := {}
-	for layer in ["ru", "en"]:
-		var lang := "ru" if layer == "ru" else "en"
-		for b in K.buttons(Rect2(0, 0, 1200, 500), layer, lang, false):
+	# Доска одна (русская физическая): язык меняет ввод и подсветку,
+	# а не ряды. Shift даёт заглавные и знаки.
+	for b in K.buttons(Rect2(0, 0, 1200, 500), false):
 			var s := String(b["s"])
 			direct[s] = true
 			shifted[s.to_upper()] = true
@@ -1240,15 +1240,6 @@ func _hardkey(code: int, uni: int, shift := false) -> InputEventKey:
 	ev.shift_pressed = shift
 	ev.pressed = true
 	return ev
-
-
-## Клик мыши с координатами.
-## Центр клавиши со знаком на своей клавиатуре (для тапов в тестах).
-func _kb_center(area: Rect2, layer: String, label: String) -> Vector2:
-	for b in K.buttons(area, layer, "ru", false, false):
-		if String(b["s"]) == label:
-			return (b["r"] as Rect2).get_center()
-	return Vector2(-1.0, -1.0)
 
 
 ## Сенсорный режим (своя клавиатура) — игре и меню сразу.

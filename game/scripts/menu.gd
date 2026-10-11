@@ -76,10 +76,10 @@ var view_h := BASE_H
 var k := 1.0
 ## Своя клавиатура (модуль Kbd): видна, когда вводится имя, на сенсорных
 ## устройствах. Высоту считаем сами от view_h — игра свою высоту больше
-## не ставит (у неё своя политика показа). Слой держит kb_layer.
+## не ставит (у неё своя политика показа). Язык ввода держит kb_lang:
+## ряды при этом не меняются (доска одна), меняется подсветка и ввод.
 ## Отступ от верха под вырез камеры (как в игре, см. Ui.top_inset).
 var top_safe := 0.0
-var kb_layer := "ru"
 var kb_lang := "ru"
 var kb_shift := false
 var kb_key_sb: StyleBoxFlat
@@ -99,7 +99,7 @@ func _draw_own_kb() -> void:
 	if not _own_shown():
 		return
 	Kbd.draw(
-		self, _own_rect(), kb_layer, kb_lang, kb_shift, true, mono,
+		self, _own_rect(), kb_lang, kb_shift, true, mono,
 		int(30.0 * k), kb_key_sb, selbox_sb, _uitext(), [], null, _dim()
 	)
 
@@ -107,14 +107,15 @@ func _draw_own_kb() -> void:
 func _own_press(pos: Vector2) -> bool:
 	if not _own_shown() or not input_active:
 		return false
-	var act := Kbd.hit(_own_rect(), kb_layer, kb_lang, kb_shift, true, pos)
+	var act := Kbd.hit(_own_rect(), kb_shift, true, pos)
 	if act == "":
 		return false
 	if act == "стереть":
 		input_text = input_text.left(maxi(0, input_text.length() - 1))
 	elif act == "язык":
+		# Глобус реально меняет язык ввода (см. игру): та же клавиша
+		# даёт другую букву, подсветка перетекает.
 		kb_lang = "en" if kb_lang == "ru" else "ru"
-		kb_layer = kb_lang
 	elif act == "шифт":
 		kb_shift = not kb_shift
 	elif act == "ввод":
@@ -122,11 +123,17 @@ func _own_press(pos: Vector2) -> bool:
 	elif act == "пробел":
 		pass  # в имени пробелов не бывает
 	else:
-		# Шифт + цифра даёт знак (как на настоящей клавиатуре).
+		# Шифт + цифра даёт знак (как на настоящей клавиатуре), а буква
+		# идёт на языке ввода: та же клавиша в английском даёт латиницу.
 		var out := Kbd.shift_digit(act) if kb_shift else ""
 		kb_shift = false
+		var ch := out if out != "" else act
+		if kb_lang == "en":
+			var en := Kbd.pair_of(ch.to_lower())
+			if en != "":
+				ch = en.to_upper() if act == act.to_upper() and act != act.to_lower() else en
 		if input_text.length() < S.MAX_NAME_LENGTH:
-			input_text += out if out != "" else act
+			input_text += ch
 	queue_redraw()
 	get_viewport().set_input_as_handled()
 	return true

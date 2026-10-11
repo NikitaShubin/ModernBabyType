@@ -150,7 +150,7 @@ func _a_touch_press() -> void:
 	# видно и принятую букву, и красную метку на экране.
 	var want: String = _main._current()
 	var btns := {}
-	for b in Kbd.buttons(_main._own_rect(), _main.kb_layer, _main.kb_lang, _main.kb_shift):
+	for b in Kbd.buttons(_main._own_rect(), _main.kb_shift):
 		var rect: Rect2 = b["r"]
 		btns[String(b["s"])] = rect.get_center()
 		if String(b["s"]) == "пробел":
@@ -183,7 +183,7 @@ func _a_long_press() -> void:
 				_main.cursor_pos = p
 				_main.hero_r = _main._hero_pos()
 				var btns := {}
-				for b in Kbd.buttons(_main._own_rect(), _main.kb_layer, _main.kb_lang, _main.kb_shift):
+				for b in Kbd.buttons(_main._own_rect(), _main.kb_shift):
 					btns[String(b["s"])] = (b["r"] as Rect2).get_center()
 				var ch: String = _main._current()
 				if not btns.has(ch):

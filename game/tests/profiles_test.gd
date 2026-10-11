@@ -1079,7 +1079,7 @@ func _part19_menu_typing() -> void:
 	_check(_menu.input_text == "я", "menu char reaches the field at once")
 	var key_at := Vector2(-1.0, -1.0)
 	for b in Kbd.buttons(
-		Rect2(_menu.call("_own_rect")), _menu.kb_layer, _menu.kb_lang, _menu.kb_shift, true
+		Rect2(_menu.call("_own_rect")), _menu.kb_shift, true
 	):
 		if String(b["s"]).length() == 1:
 			key_at = (b["r"] as Rect2).get_center()
@@ -1137,25 +1137,31 @@ func _part21_own_keyboard() -> void:
 	Ui.force_touch = true
 	_menu.view_w = 1100.0
 	_menu.view_h = 650.0
-	_menu.kb_layer = "ru"
 	_menu.kb_lang = "ru"
 	var area: Rect2 = _menu.call("_own_rect")
 	_check(area.size.y > 0.0, "menu keyboard has height")
 	# Шифт + буква: заглавная в имени.
-	_menu.call("_own_press", _mkey(area, "ru", false, "Shift"))
+	_menu.call("_own_press", _mkey(area, false, "Shift"))
 	_check(bool(_menu.kb_shift), "left shift arms")
-	_menu.call("_own_press", _mkey(area, "ru", true, "П"))
+	_menu.call("_own_press", _mkey(area, true, "П"))
 	_check(String(_menu.input_text) == "П", "shift gives uppercase")
 	# Глобус туда-обратно (слоя знаков больше нет).
-	_menu.call("_own_press", _mkey(area, "ru", false, "глобус"))
-	_check(String(_menu.kb_layer) == "en", "globe switches to latin")
-	_menu.call("_own_press", _mkey(area, "en", false, "глобус"))
-	_check(String(_menu.kb_layer) == "ru", "globe switches back to russian")
+	_menu.call("_own_press", _mkey(area, false, "глобус"))
+	_check(String(_menu.kb_lang) == "en", "globe switches to latin")
+	# Глобус реально меняет язык ввода: та же клавиша «ф» даёт «a».
+	# Ряды при этом не меняются (доска одна) — синонимичные действия.
+	_menu.call("_own_press", _mkey(area, false, "ф"))
+	_check(String(_menu.input_text) == "Пa", "latin input types latin (got «%s»)" % _menu.input_text)
+	_menu.call("_own_press", _mkey(area, false, "глобус"))
+	_check(String(_menu.kb_lang) == "ru", "globe switches back to russian")
+	# Латинскую «a» стираем: дальше имя по-русски.
+	_menu.call("_own_press", _mkey(area, false, "←"))
+	_check(String(_menu.input_text) == "П", "erase removes the latin letter")
 	# Своя клавиша ё (как на настоящей клавиатуре).
-	_menu.call("_own_press", _mkey(area, "ru", false, "ё"))
+	_menu.call("_own_press", _mkey(area, false, "ё"))
 	_check(String(_menu.input_text) == "Пё", "own yo key types yo")
 	# Ввод (↵) создаёт профиль и закрывает поле.
-	_menu.call("_own_press", _mkey(area, "ru", false, "↵"))
+	_menu.call("_own_press", _mkey(area, false, "↵"))
 	_check(S.user_exists("Пё"), "enter key creates the profile")
 	_check(not bool(_menu.input_active), "enter key closes the field")
 	S.delete_user("Пё")
@@ -1232,8 +1238,8 @@ func _unknown_event(code: int) -> InputEventKey:
 ## Клик мыши с координатами. Палец на Android сам превращается в клик,
 ## поэтому касания отдельно не тестируем: обработчик их не слушает.
 ## Центр клавиши своей клавиатуры в меню (для прямых тапов).
-func _mkey(area: Rect2, layer: String, shift: bool, label: String) -> Vector2:
-	for b in K.buttons(area, layer, "ru", shift, true):
+func _mkey(area: Rect2, shift: bool, label: String) -> Vector2:
+	for b in K.buttons(area, shift, true):
 		if String(b["s"]) == label:
 			return (b["r"] as Rect2).get_center()
 	return Vector2(-1.0, -1.0)

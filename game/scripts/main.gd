@@ -150,8 +150,9 @@ var meadow: Meadow = null
 ## Своя экранная клавиатура (модуль Kbd, решение автора 10.2026): вместо
 ## системной IME, которая коверкает ввод composing-перепиской. Видна
 ## в партии на сенсорных устройствах (на десктопе есть железная).
-## Слой клавиатуры держит kb_layer ("ru"/"en"). Системную не вызываем вообще.
-var kb_layer := "ru"
+## Язык ввода ("ru"/"en"): его переключает глобус. Ряды при этом НЕ
+## меняются (доска одна, русская физическая): меняется подсветка букв и
+## то, какая буква вводится клавишей. Системную не вызываем вообще.
 var kb_lang := "ru"
 var kb_shift := false
 var kb_key_sb: StyleBoxFlat
@@ -891,7 +892,6 @@ func _new_level() -> void:
 	# «после смены уровня нажимал правильную букву, реакции не было»).
 
 	# Слой и шифт своей клавиатуры сбрасываем: новый уровень — чистые буквы.
-	kb_layer = "ru"
 	kb_lang = "ru"
 	kb_shift = false
 	# И предупреждение о CapsLock: новый текст — новая жизнь.
@@ -1737,14 +1737,14 @@ func _hint_parts() -> Array:
 	# Чужая раскладка: буква латиницей, а слой русский (и наоборот) —
 	# предупреждаем, как о CapsLock: иначе жмёшь не ту клавиатуру
 	# (требование автора 10.2026: взрослые тексты с латиницей).
-	if _is_latin(cur) and kb_layer != "en":
+	if _is_latin(cur) and kb_lang != "en":
 		return [
 			{"s": "Жми:", "cap": false},
 			{"s": "EN", "cap": true},
 			{"s": "+", "cap": false},
 			{"s": cur, "cap": true},
 		]
-	if not _is_latin(cur) and kb_layer == "en":
+	if not _is_latin(cur) and kb_lang == "en":
 		return [
 			{"s": "Жми:", "cap": false},
 			{"s": "РУ", "cap": true},
@@ -1755,7 +1755,7 @@ func _hint_parts() -> Array:
 	# Символа нет на этом слое — учим настоящему вводу: знаки идут
 	# шифтом с верхней цифры (Shift+6 даёт «:»). Обычные буквы проверять
 	# незачем: на буквенном слое они есть всегда.
-	if not Kbd.is_plain_letter(cur) and not Kbd.has_key(kb_layer, kb_lang, kb_shift, cur):
+	if not Kbd.is_plain_letter(cur) and not Kbd.has_key(kb_shift, cur):
 		var digit := Kbd.digit_for(cur)
 		if digit != "":
 			return [
@@ -2122,11 +2122,19 @@ func _hint_keys() -> Array:
 		return []
 	if cur == " ":
 		return ["пробел:Л" if last_hand == "П" else "пробел:П"]
-	if _is_latin(cur) != (kb_layer == "en"):
+	if _is_latin(cur) != (kb_lang == "en"):
 		return ["глобус"]
+	if _is_latin(cur):
+		# Латиница при включённом английском: клавиша подписана
+		# по-русски, а пара у неё латинская — подсвечиваем физическую.
+		var ru := Kbd.pair_of(cur.to_lower())
+		if ru != "":
+			if _exact() and cur == cur.to_upper():
+				return [_opp_shift(ru), ru]
+			return [ru]
 	if _exact() and cur == cur.to_upper() and cur != cur.to_lower():
 		return [_opp_shift(cur.to_lower()), cur.to_lower()]
-	if not Kbd.is_plain_letter(cur) and not Kbd.has_key(kb_layer, kb_lang, kb_shift, cur):
+	if not Kbd.is_plain_letter(cur) and not Kbd.has_key(kb_shift, cur):
 		# Знаки — шифтом с верхней цифры (настоящая клавиатура).
 		var digit := Kbd.digit_for(cur)
 		if digit != "":
@@ -2151,7 +2159,7 @@ func _draw_own_kb() -> void:
 		c.a = 0.45 + 0.35 * pulse
 		kb_hi_sb.bg_color = c
 	Kbd.draw(
-		self, _own_rect(), kb_layer, kb_lang, kb_shift, false, mono,
+		self, _own_rect(), kb_lang, kb_shift, false, mono,
 		int(30.0 * k), kb_key_sb, kb_on_sb, _ui_ink(), hi, kb_hi_sb, _ui_dim()
 	)
 
@@ -2163,7 +2171,7 @@ func _own_press(pos: Vector2) -> bool:
 	if not _own_shown():
 		return false
 	_poke_idle()
-	var act := Kbd.hit(_own_rect(), kb_layer, kb_lang, kb_shift, false, pos)
+	var act := Kbd.hit(_own_rect(), kb_shift, false, pos)
 	if act == "":
 		return false
 	if act == "ввод":
@@ -2178,8 +2186,9 @@ func _own_press(pos: Vector2) -> bool:
 	if act == "стереть":
 		_backspace()
 	elif act == "язык":
+		# Глобус реально меняет язык ввода: та же клавиша даёт другую
+		# букву, подсветка перетекает (синонимичные действия).
 		kb_lang = "en" if kb_lang == "ru" else "ru"
-		kb_layer = kb_lang
 	elif act == "шифт":
 		kb_shift = not kb_shift
 	elif act == "пробел":
@@ -2187,16 +2196,21 @@ func _own_press(pos: Vector2) -> bool:
 		_type_char(" ")
 	else:
 		# Шифт + цифра даёт знак (как на настоящей клавиатуре), шифт
-		# при этом гаснет — как после заглавной буквы.
+		# при этом гаснет — как после заглавной буквы. А буква идёт на
+		# языке ввода: та же клавиша в английском даёт латиницу.
 		var out := Kbd.shift_digit(act) if kb_shift else ""
 		kb_shift = false
-		_type_char(out if out != "" else act)
+		var ch := out if out != "" else act
+		if kb_lang == "en":
+			var en := Kbd.pair_of(ch.to_lower())
+			if en != "":
+				ch = en.to_upper() if act == act.to_upper() and act != act.to_lower() else en
+		_type_char(ch)
 	queue_redraw()
 	get_viewport().set_input_as_handled()
 	return true
 
 
-## ё/ъ (откат + ввод альтернативы). Короткое — ничего не делает.
 ## Чернила для рисованного текста поверх панелей и фона: днём тёмные,
 ## ночью светлые. Пилюли сами меняют фон (_apply_night), а рисованный
 ## текст за ним не следил — ночью «Дальше», чёрточки ≡ и

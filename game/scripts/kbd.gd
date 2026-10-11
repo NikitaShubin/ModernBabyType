@@ -33,33 +33,25 @@ const ROWS_RU: Array = [
 	["Shift", "я", "ч", "с", "м", "и", "т", "ь", "б", "ю", ".", "ShiftR"],
 ]
 
-## Ряды латиницы для взрослых текстов (та же геометрия).
-const ROWS_EN: Array = [
-	["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"],
-	["a", "s", "d", "f", "g", "h", "j", "k", "l"],
-	["Shift", "z", "x", "c", "v", "b", "n", "m", "←"],
-]
+## Отдельных латинских рядов больше нет: доска одна (русская физическая),
+## а латиница набирается теми же клавишами (см. пару RU_EN и kb_lang).
 
 ## Низ доски: язык, пробел и прямые знаки. Слоя ?123 больше нет: все
 ## знаки идут шифтом с цифр или прямыми клавишами, как на настоящей
 ## (решение 10.2026). Запятая — тоже шифтом (Shift+.): отдельной клавиши
 ## нет. В меню вместо «?» — ввод (↵): имя надо чем-то заканчивать.
 static func bottom_row(enter: bool) -> Array:
-	var last := "↵" if enter else "?"
+	var last := "↵" if enter else "\\"
 	if enter:
-		return ["глобус", "пробел", ".", "!", last]
-	return ["глобус", "пробел", ".", "!", "?", "-", "\\"]
+		return ["Ctrl", "Win", "Alt", "глобус", "пробел", last]
+	return ["Ctrl", "Win", "Alt", "глобус", "пробел", ".", "-", last]
 
 
 ## Все ряды слоя сверху вниз (цифры + верх + низ).
-static func all_rows(layer: String, lang: String, enter: bool) -> Array:
+static func all_rows(enter: bool) -> Array:
 	var rows: Array = []
-	if layer == "en":
-		rows.append(ROW_DIGITS)
-		rows.append_array(ROWS_EN)
-	else:
-		rows.append(ROW_DIGITS_RU + ["←"])
-		rows.append_array(ROWS_RU)
+	rows.append(ROW_DIGITS_RU + ["←"])
+	rows.append_array(ROWS_RU)
 	rows.append(bottom_row(enter))
 	return rows
 
@@ -116,10 +108,10 @@ static func pair_of(s: String) -> String:
 ## Смотрим ТОЛЬКО подписи рядов, без прямоугольников: подсказка
 ## пересчитывается каждый кадр, и пятьдесят выделенных Rect2 и словарей
 ## на кадр — это мусор в куче на телефоне (проверено: было именно так).
-static func has_key(layer: String, lang: String, shift: bool, s: String) -> bool:
+static func has_key(shift: bool, s: String) -> bool:
 	if s == "":
 		return false
-	for row in all_rows(layer, lang, false):
+	for row in all_rows(false):
 		for label in row:
 			var lab := String(label)
 			if shift and lab.length() == 1 and lab != "←" and lab != "Shift" and lab != "ShiftR":
@@ -244,12 +236,11 @@ const ROW_TALL := 1.15
 ## левый шифт во всю высоту ступени), «стереть» = ровно остаток (≥28px).
 ## Остальные ряды и слои — по-старому (заливка/центровка): там нет
 ## буквенных краёв, которым надо держать ступеньку.
-static func buttons(area: Rect2, layer: String, lang: String, shift: bool, enter := false) -> Array:
-	var rows: Array = all_rows(layer, lang, enter)
+static func buttons(area: Rect2, shift: bool, enter := false) -> Array:
+	var rows: Array = all_rows(enter)
 	var out: Array = []
 	var gap := 8.0
 	var rh := (area.size.y - gap * float(rows.size() - 1)) / float(rows.size())
-	var ru_letters := lang == "ru"
 	var pitch := -1.0
 	for row in rows:
 		var n1 := 0
@@ -279,7 +270,7 @@ static func buttons(area: Rect2, layer: String, lang: String, shift: bool, enter
 	var ru_p := 0.0
 	var ru_a := 0.0
 	var ru_lr := 0.0
-	if ru_letters and rows.size() >= 5:
+	if rows.size() >= 5:
 		var w := area.size.x
 		# Питч один на всё, включая цифры: 12 букв, ступеньки ф/я,
 		# симметричные шифты от 32px, стереть от 48px.
@@ -298,7 +289,7 @@ static func buttons(area: Rect2, layer: String, lang: String, shift: bool, enter
 		var x := area.position.x
 		var y := area.position.y + float(ri) * (rh + gap)
 		# Русская доска: цифры, 12 букв, 11 букв + ввод, шифты.
-		if ru_letters and rows.size() >= 5 and (ri >= 0 and ri <= 3):
+		if rows.size() >= 5 and (ri >= 0 and ri <= 3):
 			if ri == 0:
 				# Цифры своим калибром (их 13 + стереть — в питч букв
 				# не влезть), стереть — двойное, как настоящее.
@@ -410,8 +401,8 @@ static func buttons(area: Rect2, layer: String, lang: String, shift: bool, enter
 
 ## Тап по клавиатуре: "" — мимо, иначе действие ("стереть", "шифт",
 ## "ввод", "язык", "пробел", символ). Слоя ?123 больше нет.
-static func hit(area: Rect2, layer: String, lang: String, shift: bool, enter: bool, pos: Vector2) -> String:
-	for b in buttons(area, layer, lang, shift, enter):
+static func hit(area: Rect2, shift: bool, enter: bool, pos: Vector2) -> String:
+	for b in buttons(area, shift, enter):
 		if (b["r"] as Rect2).has_point(pos):
 			var s := String(b["s"])
 			if s == "←":
@@ -422,6 +413,8 @@ static func hit(area: Rect2, layer: String, lang: String, shift: bool, enter: bo
 				return "ввод"
 			if s == "глобус":
 				return "язык"
+			if s == "Ctrl" or s == "Win" or s == "Alt":
+				return ""
 			return s
 	return ""
 
@@ -431,7 +424,7 @@ static func hit(area: Rect2, layer: String, lang: String, shift: bool, enter: bo
 ## векторный (круг + меридиан): шрифтового эмодзи в DejaVu нет.
 ## shift_on подсвечивает шифт заливкой (второй стиль вызывателя).
 static func draw(
-	ci: CanvasItem, area: Rect2, layer: String, lang: String, shift: bool,
+	ci: CanvasItem, area: Rect2, lang: String, shift: bool,
 	enter: bool, font: Font, fs: int, sb: StyleBox, sb_on: StyleBox, ink: Color,
 	hi: Array = [], hi_sb: StyleBox = null, ink_dim: Color = Color(0, 0, 0, 0)
 ) -> void:
@@ -447,7 +440,7 @@ static func draw(
 	var key_fs := maxi(fs, int(rh * 0.40))
 	var sub_fs := maxi(int(float(fs) * 0.55), int(rh * 0.22))
 	var dim := ink_dim if ink_dim.a > 0.0 else ink
-	for b in buttons(area, layer, lang, shift, enter):
+	for b in buttons(area, shift, enter):
 		var r := b["r"] as Rect2
 		var s := String(b["s"])
 		var box := sb_on if (s == "Shift" or s == "ShiftR") and shift else sb
@@ -477,11 +470,14 @@ static func draw(
 				f -= 2
 		var tw := font.get_string_size(shown, HORIZONTAL_ALIGNMENT_LEFT, -1.0, f).x
 		var th := font.get_height(f)
+		# Заблокированные (Ctrl/Win/Alt): в наборе не участвуют, подпись
+		# приглушена, чтобы не звали палец.
+		var blocked := s == "Ctrl" or s == "Win" or s == "Alt"
 		ci.draw_string(
 			font,
 			Vector2(r.get_center().x - tw * 0.5, r.get_center().y + float(th) * 0.3),
 			" " if s == "пробел" else shown,
-			HORIZONTAL_ALIGNMENT_LEFT, -1.0, f, ink
+			HORIZONTAL_ALIGNMENT_LEFT, -1.0, f, dim if blocked else ink
 		)
 		# Вторая подпись клавиши: пара из другой раскладки (у букв) или
 		# знак с шифтом (у цифр). Активная светится ярче.
