@@ -59,6 +59,40 @@ func _soft(ch: String) -> void:
 
 
 ## Настоящая клавиша (keycode есть) — как с железной клавиатуры.
+## Поставить заяца на клетку вручную. Ручное перемещение снимает
+## ожидание переноса: сценарий ставит курсор сам, а игра ждала бы ↵.
+func _at(l: int, p: int) -> void:
+	_main.cursor_line = l
+	_main.cursor_pos = p
+	_main.need_enter = false
+	_main.hero_r = _main._hero_pos()
+
+
+## Напечатать верную букву под курсором, а на конце строки — ↵: перенос
+## в игре не автоматический (автор 10.2026), тесты обязаны его слать.
+func _type_next(tag := "") -> void:
+	while int(_main.cursor_line) < _main.display_lines.size():
+		if _main.need_enter:
+			_hard("\r", KEY_ENTER)
+			_tick(tag if tag != "" else "type_next")
+			if _main.state != "playing":
+				return
+			continue
+		var cur: String = _main._current()
+		if cur == "":
+			return
+		_main._type_char(cur)
+		_tick(tag if tag != "" else "type_next")
+		if _main.state != "playing":
+			return
+
+
+## Напечатать N верных букв, переносы обрабатывая.
+func _type_n(n: int, tag := "") -> void:
+	for _i in n:
+		_type_next(tag)
+
+
 func _hard(ch: String, code: int = KEY_A) -> void:
 	var ke := InputEventKey.new()
 	ke.pressed = true
@@ -208,6 +242,7 @@ func _fresh(difficulty: int, all_keys: int) -> void:
 	_main.all_keys_override = all_keys
 	_main.difficulty = difficulty
 	_main._new_level()
+	_main.need_enter = false
 
 
 func _wrong() -> String:
@@ -251,11 +286,24 @@ func _advance_to(frac: float) -> bool:
 		guard += 1
 		var cur: String = _main._current()
 		if cur == "":
+			# Конец строки ждёт ↵ — шлём его, это и есть перенос.
+			if _main.need_enter and _main.state == "playing":
+				_hard("\r", KEY_ENTER)
+				_tick("advance")
+				if _main.state != "playing":
+					return false
+				continue
 			return false
 		_main._type_char(cur)
 		_tick("advance")
 		if _main.state != "playing":
 			return false
+	if _main.need_enter and _main.state == "playing":
+		# Перенос на самом краю доли: на выходе игра не должна стоять и
+		# ждать ↵ — дальше сценарий работает с буквой под курсором, а
+		# буквы в ожидании не печатаются (автор 10.2026).
+		_hard("\r", KEY_ENTER)
+		_tick("advance")
 	return _ax() >= want
 
 
@@ -264,7 +312,15 @@ func _advance_to(frac: float) -> bool:
 ## 1. Слово целиком от IME: пять неверных символов одним куском.
 func _case_ime_word() -> void:
 	_fresh(0, 0)
-	_check(_advance_to(0.35), "ime word: could not advance into the text (coverage)")
+	if not _advance_to(0.35) or _main.state != "playing" or _main.need_enter:
+		# Разгон не в партию (тексты случайны): разовый перезапуск вместо
+		# каскада ложных падений дальше по сценарию.
+		_fresh(0, 0)
+		_check(_advance_to(0.35), "ime word: could not advance into the text (coverage)")
+		_check(
+			_main.state == "playing" and not _main.need_enter,
+			"ime word: the restart did not reach a playable cell (coverage)"
+		)
 	var tag := "ime word"
 	var before := _ax()
 	# Пять РАЗНЫХ букв (пять одинаковых — машинный дубль, его фильтр
@@ -367,9 +423,7 @@ func _case_backspace_at_start() -> void:
 func _case_mistake_at_start() -> void:
 	# Именно первая клетка уровня: за ней откатываться некуда.
 	_fresh(0, 1)
-	_main.cursor_line = 0
-	_main.cursor_pos = 0
-	_main.hero_r = _main._hero_pos()
+	_at(0, 0)
 	var tag := "mistake at start"
 	_check(_ax() <= 0.001, "%s: could not put the hare at the very first cell" % tag)
 	var start := _ax()
@@ -412,12 +466,28 @@ func _case_error_storm() -> void:
 func _case_line_wrap() -> void:
 	_fresh(1, 1)
 	var tag := "line wrap"
-	# Уводим зайца на вторую строку.
+	# Уводим зайца на вторую строку. Перенос больше не автоматический:
+	# игра стоит на конце строки и ждёт ↵ (автор 10.2026: «если наступил
+	# конец строки… надо ожидать нажатия этого энтера перед тем как
+	# реально перейти»), поэтому шлём ↵ — он и есть переход.
 	while int(_main.cursor_line) < 1:
-		_hard(_main._current())
+		var want := String(_main._current())
+		if want == "":
+			_check(bool(_main.need_enter), "%s: the end of the line must wait for enter" % tag)
+			_hard("\r", KEY_ENTER)
+			_tick(tag)
+			if int(_main.cursor_line) < 1:
+				break
+			continue
+		_hard(want)
 		_tick(tag)
 		if _main.state != "playing":
 			return
+		if bool(_main.need_enter):
+			_check(
+				bool(_main._kb_enter_shown()),
+				"%s: the enter key must be on the board while waiting" % tag
+			)
 	var line_before := int(_main.cursor_line)
 	var stepped := 0
 	# Откат ровно на глиф — пока есть куда: упор в самое начало текста
@@ -442,6 +512,94 @@ func _case_line_wrap() -> void:
 	)
 	_common(tag)
 	_finish_level(tag)
+
+
+## 7а. Перенос строки ЖДЁТ нажатия ↵: приняв последнюю букву строки, игра
+## стоит и не переходит сама; ↵ с доски и с физической клавиатуры переводит
+## на следующую строку. Буква в этот момент не печатается и ошибкой не
+## считается; Backspace отменяет ожидание переноса.
+func _case_wrap_waits_enter() -> void:
+	_fresh(1, 1)
+	var tag := "wrap waits enter"
+	_kbd_on()
+	# Идём верными буквами до конца первой строки.
+	while not bool(_main.need_enter):
+		var want := String(_main._current())
+		if want == "" or _main.state != "playing":
+			_check(false, "%s: never reached the end of the line (coverage)" % tag)
+			return
+		_hard(want)
+		_tick(tag)
+	var line_before := int(_main.cursor_line)
+	# Подсветка зовёт ↵ после паузы (как и вся подсказка), а на доске
+	# клавиша ввода есть сразу: ввод не «разблокируется», он ждёт нажатия.
+	_check(bool(_main._kb_enter_shown()), "%s: the board has no enter key while waiting" % tag)
+	_main.idle_t = _main._hint_delay() + 0.5
+	_check(
+		_main._hint_keys() == ["↵"],
+		"%s: the hint must offer enter while waiting (%s)" % [tag, str(_main._hint_keys())]
+	)
+	# Игра стоит: буквы не принимаются и ошибками не считаются.
+	var bad0: int = _main.typed_bad
+	for _i in 3:
+		_main._type_char(_wrong())
+		_tick(tag)
+	_check(
+		int(_main.cursor_line) == line_before
+			and int(_main.typed_bad) == bad0
+			and bool(_main.need_enter),
+		"%s: a letter passed the end of the line" % tag
+	)
+	# ↵ с доски переносит.
+	_main._own_press(_kbd_buttons()["↵"])
+	_tick(tag)
+	_check(
+		int(_main.cursor_line) == line_before + 1 and not bool(_main.need_enter),
+		"%s: enter on the board did not wrap (%d)" % [tag, int(_main.cursor_line)]
+	)
+	# Повторный ↵ молчит: перенос уже сделан.
+	var line_now := int(_main.cursor_line)
+	_main._own_press(_kbd_buttons()["↵"])
+	_tick(tag)
+	_check(
+		int(_main.cursor_line) == line_now,
+		"%s: a second enter moved the cursor again" % tag
+	)
+	# Снова к концу строки — и откат Backspace отменяет ожидание.
+	while not bool(_main.need_enter):
+		var want2 := String(_main._current())
+		if want2 == "" or _main.state != "playing":
+			_check(false, "%s: no second line end (coverage)" % tag)
+			return
+		_hard(want2)
+		_tick(tag)
+	_main._backspace()
+	_tick(tag)
+	_check(not bool(_main.need_enter), "%s: backspace did not cancel the wrap" % tag)
+	# ↵ после отката молчит: строка не кончилась.
+	var line_after := int(_main.cursor_line)
+	_main._own_press(_kbd_buttons()["↵"])
+	_tick(tag)
+	_check(
+		int(_main.cursor_line) == line_after,
+		"%s: enter after a cancel still wrapped" % tag
+	)
+	# Физический ↵ переносит так же, как с доски.
+	while not bool(_main.need_enter):
+		var want3 := String(_main._current())
+		if want3 == "" or _main.state != "playing":
+			break
+		_hard(want3)
+		_tick(tag)
+	if bool(_main.need_enter):
+		var phys_line := int(_main.cursor_line)
+		_hard("\r", KEY_ENTER)
+		_tick(tag)
+		_check(
+			int(_main.cursor_line) == phys_line + 1,
+			"%s: the physical enter did not wrap" % tag
+		)
+	_common(tag)
 
 
 ## 8. Конец уровня с метками: Enter продолжает, новый уровень чист.
@@ -477,9 +635,7 @@ func _case_exact_case() -> void:
 			if ch != ch.to_lower() and ch != " " and ch.to_upper() == ch and _main._is_active(ch) and (l > 0 or p > 0):
 				found = true
 				# Заяц ровно на этой заглавной букве.
-				_main.cursor_line = l
-				_main.cursor_pos = p
-				_main.hero_r = _main._hero_pos()
+				_at(l, p)
 				var before := _ax()
 				# Строчная вместо заглавной — ошибка: метка и откат на символ.
 				_main._type_char(ch.to_lower())
@@ -507,6 +663,9 @@ func _case_exact_case() -> void:
 					"%s: the game stepped over the marked cell" % tag
 				)
 				# Заглавная — верно: метка гаснет.
+				if _main.need_enter:
+					_hard("\r", KEY_ENTER)
+					_tick(tag)
 				_main._type_char(ch)
 				_tick(tag)
 				_check(not _main.errors.has(mk), "%s: the right case did not clear the mark" % tag)
@@ -595,11 +754,16 @@ func _case_last_cell() -> void:
 	for l in _main.display_lines.size():
 		last = Vector2i(l, (_main.display_lines[l] as String).length() - 1)
 	while int(_main.cursor_line) != last.x or int(_main.cursor_pos) < last.y:
-		var cur: String = _main._current()
-		if cur == "":
-			break
-		_main._type_char(cur)
-		_tick(tag)
+		while not _main.need_enter and _main.state == "playing":
+			var cur: String = _main._current()
+			if cur == "":
+				break
+			_main._type_char(cur)
+			_tick(tag)
+		if _main.need_enter:
+			# ↵ на доске работает так же, как с клавиатуры.
+			_main._own_press(_kbd_buttons()["↵"])
+			_tick(tag)
 		if _main.state != "playing":
 			return
 	var before_cell := Vector2i(int(_main.cursor_line), int(_main.cursor_pos))
@@ -617,13 +781,11 @@ func _case_last_cell() -> void:
 	)
 	# Первая верная буква проходит клетку ПОЗАДИ метки и упирается в
 	# метку: игра не имеет права перешагнуть помеченную клетку.
-	_main._type_char(_main._current())
-	_tick(tag)
+	_type_next(tag)
 	_check(_main.state == "playing", "%s: the level finished while a mark was left" % tag)
 	_check(_main.errors.has(mark), "%s: the mark was skipped without being typed" % tag)
 	# Вторая верная буква — уже метка: уровень должен завершиться.
-	_main._type_char(_main._current())
-	_tick(tag)
+	_type_next(tag)
 	_check(_main.errors.is_empty(), "%s: the last mark survived the right letter" % tag)
 	_check(_main.state == "won", "%s: the level did not finish after the fix (state %s)" % [tag, _main.state])
 
@@ -704,17 +866,20 @@ func _case_touch_keyboard() -> void:
 	var want: String = _main._current()
 	var btns := _kbd_buttons()
 	# Заглавная — через шифт, ровно как жмёт ребёнок (в подсказке игры
-	# для таких клеток так и написано). Сначала шифт, потом уже ищем
-	# клавишу: на не сдвинутой раскладке заглавной просто нет.
-	if want != want.to_lower() and btns.has("Shift"):
+	# для таких клеток так и написано). Сначала шифт, потом ищем клавишу.
+	# Ищем по ОСНОВЕ: клавиша не переименовывается при шифте, регистр
+	# живёт в выводе (тождество стабильно — автор 10.2026, иначе фоновые
+	# знаки прыгают по углам).
+	var want_key := want.to_lower()
+	if want != want_key and btns.has("Shift"):
 		_main._own_press(btns["Shift"])
 		_tick(tag)
 		btns = _kbd_buttons()
-	_check(btns.has(want), "%s: the keyboard has no key «%s»" % [tag, want])
+	_check(btns.has(want_key), "%s: the keyboard has no key «%s»" % [tag, want_key])
 	var before := _ax()
 	var ok0: int = _main.typed_ok
-	if btns.has(want):
-		_main._own_press(btns[want])
+	if btns.has(want_key):
+		_main._own_press(btns[want_key])
 		_tick(tag)
 	# Принятая буква двигает зайца дальше (серые символы проходятся сами),
 	# поэтому мерим не расстояние, а честный приход: счётчик вырос на 1,
@@ -756,11 +921,18 @@ func _case_kbd_shift_layer() -> void:
 		_tick(tag)
 		_check(_main.kb_shift, "%s: shift did not turn on" % tag)
 		var up := _kbd_buttons()
-		_check(up.has(base.to_upper()), "%s: no capital key after shift" % tag)
+		# Клавиша не переименовывается при шифте: тождество одно, регистр
+		# живёт только в выводе (иначе фоновые знаки прыгают по углам —
+		# автор 10.2026).
+		_check(up.has(base), "%s: the key vanished after shift" % [tag])
+		_check(
+			String(Kbd.press_out(base, String(_main.kb_lang), true)) == base.to_upper(),
+			"%s: the key does not type the capital after shift" % [tag]
+		)
 		# Проверять имеет смысл, только когда игра ждёт СТРОЧНУЮ: над
 		# заглавной капитал верный и ошибкой не будет.
-		if up.has(base.to_upper()) and _main._current() == base:
-			_main._own_press(up[base.to_upper()])
+		if up.has(base) and _main._current() == base:
+			_main._own_press(up[base])
 			_tick(tag)
 			_common(tag)
 			_check(_main.errors.size() == 1, "%s: a wrong case over the keyboard was accepted" % tag)
@@ -811,9 +983,7 @@ func _find_soft_letter(letters := ["е", "ь"]) -> bool:
 		var line: String = _main.display_lines[l]
 		for p in line.length():
 			if line.substr(p, 1) in letters and (l > 0 or p > 0):
-				_main.cursor_line = l
-				_main.cursor_pos = p
-				_main.hero_r = _main._hero_pos()
+				_at(l, p)
 				return true
 	return false
 
@@ -1009,7 +1179,10 @@ func _case_own_kbd_fits() -> void:
 				kr.size.x / maxf(1.0, kr.size.y) < 2.2,
 				"%s: the key «%s» is flat (%.2f) on %s" % [tag, lab, kr.size.x / maxf(1.0, kr.size.y), str(wh)]
 			)
-			_check(r.encloses(kr), "%s: the key «%s» is outside the keyboard on %s" % [tag, lab, str(wh)])
+			# Допуск 0.1 px: питч копится float32-сложением, и крайняя
+			# клавиша (ввод/стереть/правый шифт) выходит за край на пыль.
+			# Ловит настоящее вылезание (был ввод 7 px), пыль — нет.
+			_check(r.grow(0.1).encloses(kr), "%s: the key «%s» is outside the keyboard on %s" % [tag, lab, str(wh)])
 	_common(tag)
 	DisplayServer.window_set_size(old)
 	root.size = old
@@ -1072,9 +1245,7 @@ func _case_frame_spike() -> void:
 		# Самая злая расстановка: ёж через три символа и на максимальной
 		# скорости — одно движение, и закат.
 		_main.state = "playing"
-		_main.cursor_line = 0
-		_main.cursor_pos = 5
-		_main.hero_r = _main._hero_pos()
+		_at(0, 5)
 		_main.grace_t = 0.0
 		_main.hedge_active = true
 		_main.enemy_line = 0
@@ -1225,9 +1396,7 @@ func _find_active_soft_before_grey() -> bool:
 				continue
 			var next := line.substr(p + 1, 1)
 			if next != " " and not _main._is_active(next):
-				_main.cursor_line = l
-				_main.cursor_pos = p
-				_main.hero_r = _main._hero_pos()
+				_at(l, p)
 				return true
 	return false
 
@@ -1345,9 +1514,7 @@ func _find_shift_symbol() -> bool:
 		var line: String = _main.display_lines[l]
 		for p in line.length():
 			if line.substr(p, 1) in only:
-				_main.cursor_line = l
-				_main.cursor_pos = p
-				_main.hero_r = _main._hero_pos()
+				_at(l, p)
 				return true
 	return false
 
@@ -1404,9 +1571,7 @@ func _set_level_text(lines: Array) -> void:
 	# Набор букв — штатный для этой сложности (не «все буквы текста»):
 	# часть сценариев проверяет именно серые клетки.
 	_main.active = B.active_chars(_main.difficulty)
-	_main.cursor_line = 0
-	_main.cursor_pos = 0
-	_main.hero_r = _main._hero_pos()
+	_at(0, 0)
 	_main.state = "playing"
 	_main.errors.clear()
 	_main.passed.clear()
@@ -1420,9 +1585,7 @@ func _find_double_letter() -> Vector2i:
 		var line: String = _main.display_lines[l]
 		for p in line.length() - 1:
 			if line.substr(p, 1) == line.substr(p + 1, 1) and line.substr(p, 1) != " ":
-				_main.cursor_line = l
-				_main.cursor_pos = p
-				_main.hero_r = _main._hero_pos()
+				_at(l, p)
 				return Vector2i(l, p)
 	return Vector2i(-1, -1)
 
@@ -1611,9 +1774,7 @@ func _find_space_cell() -> bool:
 		var line: String = _main.display_lines[l]
 		for p in line.length():
 			if line.substr(p, 1) == " ":
-				_main.cursor_line = l
-				_main.cursor_pos = p
-				_main.hero_r = _main._hero_pos()
+				_at(l, p)
 				_main.errors.clear()
 				_main.idle_t = _main._hint_delay() + 0.5
 				return _main._current() == " "
@@ -1687,32 +1848,28 @@ func _case_shift_hands() -> void:
 	# «А» — левая рука, «Р» — правая (зоны слепой печати).
 	_set_level_text(["А роза упала.", "Роза упала."])
 	_main.press_ema = 0.6
-	_main.cursor_line = 0
-	_main.cursor_pos = 0
-	_main.hero_r = _main._hero_pos()
+	_at(0, 0)
 	_main.idle_t = _main._hint_delay() + 0.5
 	_check(
 		_main._hint_keys() == ["ShiftR", "а"],
 		"%s: left-hand capital highlights %s" % [tag, str(_main._hint_keys())]
 	)
-	_main.cursor_line = 1
-	_main.cursor_pos = 0
-	_main.hero_r = _main._hero_pos()
+	_at(1, 0)
 	_main.idle_t = _main._hint_delay() + 0.5
 	_check(
 		_main._hint_keys() == ["Shift", "р"],
 		"%s: right-hand capital highlights %s" % [tag, str(_main._hint_keys())]
 	)
 	# И нажатие идёт тем же путём: правый шифт + «а» даёт «А».
-	_main.cursor_line = 0
-	_main.cursor_pos = 0
-	_main.hero_r = _main._hero_pos()
+	_at(0, 0)
 	var btns := _kbd_buttons()
 	var ok0: int = _main.typed_ok
 	_main._own_press(btns["ShiftR"])
 	_tick(tag)
 	_check(_main.kb_shift, "%s: the right shift did not arm" % tag)
-	_main._own_press(_kbd_buttons()["А"])
+	# Клавиша не переименовывается при шифте (тождество стабильно —
+	# иначе фоновые знаки прыгают по углам), жмём «а» с поднятым шифтом.
+	_main._own_press(_kbd_buttons()["а"])
 	_tick(tag)
 	_check(_main.typed_ok == ok0 + 1, "%s: ShiftR+а did not type «А»" % [tag])
 	_check(_main.errors.is_empty(), "%s: ShiftR+а left a mark" % tag)
@@ -1916,12 +2073,80 @@ func _case_press_flash() -> void:
 		String(_main.kb_press) == "пробел" and float(_main.kb_press_t) > 0.0,
 		"%s: the pressed key does not light up (got «%s»)" % [tag, _main.kb_press]
 	)
-	# Гаснет сама, без новых нажатий.
-	for _i in 40:
+	# Гаснет сама, без новых нажатий, и в ноль гасит САМУ подсветку:
+	# иначе последний кадр с заливкой остаётся нарисованным навсегда
+	# (автор 10.2026: «выделение на ней остаётся даже после отпускания»).
+	var got_zero := false
+	for _i in 90:
 		_tick(tag)
+		if String(_main.kb_press) == "":
+			got_zero = true
+			break
 	_check(
-		float(_main.kb_press_t) <= 0.0,
-		"%s: the flash never faded (%.2f)" % [tag, _main.kb_press_t]
+		float(_main.kb_press_t) <= 0.0 and got_zero,
+		"%s: the flash never cleared (kb_press=«%s» t=%.2f)" % [tag, _main.kb_press, _main.kb_press_t]
+	)
+	# Затухание не мгновенное: на середине жизни заливка ещё заметна,
+	# в конце — прозрачна (автор 10.2026).
+	_main.kb_press = ""
+	_main.kb_press_t = 0.0
+	_main._flash("пробел")
+	var a_start: float = (_main._press_sb() as StyleBoxFlat).bg_color.a
+	for _i in 20:
+		_tick(tag)
+	var a_mid: float = (_main._press_sb() as StyleBoxFlat).bg_color.a
+	_check(
+		a_start > 0.9 and a_mid < a_start and a_mid > 0.0,
+		"%s: the flash must fade, not blink (%.2f -> %.2f)" % [tag, a_start, a_mid]
+	)
+	# Верный ввод — зелёный, опечатка — красная (автор 10.2026).
+	_main.kb_press = ""
+	_main.kb_press_t = 0.0
+	_main._flash("ф", "ok")
+	var ok_col: Color = (_main._press_sb() as StyleBoxFlat).bg_color
+	_main.kb_press = ""
+	_main.kb_press_t = 0.0
+	_main._flash("ф", "err")
+	var err_col: Color = (_main._press_sb() as StyleBoxFlat).bg_color
+	_check(
+		ok_col.g > ok_col.r and err_col.r > err_col.g,
+		"%s: ok must be green (%s), err must be red (%s)" % [tag, str(ok_col), str(err_col)]
+	)
+	# Пробел — такой же ввод: тап по нему даёт зелёный по верности и
+	# красный по ошибке (жалоба автора 10.2026: «пробел не вспыхивает
+	# зелёным» — он шёл мимо вердикта).
+	if _find_space_cell():
+		_main.kb_press = ""
+		_main.kb_press_t = 0.0
+		_main._own_press(_kbd_buttons()["пробел"])
+		_tick(tag)
+		var sp_ok: Color = (_main._press_sb() as StyleBoxFlat).bg_color
+		_check(
+			sp_ok.g > sp_ok.r and float(_main.kb_press_t) > 0.0,
+			"%s: a correct space must flash green, got %s" % [tag, str(sp_ok)]
+		)
+		# Вернуться на клетку с буквой и вписать пробел — это ошибка.
+		_main.cursor_line = 0
+		_main.cursor_pos = 0
+		while _main._current() == " ":
+			_main.cursor_pos += 1
+		_main.kb_press = ""
+		_main.kb_press_t = 0.0
+		_main._own_press(_kbd_buttons()["пробел"])
+		_tick(tag)
+		var sp_err: Color = (_main._press_sb() as StyleBoxFlat).bg_color
+		_check(
+			sp_err.r > sp_err.g,
+			"%s: a space in the wrong place must flash red, got %s" % [tag, str(sp_err)]
+		)
+	# Вердикт считается тем же сравнивателем, что и ввод: верная буква
+	# под курсором — «ok», чужая — «err».
+	_main.cursor_line = 0
+	_main.cursor_pos = 0
+	var want := String(_main._current())
+	_check(
+		String(_main._verdict(want)) == "ok" and String(_main._verdict("ы" if want != "ы" else "ж")) == "err",
+		"%s: the verdict does not follow the text (%s)" % [tag, want]
 	)
 	# Промахнулся — не засветилась ни одна клавиша.
 	_main.kb_press = ""
@@ -2011,7 +2236,7 @@ func _case_lang_state() -> void:
 		"%s: the morph does not remember the pre-shift state" % tag
 	)
 	_check(
-		not Kbd.animates("ф", "ru", false, "ru") and Kbd.animates("2", "ru", false, "ru"),
+		not Kbd.animates("ф", "ru", false, "ru", true) and Kbd.animates("2", "ru", false, "ru", true),
 		"%s: letters must not animate on shift, signs must" % tag
 	)
 	_main.kb_shift = false
@@ -2150,9 +2375,7 @@ func _case_caps_warning() -> void:
 	if lower.x < 0:
 		_check(false, "%s: no lowercase letter in the level (coverage)" % tag)
 		return
-	_main.cursor_line = lower.x
-	_main.cursor_pos = lower.y
-	_main.hero_r = _main._hero_pos()
+	_at(lower.x, lower.y)
 	var upper: String = _main._current().to_upper()
 	var ev := InputEventKey.new()
 	ev.pressed = true
@@ -2166,8 +2389,7 @@ func _case_caps_warning() -> void:
 	# Верная буква гасит и предупреждение, и метку.
 	_main._type_char(_main._current())
 	_main._caps_warn = false
-	_main._type_char(_main._current())
-	_tick(tag)
+	_type_next(tag)
 	_check(not _main._caps_warn, "%s: the warning survived a correct letter" % tag)
 
 
@@ -2177,7 +2399,9 @@ func _case_hint_lifetime() -> void:
 	_fresh(1, 0)
 	var tag := "hint life"
 	_check(_advance_to(0.25), "%s: could not advance (coverage)" % tag)
-	_main._hint_at(int(_main.cursor_line), int(_main.cursor_pos))
+	# Клетка (0,0), а не курсор: тексты уровней случайны, и курсор после
+	# разгона может стоять где угодно — сценарию нужна любая живая клетка.
+	_main._hint_at(0, 0)
 	_tick(tag)
 	_check(not _main.hints.is_empty(), "%s: the hint did not light up" % tag)
 	var frames := 0
@@ -2210,9 +2434,7 @@ func _case_scroll() -> void:
 	_check(_main.errors.size() == marks0 + 1, "%s: no mark on the scrolled text" % tag)
 	_drawed(tag)
 	# Курсор на третьей строке — она обязана быть в видимой полосе.
-	_main.cursor_line = mini(2, _main.display_lines.size() - 1)
-	_main.cursor_pos = 1
-	_main.hero_r = _main._hero_pos()
+	_at(mini(2, _main.display_lines.size() - 1), 1)
 	_main._process(DT)
 	_drawed(tag)
 	var vis: int = _main._vis_lines()
@@ -2231,12 +2453,10 @@ func _case_scroll() -> void:
 func _case_enter_spam() -> void:
 	_fresh(0, 1)
 	var tag := "enter spam"
+	# Перенос ждёт ↵: без него цикл упирается в конец строки и уровень
+	# не кончается (автор 10.2026).
 	while _main.state == "playing":
-		var cur: String = _main._current()
-		if cur == "":
-			break
-		_main._type_char(cur)
-	_tick(tag)
+		_type_next(tag)
 	_check(_main.state == "won", "%s: the level was not finished" % tag)
 	# Клавиша ввода на самой доске (справа от «э», как настоящий Enter):
 	# на финале она листает дальше, в партии молчит.
@@ -2282,6 +2502,10 @@ func _finish_level(tag: String) -> void:
 	var guard := 0
 	while _main.state == "playing" and guard < 4000:
 		guard += 1
+		if _main.need_enter:
+			_hard("\r", KEY_ENTER)
+			_tick(tag)
+			continue
 		var cur: String = _main._current()
 		if cur == "":
 			break
@@ -2319,6 +2543,7 @@ func _process(_dt: float) -> bool:
 	_case_mistake_at_start()
 	_case_error_storm()
 	_case_line_wrap()
+	_case_wrap_waits_enter()
 	_case_level_end()
 	_case_exact_case()
 	_case_night()

@@ -162,17 +162,27 @@ var kb_morph_from := ""
 var kb_morph_shift := false
 ## Клавиша под пальцем и сколько она ещё горит: человек должен видеть,
 ## что нажал ту самую клавишу (или промахнулся мимо всех).
+## Курсор стоит на конце строки и ждёт ↵ (см. _advance).
+var need_enter := false
 var kb_press := ""
 var kb_press_t := 0.0
+## Оттенок вспышки: верный ввод — зелёный, опечатка — красная
+## (автор 10.2026: «нажатие верных клавиш … вспихивало на них зелёным,
+## а неправильное — красным»). Пусто — обычная жёлтая вспышка нажатия.
+var kb_press_ok := true
+## Полная длительность вспышки: затухание не мгновенное, а плавное.
+const KB_FLASH_T := 0.55
 ## Клавиша, которую ДЕРЖАТ пальцем: шифт работает, пока его держат
 ## (автор 10.2026: «нажимаю — загорается, отпускаю — гаснет»).
 var kb_held := ""
-const KB_PRESS_T := 0.22
+const KB_PRESS_T := KB_FLASH_T
 var kb_shift := false
 var kb_key_sb: StyleBoxFlat
 var kb_on_sb: StyleBoxFlat
 ## Заливка нажатой клавиши: та же краска ночью.
 var kb_press_sb: StyleBoxFlat
+var kb_press_ok_sb: StyleBoxFlat
+var kb_press_err_sb: StyleBoxFlat
 var kb_hi_sb: StyleBoxFlat
 
 
@@ -327,6 +337,9 @@ func _ready() -> void:
 	kb_on_sb = Ui.panel_sb(Color("#a9c6ec"), 10.0, Color("#4a4438"), 2.0, false)
 	# Нажатая клавиша — заметная заливка: попал или промахнулся.
 	kb_press_sb = Ui.panel_sb(Color("#ffd98a"), 10.0, Color("#4a4438"), 2.5, false)
+	# Верный ввод — зелёным, опечатка — красным (автор 10.2026).
+	kb_press_ok_sb = Ui.panel_sb(Color("#8fd66a"), 10.0, Color("#3f6b2c"), 2.5, false)
+	kb_press_err_sb = Ui.panel_sb(Color("#ff8a80"), 10.0, Color("#8e2f26"), 2.5, false)
 	kb_hi_sb = Ui.panel_sb(Color("#ffd75e"), 10.0, Color("#4a4438"), 2.0, false)
 	card_p = _panel_node(card_sb)
 	hud_p = _panel_node(pill_sb)
@@ -387,6 +400,10 @@ func _apply_night() -> void:
 		kb_on_sb.border_color = Color("#8b93a8")
 		kb_press_sb.bg_color = Color("#6b5a2a")
 		kb_press_sb.border_color = Color("#8b93a8")
+		kb_press_ok_sb.bg_color = Color("#3f6b3a")
+		kb_press_ok_sb.border_color = Color("#9ad08c")
+		kb_press_err_sb.bg_color = Color("#7a2f28")
+		kb_press_err_sb.border_color = Color("#ff9a90")
 		# Ночью буквы светлые, а заяц и ёж — белые спрайты: без контура
 		# буква, попавшая на спрайт, терялась (видел на эмуляторе).
 		for tl in text_labels:
@@ -409,6 +426,10 @@ func _apply_night() -> void:
 		kb_on_sb.bg_color = Color("#a9c6ec")
 		kb_press_sb.bg_color = Color("#ffd98a")
 		kb_press_sb.border_color = Color("#4a4438")
+		kb_press_ok_sb.bg_color = Color("#8fd66a")
+		kb_press_ok_sb.border_color = Color("#3f6b2c")
+		kb_press_err_sb.bg_color = Color("#ff8a80")
+		kb_press_err_sb.border_color = Color("#8e2f26")
 		kb_on_sb.border_color = Color("#4a4438")
 		# Днём буквы тёмные на светлой карточке — контур не нужен.
 		for tl in text_labels:
@@ -940,6 +961,7 @@ func _new_level() -> void:
 	errors.clear()
 	cursor_line = 0
 	cursor_pos = 0
+	need_enter = false
 	typed_ok = 0
 	typed_bad = 0
 	elapsed = 0.0
@@ -990,19 +1012,49 @@ func _eq(a: String, b: String) -> bool:
 	return a.to_lower() == b.to_lower()
 
 
+## Перенос строки ждёт НАЖАТИЯ ввода: последняя буква строки принята —
+## игра стоит, и ↵ переводит на следующую строку (автор 10.2026: «если
+## наступил конец строки и на следующую строку надо перейти энтером, то
+## надо ожидать от пользователя нажатия этого энтера перед тем как
+## реально перейти»). Раньше перенос был автоматическим, и ввод в партии
+## не работал вовсе.
 func _advance() -> void:
 	cursor_pos += 1
 	if cursor_line < display_lines.size():
 		if cursor_pos >= display_lines[cursor_line].length():
-			cursor_line += 1
-			cursor_pos = 0
+			need_enter = true
+			# Последняя строка текста: дальше нечего вводить — уровень
+			# кончен, ждать переноса незачем.
+			if cursor_line + 1 >= display_lines.size():
+				_finish(true)
+			return
 	if cursor_line >= display_lines.size():
 		_finish(true)
+
+
+## ↵ на конце строки: переходим на следующую. Из партии и с доски, и с
+## физической клавиатуры. Вводит ли текст переносы, никто не знает —
+## перенос просто часть строки, поэтому в строке он и набирается.
+func _enter_next_line() -> bool:
+	if not need_enter:
+		return false
+	need_enter = false
+	cursor_line += 1
+	cursor_pos = 0
+	_skip_inactive()
+	_refresh()
+	queue_redraw()
+	return true
 
 
 ## Серые (неактивные) буквы проходятся сами, ждать их не нужно.
 func _skip_inactive() -> void:
 	while state == "playing":
+		# Стоим на конце строки и ждём ↵ — тут не «конец уровня», а
+		# пауза до нажатия. Без этой проверки уровень завершался, минуя
+		# ввод, и на доске вместо переноса была модалка победы.
+		if need_enter:
+			return
 		var ch := _current()
 		if ch == "":
 			_finish(true)
@@ -1148,11 +1200,27 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if ke.keycode == KEY_BACKSPACE or ke.unicode == 8:
 		_backspace()
 		return
+	# ↵ с физической клавиатуры — тот же перенос строки, что и с доски
+	# (автор 10.2026: «ты не вернул использование энтера»).
+	if (
+		(ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER)
+		and need_enter
+		and state == "playing"
+	):
+		_enter_next_line()
+		return
 	if ke.unicode < 32:
 		return
 	if _exact():
 		_caps_check(ke)
-	_type_char(String.chr(ke.unicode))
+	var typed2 := String.chr(ke.unicode)
+	# Та же клавиша на доске вспыхивает: человек видит, куда попал
+	# физический ввод (автор 10.2026: «нажатие верных клавиш на
+	# клавиатуре или мышью вспихивало на них зелёным»).
+	var kbkey := String(Kbd.combo_for(typed2, kb_lang)[0]) if not Kbd.combo_for(typed2, kb_lang).is_empty() else ""
+	if kbkey != "":
+		_flash(kbkey, _verdict(typed2))
+	_type_char(typed2)
 
 
 ## CapsLock-детект для строгого режима («все клавиши»): движок отдаёт
@@ -1232,6 +1300,11 @@ var typed_cells: Dictionary = {}
 func _type_char(ch: String) -> void:
 	if state != "playing":
 		return  # уровень окончен: ввод ниже не считается
+	if need_enter:
+		# Стоим на конце строки: игра ждёт ↵, буква сюда не пишется и
+		# метку не ставит (иначе каждая лишняя буква считалась бы
+		# ошибкой, а перенос всё равно не произошёл бы).
+		return
 	_mark_press()
 	last_hand = Kbd.hand_of(ch)
 	var expected := _current()
@@ -1293,6 +1366,9 @@ func _behind() -> Vector2i:
 ## символ, через переносы строк (упор в начало текста). Единица шага —
 ## глиф: текст моноширинный, и «назад на символ» видно точно.
 func _knockback() -> void:
+	# Откат назад отменяет ожидание переноса: курсор ушёл с конца строки.
+	if need_enter:
+		need_enter = false
 	var b := _behind()
 	if b.x >= 0:
 		cursor_line = b.x
@@ -1320,6 +1396,12 @@ func _knockback() -> void:
 ##     Автопропуск после отката НЕ делаем: заяц обязан стоять перед той
 ##     буквой, на которую откатился, иначе откат тут же проскочит мимо.
 func _backspace() -> void:
+	if need_enter:
+		# Стояли на конце строки. Стерли последнюю букву — перенос ждать
+		# уже нечего: строка не кончилась, и лишний ↵ уводил бы дальше
+		# мимо набранного (автор 10.2026: ждать надо ровно того, что
+		# пользователь ещё не сделал).
+		need_enter = false
 	_mark_press()
 	var k := _key(cursor_line, cursor_pos)
 	if errors.has(k):
@@ -1411,6 +1493,8 @@ func _err_word(v: int) -> String:
 func _finish(won: bool, reason := "") -> void:
 	if state != "playing":
 		return
+	# Уровень кончен — ждать переноса больше нечего.
+	need_enter = false
 	_last_reason = "" if won else reason
 	# В лог: конец уровня. По нему видно, что игра перестала принимать
 	# буквы из-за победы/проигрыша, а не из-за поломки ввода (жалоба
@@ -1518,8 +1602,9 @@ func _own_rect() -> Rect2:
 	var h := Kbd.height_for(w)
 	if h > max_h:
 		# Обратная задача height_for: ширина, дающая ровно max_h.
-		var kw: float = (max_h - 64.0) / (5.0 * Kbd.ROW_TALL)
-		w = clampf(kw * 12.0 + 32.0 + 88.0, 240.0, view_w - 32.0)
+		# Обратная задача внутри Kbd: ширина по той же формуле, что
+		# height_for, иначе прыгает на ширину самого широкого ряда.
+		w = clampf(Kbd.width_for(max_h), 240.0, view_w - 32.0)
 		h = minf(Kbd.height_for(w), max_h)
 	return Rect2((view_w - w) * 0.5, view_h - h - m, w, h)
 
@@ -1552,6 +1637,14 @@ func _process(dt: float) -> void:
 		queue_redraw()
 	if kb_press_t > 0.0:
 		kb_press_t = maxf(0.0, kb_press_t - dt)
+		queue_redraw()
+	elif kb_press != "":
+		# Таймер дошёл до нуля, а заливка осталась нарисованной: без
+		# этого кадра следующий не перерисуется, и клавиша «залипнет»
+		# (жалоба автора 10.2026: «выделение остаётся даже после
+		# отпускания»). Гасим подсветку последним кадром.
+		kb_press = ""
+		kb_press_t = 0.0
 		queue_redraw()
 	# Высота раскладки — всегда своя клавиатура: система больше не
 	# участвует, замеров и подстройки нет, раскладка не прыгает сама.
@@ -2215,6 +2308,12 @@ func _hint_keys() -> Array:
 		return ["↵"]
 	if state != "playing":
 		return []
+	# Стоим на конце строки: игра ждёт нажатия ↵ — подсвечиваем его
+	# (автор 10.2026: «надо ожидать нажатия этого энтера»). Подсветка
+	# ждёт ПОДПИСЬ клавиши («↵»), а не действие («ввод»): сравнение идёт
+	# по подписи в Kbd.draw.
+	if need_enter:
+		return ["↵"]
 	# Опечатка: жать надо «стереть» — подсвечиваем клавишу, а не текст.
 	if not errors.is_empty():
 		return ["←"]
@@ -2261,7 +2360,7 @@ func _draw_own_kb() -> void:
 	Kbd.draw(
 		self, _own_rect(), kb_lang, kb_shift, _kb_enter_shown(), mono,
 		int(30.0 * k), kb_key_sb, kb_on_sb, _ui_ink(), hi, kb_hi_sb, _ui_dim(),
-		kb_morph, kb_morph_from, kb_morph_shift, kb_press_sb, kb_press
+		kb_morph, kb_morph_from, kb_morph_shift, _press_sb(), kb_press
 	)
 
 
@@ -2285,10 +2384,37 @@ func _release_held() -> void:
 
 ## Вспышка нажатой клавиши: человек должен видеть, что попал именно в неё
 ## (а если промахнулся — что не попал ни в одну). Гасится сама.
-func _flash(key: String) -> void:
+## verdict: "ok" — верный ввод (зелёный), "err" — опечатка (красный),
+## "" — обычная вспышка нажатия.
+func _flash(key: String, verdict := "") -> void:
 	kb_press = key
+	kb_press_ok = verdict != "err"
 	kb_press_t = KB_PRESS_T
 	queue_redraw()
+
+
+## Вердикт ввода для вспышки: «ok» — верно, «err» — опечатка. Тот же
+## сравниватель, что у ввода (_eq), чтобы цвет совпадал с меткой.
+func _verdict(typed: String) -> String:
+	if state != "playing":
+		return ""
+	var expected := _current()
+	if expected == "":
+		return ""
+	return "ok" if _eq(typed, expected) else "err"
+
+
+## Заливка вспышки с учётом вердикта и оставшегося времени: затухание
+## плавное, последние кадры почти прозрачны (автор 10.2026: «затухание
+## не мгновенным»).
+func _press_sb() -> StyleBox:
+	var src: StyleBoxFlat = kb_press_ok_sb if kb_press_ok else kb_press_err_sb
+	var k: float = clampf(kb_press_t / KB_FLASH_T, 0.0, 1.0)
+	var c := src.bg_color
+	c.a *= k
+	var b := src.border_color
+	b.a *= k
+	return Ui.panel_sb(c, 10.0, b, 2.5, false)
 
 
 ## Показывает ли доска ввод ↵. Пока часть букв текста ещё серая
@@ -2301,6 +2427,14 @@ func _kb_enter_shown() -> bool:
 		return true
 	if display_lines.is_empty():
 		return false
+	# Стоим на конце строки и ждём нажатия — ↵ обязан быть на доске.
+	if need_enter:
+		return true
+	# Режим «все клавиши»: буквы открыты сразу, центральный ряд открыт
+	# по определению, и ввод там падавно (автор 10.2026: «а в ПРО режиме
+	# он и падавно должен быть»).
+	if _all_keys():
+		return true
 	# Ввод ждёт только центрального ряда — дом и верхний ряд текста он
 	# не касается (автор 10.2026: «разблокировал бы клавишу энтер после
 	# того, как разблокирован весь центральный ряд букв, а не в самом
@@ -2352,11 +2486,15 @@ func _own_press(pos: Vector2) -> bool:
 		kb_held = "шифт"
 		_set_kb_shift(true)
 	if act == "ввод":
-		# Как физический Enter: на финале — дальше, в партии молчит.
-		if state != "playing":
+		# На финале — следующий уровень, в партии — перенос строки.
+		# Раньше в партии ввод молчал, и перенос был автоматическим
+		# (автор 10.2026: «ты не вернул использование энтера»).
+		if state == "playing":
+			_enter_next_line()
+		else:
 			_new_level()
 			queue_redraw()
-			get_viewport().set_input_as_handled()
+		get_viewport().set_input_as_handled()
 		return true
 	if state != "playing":
 		return false
@@ -2369,14 +2507,24 @@ func _own_press(pos: Vector2) -> bool:
 	elif act == "шифт":
 		_set_kb_shift(true)
 	elif act == "пробел":
-		kb_shift = false
+		# Через штатное выключение: знаки должны улететь обратно
+		# перелётом, а не скачком (автор 10.2026: «-_ и =+ двигаются не
+		# анимацией, а скачком»).
+		_set_kb_shift(false)
+		# Пробел — такой же ввод: вспыхивает зелёным по верности и
+		# красным по ошибке (жалоба автора 10.2026: «пробел не вспыхивает
+		# зелёным» — он шёл мимо вердикта и горел жёлтым).
+		_flash(act, _verdict(" "))
 		_type_char(" ")
 	else:
 		# Шифт + клавиша — знак или заглавная, буква идёт на языке
 		# ввода; шифт гаснет, как на настоящей клавиатуре.
 		var ch := Kbd.press_out(act, kb_lang, kb_shift)
-		kb_shift = false
-		_type_char(ch if ch != "" else act)
+		# Через штатное выключение: знаки улетают обратно перелётом.
+		_set_kb_shift(false)
+		var typed := ch if ch != "" else act
+		_flash(act, _verdict(typed))
+		_type_char(typed)
 	queue_redraw()
 	get_viewport().set_input_as_handled()
 	return true

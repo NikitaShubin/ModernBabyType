@@ -1174,8 +1174,14 @@ func _part21_own_keyboard() -> void:
 	# Шифт + буква: заглавная в имени.
 	_menu.call("_own_press", _mkey(area, false, "Shift"))
 	_check(bool(_menu.kb_shift), "left shift arms")
-	_menu.call("_own_press", _mkey(area, true, "П"))
-	_check(String(_menu.input_text) == "П", "shift gives uppercase")
+	# Клавиша не переименовывается при шифте (тождество стабильно), ищем
+	# по основе, регистр проверяем через press_out.
+	_menu.call("_own_press", _mkey(area, true, "п"))
+	_check(
+		String(K.press_out("п", String(_menu.kb_lang), true)) == "П"
+			and String(_menu.input_text) == "П",
+		"shift gives uppercase (got «%s»)" % _menu.input_text
+	)
 	# Глобус туда-обратно (слоя знаков больше нет).
 	_menu.call("_own_press", _mkey(area, false, "глобус"))
 	_check(String(_menu.kb_lang) == "en", "globe switches to latin")

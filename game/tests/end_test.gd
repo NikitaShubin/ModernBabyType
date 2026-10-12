@@ -59,6 +59,25 @@ func _process(_dt: float) -> bool:
 ## клавиатура, телефон поворачивают). Строки обязаны пересобраться, иначе
 ## текст уезжает за край и набирать нечего; заяц при этом остаётся на
 ## той же букве, а «пройдено» и красные метки — на своих буквах.
+## Напечатать верную букву, а на конце строки — ↵: перенос в игре не
+## автоматический (автор 10.2026: «надо ожидать нажатия этого энтера»).
+func _type_next() -> bool:
+	if _main.state != "playing":
+		return false
+	if _main.need_enter:
+		var ke := InputEventKey.new()
+		ke.pressed = true
+		ke.keycode = KEY_ENTER
+		ke.unicode = 13
+		_main._unhandled_key_input(ke)
+		return true
+	var ch := String(_main._current())
+	if ch == "":
+		return false
+	_main._type_char(ch)
+	return true
+
+
 func _reflow_keeps_cursor() -> void:
 	root.size = Vector2i(900, 360)
 	_main.view_w = 900.0
@@ -69,10 +88,8 @@ func _reflow_keeps_cursor() -> void:
 	var guard := 0
 	while int(_main.passed.size()) * 2 < _main.level_total and guard < 5000:
 		guard += 1
-		var ch := String(_main._current())
-		if ch == "":
+		if not _type_next():
 			break
-		_main._type_char(ch)
 	_check(String(_main.state) == "playing", "половина уровня набрана")
 	var want := String(_main._current())
 	var passed_before := int(_main.passed.size())
@@ -119,10 +136,8 @@ func _reflow_keeps_cursor() -> void:
 	# И уровень после пересборки обязан доигрываться до конца.
 	while String(_main.state) == "playing" and guard < 20000:
 		guard += 1
-		var ch2 := String(_main._current())
-		if ch2 == "":
+		if not _type_next():
 			break
-		_main._type_char(ch2)
 	_check(
 		String(_main.state) == "won",
 		"после пересборки уровень доигрывается (%s)" % _main.state
@@ -189,10 +204,8 @@ func _play(sz: Vector2i, name: String) -> void:
 	var guard := 0
 	while String(_main.state) == "playing" and guard < 20000:
 		guard += 1
-		var ch := String(_main._current())
-		if ch == "":
+		if not _type_next():
 			break
-		_main._type_char(ch)
 	_check(
 		String(_main.state) == "won",
 		"%s: уровень не закончился (%s, курсор %d:%d)" % [

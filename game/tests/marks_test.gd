@@ -191,6 +191,11 @@ func _child(key_gap: float, err_rate: float, back_rate: float, gap: float) -> bo
 	if gap > 0.0:
 		return false
 	gap = key_gap
+	# Стоим на конце строки и ждём ↵ — ребёнок жмёт его, как живой человек
+	# (перенос в игре не автоматический, автор 10.2026).
+	if _main.need_enter:
+		_main._unhandled_key_input(_enter())
+		return true
 	var cur: String = _main._current()
 	if cur == "":
 		return false

@@ -127,7 +127,22 @@ func _start_episode() -> void:
 	_lost_ex = -1.0
 
 
+## Enter для теста: перенос строки (автор 10.2026 — ждёт нажатия ↵).
+func _enter_turn() -> InputEventKey:
+	var ke := InputEventKey.new()
+	ke.pressed = true
+	ke.keycode = KEY_ENTER
+	ke.unicode = 13
+	return ke
+
+
 func _hero_advance() -> void:
+	# Стоим на конце строки и ждём ↵: перенос в игре не автоматический
+	# (автор 10.2026). Без этого «ход» упирается в пустую клетку и ничего
+	# не делает, а эпизод крутится вечно.
+	if _main.need_enter and _main.state == "playing":
+		_main._unhandled_key_input(_enter_turn())
+		return
 	# Один «ход» героя: верная клавиша, опечатка (откат) или Backspace.
 	var roll := _rng.randf()
 	if roll < 0.62:

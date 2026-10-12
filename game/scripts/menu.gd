@@ -92,14 +92,18 @@ var kb_morph_shift := false
 ## что нажал ту самую клавишу (или промахнулся мимо всех).
 var kb_press := ""
 var kb_press_t := 0.0
+## Вердикт вспышки: имя набирается верно → зелёный.
+var kb_press_ok := true
 ## Клавиша, которую ДЕРЖАТ пальцем: шифт работает, пока его держат
 ## (автор 10.2026: «нажимаю — загорается, отпускаю — гаснет»).
 var kb_held := ""
-const KB_PRESS_T := 0.22
+const KB_PRESS_T := 0.55
 var kb_shift := false
 var kb_key_sb: StyleBoxFlat
 ## Заливка нажатой клавиши (та же краска ночью).
 var kb_press_sb: StyleBoxFlat
+var kb_press_ok_sb: StyleBoxFlat
+var kb_press_err_sb: StyleBoxFlat
 ## Ручной режим ночи из настроек: 0 день, 1 ночь, -1 авто (система).
 ## Кнопка крутит по кругу день → ночь → авто.
 var nmode := -1
@@ -118,14 +122,28 @@ func _draw_own_kb() -> void:
 	Kbd.draw(
 		self, _own_rect(), kb_lang, kb_shift, true, mono,
 		int(30.0 * k), kb_key_sb, selbox_sb, _uitext(), [], null, _dim(),
-		kb_morph, kb_morph_from, kb_morph_shift, kb_press_sb, kb_press
+		kb_morph, kb_morph_from, kb_morph_shift, _press_sb(), kb_press
 	)
 
 
 ## Вспышка нажатой клавиши: человек должен видеть, что попал именно в неё
 ## (а если промахнулся — что не попал ни в одну). Гасится сама.
-func _flash(key: String) -> void:
+## Заливка вспышки с плавным затуханием: alpha падает вместе с таймером,
+## последние кадры почти прозрачны, а в ноль подсветка гаснет совсем
+## (автор 10.2026: «затухание не мгновенным»).
+func _press_sb() -> StyleBox:
+	var src: StyleBoxFlat = kb_press_ok_sb if kb_press_ok else kb_press_err_sb
+	var k: float = clampf(kb_press_t / KB_PRESS_T, 0.0, 1.0)
+	var c := src.bg_color
+	c.a *= k
+	var b := src.border_color
+	b.a *= k
+	return Ui.panel_sb(c, 10.0, b, 2.5, false)
+
+
+func _flash(key: String, ok := true) -> void:
 	kb_press = key
+	kb_press_ok = ok
 	kb_press_t = KB_PRESS_T
 	queue_redraw()
 
@@ -173,7 +191,10 @@ func _own_press(pos: Vector2) -> bool:
 		# Шифт + клавиша — знак или заглавная, буква идёт на языке
 		# ввода (та же клавиша в английском даёт латиницу).
 		var ch := Kbd.press_out(act, kb_lang, kb_shift)
-		kb_shift = false
+		# Через штатное выключение: знаки улетают обратно перелётом.
+		_set_kb_shift(false)
+		# Имя набирается верно — вспышка зелёная (автор 10.2026).
+		_flash(act, true)
 		if input_text.length() < S.MAX_NAME_LENGTH:
 			input_text += ch if ch != "" else act
 	queue_redraw()
@@ -202,6 +223,8 @@ func _ready() -> void:
 	kb_key_sb = Ui.panel_sb(Color("#ffffff"), 10.0, INK, 2.0, false)
 	# Нажатая клавиша — заметная заливка: попал или промахнулся.
 	kb_press_sb = Ui.panel_sb(Color("#ffd98a"), 10.0, INK, 2.5, false)
+	kb_press_ok_sb = Ui.panel_sb(Color("#8fd66a"), 10.0, INK, 2.5, false)
+	kb_press_err_sb = Ui.panel_sb(Color("#ff8a80"), 10.0, INK, 2.5, false)
 	selbox_sb = Ui.panel_sb(Color("#a9c6ec"), 10.0, INK, 2.0, false)
 	hint_sb = Ui.panel_sb(Color(1, 1, 1, 0.72), 14.0, Color("#e0d5bd"), 1.5, false)
 	_meadow = Meadow.new()
@@ -476,6 +499,14 @@ func _process(dt: float) -> void:
 		queue_redraw()
 	if kb_press_t > 0.0:
 		kb_press_t = maxf(0.0, kb_press_t - dt)
+		queue_redraw()
+	elif kb_press != "":
+		# Иначе заливка залипает нарисованной: последний кадр с таймером
+		# уже отрисован, а следующего перерисовывания не будет (жалоба
+		# автора 10.2026: «выделение остаётся даже после отпускания»).
+		kb_press = ""
+		kb_press_t = 0.0
+		queue_redraw()
 		queue_redraw()
 	_poll_update()
 
@@ -995,11 +1026,20 @@ func _own_shown() -> bool:
 
 ## Область своей клавиатуры: низ экрана.
 func _own_rect() -> Rect2:
-	var h := Kbd.height_for(view_w)
+	# Как в игре: доска занимает не больше 46% высоты, иначе на низком
+	# экране она накрывает кнопки (регрессия 10.2026: доска стала выше —
+	# единиц в самом широком ряду стало 15 вместо 16 — и накрыла кнопку
+	# «Играть», тап уходил в клавишу).
+	var m := 16.0 + Ui.bottom_inset(view_h)
+	var max_h: float = maxf(160.0, (view_h - m) * 0.46)
+	var w := view_w - 32.0
+	var h := Kbd.height_for(w)
+	if h > max_h:
+		w = clampf(Kbd.width_for(max_h), 240.0, view_w - 32.0)
+		h = minf(Kbd.height_for(w), max_h)
 	# Низ экрана со скруглениями и жестом: клавиатуру поднимаем на
 	# безопасный отступ, иначе угловые клавиши обрезаны (жалоба 10.2026).
-	var m := 16.0 + Ui.bottom_inset(view_h)
-	return Rect2(16.0, view_h - h - m, view_w - 32.0, h)
+	return Rect2((view_w - w) * 0.5, view_h - h - m, w, h)
 
 
 func _own_h() -> float:

@@ -439,9 +439,31 @@ func _legend_roundtrip() -> void:
 ## (автор 10.2026: «ещё осталась клавиша, имеющая оба слеша»).
 func _layout_positions() -> void:
 	var rows := K.all_rows(false)
-	_check(rows[1][12] == "\\", "the backslash key follows х/ъ in the top letter row")
-	_check(rows[1].size() == 13, "the top letter row holds 12 letters plus the backslash")
-	_check(rows[2].size() == 12, "the home row is 11 letters plus enter")
+	# Tab — левее й, как настоящий Tab левее Q (автор 10.2026: «таб
+	# находится левее q, а не ё»).
+	_check(rows[1][0] == "Tab" and rows[1][1] == "й", "tab sits left of q")
+	_check(rows[1][13] == "\\", "the backslash key follows х/ъ in the top letter row")
+	_check(rows[1].size() == 14, "the top letter row holds tab + 12 letters + the backslash")
+	# Ряд «фыва»: слева Caps, 11 букв, справа ввод (автор 10.2026:
+	# «добавь кнопки таб и капс», Tab — левее цифр, Caps — левее «ф»).
+	_check(rows[2].size() == 13, "the home row is caps + 11 letters + enter")
+	_check(rows[2][0] == "Caps" and rows[2][12] == "↵", "caps sits left, enter right")
+	# Нижний ряд одинаков в игре и в меню: справа от Alt — Ctrl. Второго
+	# ввода снизу больше нет (автор 10.2026: «у тебя 2 энтера на клаве,
+	# второй не к месту — правее альта должен быть контрл»).
+	var rows_m := K.all_rows(true)
+	for ri in 5:
+		if rows[ri] != rows_m[ri]:
+			_check(false, "the bottom row differs in the menu: %s vs %s" % [str(rows[ri]), str(rows_m[ri])])
+	_check(
+		rows[4][rows[4].size() - 1] == "Ctrl" and rows[4][rows[4].size() - 2] == "Alt",
+		"ctrl closes the bottom row, alt next to it: %s" % [str(rows[4])]
+	)
+	var enters := 0
+	for ri2 in 5:
+		enters += rows[ri2].count("↵")
+	_check(enters == 1, "exactly one enter key on the whole board (%d)" % enters)
+	_check(rows[0][0] == "ё", "the digit row starts with ё, no tab there")
 	_check(rows[3][10] == ".", "the dot key sits left of the right shift")
 	# Обратного слеша больше ни на какой клавише нет: он живёт только на
 	# своей (автор 10.2026: «ещё осталась клавиша, имеющая оба слеша»).
@@ -455,23 +477,140 @@ func _layout_positions() -> void:
 		K.legends(".") == [".", ",", "/", "?"],
 		"the dot key carries dot, comma, slash and question — no backslash"
 	)
-	# Угол у знака — по роли в легендах, а не по месту в списке мелких:
-	# иначе все буквы делят один угол (автор 10.2026).
-	# Раскладки стоят по главной диагонали (автор 10.2026): русская
-	# основа — левый верхний, английская — правый нижний; шифты —
-	# правый верхний и левый нижний.
+	# Угол у знака — дом из девяти мест (автор 10.2026: «у каждой кнопки
+	# своё место… пусть 9»): латинская основа — левый верхний, кириллица —
+	# правый нижний; знаки цифр и точки — строкой автора (CORNERS), «-_»
+	# и «+=» — краями t/b (EDGE). Дом зависит только от самого знака.
 	_check(K.corner_for("ф", "a") == 0, "the latin letter sits top-left")
 	_check(K.corner_for("ф", "ф") == 2, "the cyrillic letter sits bottom-right")
-	_check(K.corner_for("2", "2") == 2, "the digit keeps the bottom-right corner")
-	_check(K.corner_for("2", "\"") == 1, "the russian sign keeps the top-right corner")
-	_check(K.corner_for("2", "@") == 3, "the english sign keeps the bottom-left corner")
+	_check(K.corner_for("2", "2") == 3, "the digit keeps the bottom-left corner")
+	_check(K.corner_for("2", "\"") == 2, "the russian sign keeps the bottom-right corner")
+	_check(K.corner_for("2", "@") == 0, "the english sign keeps the top-left corner")
+	# Ступенька — стандарт ANSI в единицах питча (автор 10.2026: «все
+	# цифры … выверены относительно буквенных клавиш» и «ревизия сдвига
+	# букв»). Цифры 1..0,-,= — того же размера, что буквы; «1» на полпитча
+	# левее «й», «ф» на четверть правее «й», «я» на полпитча правее «ф».
+	_stagger()
 	# Перелёт: смена раскладки — все клавиши; щипок шифта — только знаки
 	# (автор: между большой и малой буквой мягкого перехода нет).
-	_check(K.animates("ф", "en", false, "ru"), "a letter animates on a layout switch")
-	_check(not K.animates("ф", "ru", false, "ru"), "a letter does not animate on shift")
-	_check(K.animates("2", "ru", false, "ru"), "a sign animates on shift")
-	_check(not K.animates(".", "ru", false, "ru"), "a punctuation key animates on shift")
-	_check(not K.animates("ф", "", false, "ru"), "no morph source means no animation")
+	_check(K.animates("ф", "en", false, "ru", false), "a letter animates on a layout switch")
+	_check(not K.animates("ф", "ru", false, "ru", true), "a letter does not animate on shift")
+	_check(K.animates("2", "ru", false, "ru", true), "a sign animates on shift")
+	_check(K.animates(".", "ru", false, "ru", true), "the dot key animates on shift")
+	_check(K.animates("-", "ru", false, "ru", true), "a stacked key animates on shift")
+	_check(not K.animates("ф", "", false, "ru", false), "no morph source means no animation")
+	# А в английской пара знаков на буквенной клавише летит, а не скачет.
+	_check(
+		K.animates("х", "en", false, "en", true) and K.animates("ё", "en", false, "en", true),
+		"sign pairs on letter keys animate on shift in english"
+	)
+	_shift_edges_static()
+
+## Скачком меняется ТОЛЬКО буква в центре; краевые подписи стоят: ни
+## положение, ни начертание не меняются (автор 10.2026). Движение через
+## анимацию допускается, но меняться домами запрещено: уходящий из центра
+## не занимает дом входящего в центр.
+func _shift_edges_static() -> void:
+	var keys: Array = []
+	for rows in [K.all_rows(false), K.all_rows(true)]:
+		for row in rows:
+			for label in row:
+				var s := String(label)
+				if s.length() == 1 and not K.legends(s).is_empty() and not keys.has(s):
+					keys.append(s)
+	for s in keys:
+		for lang in ["ru", "en"]:
+			var a0 := _home_map(s, lang, false)
+			var a1 := _home_map(s, lang, true)
+			var act0 := String(K.press_out(s, lang, false))
+			var act1 := String(K.press_out(s, lang, true))
+			if act0 == act1:
+				_check(
+					_same_map(a0, a1),
+					"%s/%s: nothing types different, yet corners moved" % [s, lang]
+				)
+				continue
+			if not K.animates(s, lang, false, lang, true):
+				# Буква: перелёта нет, центр меняется скачком — и ТОЛЬКО он.
+				_check(
+					_same_map(a0, a1),
+					"%s/%s: only the centered letter may jump" % [s, lang]
+				)
+				_check(
+					act1 == act0.to_upper() or act0 == act1.to_upper(),
+					"%s/%s: the instant swap is a case change %s -> %s" % [s, lang, act0, act1]
+				)
+				continue
+			# Знак: летит пара центр↔дом, остальные стоят.
+			var rest0 := _home_map_minus(a0, act1)
+			var rest1 := _home_map_minus(a1, act0)
+			_check(
+				_same_map(rest0, rest1),
+				"%s/%s: only the flying pair moves" % [s, lang]
+				)
+			# Домами не меняются: уходящий не занимает дом входящего.
+			_check(
+				int(K.corner_for(s, act0)) != int(K.corner_for(s, act1)),
+				"%s/%s: the movers must not swap homes" % [s, lang]
+				)
+
+
+## Подпись -> дом для мелких подписей клавиши в данном состоянии.
+func _home_map(s: String, lang: String, shift: bool) -> Dictionary:
+	var out := {}
+	for v in K.small_legends(s, lang, shift):
+		var t := String(v)
+		out[t] = int(K.corner_for(s, t))
+	return out
+
+
+## Та же карта без одной подписи.
+func _home_map_minus(m: Dictionary, drop: String) -> Dictionary:
+	var out := {}
+	for k in m.keys():
+		if String(k) != drop:
+			out[k] = int(m[k])
+	return out
+
+
+## Карты равны: те же подписи в тех же домах.
+func _same_map(a: Dictionary, b: Dictionary) -> bool:
+	if a.size() != b.size():
+		return false
+	for k in a.keys():
+		if not b.has(k) or int(b[k]) != int(a[k]):
+			return false
+	return true
+
+
+## Ступенька рядов — стандарт ANSI: буквы верхнего ряда на 1.5 питча
+## (Tab), среднего — на 1.75 (Caps), нижнего — на 2.25 (Shift); цифры тем
+## же питчем, «1» на 0.5 левее «й».
+func _stagger() -> void:
+	var area := Rect2(0, 0, 788, 384)
+	var at := {}
+	for b in K.buttons(area, false, false):
+		at[String(b["s"])] = b["r"] as Rect2
+	var p: float = (at["й"] as Rect2).size.x
+	var step: float = p + 8.0
+	for d in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "="]:
+		_check(
+			is_equal_approx((at[d] as Rect2).size.x, p),
+			"digit %s is not letter-sized (%.1f vs %.1f)" % [d, (at[d] as Rect2).size.x, p]
+		)
+	_check(
+		is_equal_approx(((at["й"] as Rect2).position.x - (at["1"] as Rect2).position.x) / step, 0.5),
+		"the digit sits half a pitch left of its letter"
+	)
+	_check(
+		is_equal_approx(((at["ф"] as Rect2).position.x - (at["й"] as Rect2).position.x) / step, 0.25),
+		"the home row sits a quarter pitch right of the top row"
+	)
+	_check(
+		is_equal_approx(((at["я"] as Rect2).position.x - (at["ф"] as Rect2).position.x) / step, 0.5),
+		"the bottom row sits half a pitch right of the home row"
+	)
+
 
 func _report() -> void:
 	if _failures.is_empty():
