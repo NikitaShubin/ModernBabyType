@@ -164,6 +164,13 @@ var kb_morph_shift := false
 ## что нажал ту самую клавишу (или промахнулся мимо всех).
 ## Курсор стоит на конце строки и ждёт ↵ (см. _advance).
 var need_enter := false
+
+## Признак «эта строка кончается переносом строки ИСХОДНИКА» (абзац,
+## реплика диалога, строка стиха) — там игра ждёт ↵. Обычный перенос
+## (строка не влезла в ширину экрана) переезжает сам (автор 13.10.2026).
+## Массив параллелен display_lines, при пересборке строк едет вместе с
+## ними (см. _reflow_text).
+var line_hard: Array[bool] = []
 var kb_press := ""
 var kb_press_t := 0.0
 ## Оттенок вспышки: верный ввод — зелёный, опечатка — красная
@@ -493,22 +500,25 @@ func _cmdline_mode() -> void:
 ## тестах (1100) все строки короче лимита — возвращается как было.
 ## Порог 36 — между телефоном (~25) и десктопом (~39): десктопную
 ## вёрстку не трогаем вообще.
-func _fit_to_width(raw: Array[String]) -> Array[String]:
+func _fit_to_width(frag: Dictionary) -> Dictionary:
 	# Headless-тесты и самое начало жизни сцены: вьюпорта ещё нет
 	# (64px или нули) — считаем широким экраном и не режем. Алгоритм
 	# покрыт чистыми тестами fit_lines, интеграция тривиальна.
-	if view_w < 100.0:
-		line_drops = []
-		return raw
-	if _max_chars() >= 36:
-		line_drops = []
-		return raw
-	var m := B.fit_marked(raw, _max_chars())
+	var raw: Array[String] = []
+	for t in frag["texts"] as Array:
+		raw.append(String(t))
+	if view_w < 100.0 or _max_chars() >= 36:
+		# Широкий экран: предложение — строка. Разрывы между ними всё
+		# равно съедают по пробелу, иначе логическая ось разошлась бы с
+		# пересобранной вёрсткой на узком экране.
+		return {
+			"lines": raw, "drops": frag["drops"] as Array[int], "hard": frag["hard"] as Array,
+		}
+	var m := B.fit_marked(raw, _max_chars(), frag["hard"] as Array)
 	var out: Array[String] = []
 	for piece in m["lines"]:
 		out.append(String(piece))
-	line_drops = (m["drops"] as Array).duplicate()
-	return out
+	return {"lines": out, "drops": m["drops"], "hard": m["hard"]}
 
 
 ## Сколько знаков влезает в строку. Один счёт для всех: и разбивки
@@ -528,7 +538,9 @@ func _max_chars() -> int:
 func _reflow_text() -> void:
 	if display_lines.is_empty():
 		return
-	var rf: Dictionary = B.reflow(display_lines, cursor_line, cursor_pos, _max_chars(), line_drops)
+	var rf: Dictionary = B.reflow(
+		display_lines, cursor_line, cursor_pos, _max_chars(), line_drops, line_hard
+	)
 	var fresh: Array = rf["lines"]
 	if fresh == display_lines:
 		return  # вёрстка не изменилась — курсор и метки трогать нельзя
@@ -543,6 +555,10 @@ func _reflow_text() -> void:
 		under = String(fresh[nl]).substr(np, 1)
 
 	display_lines = fresh
+	var hard: Array[bool] = []
+	for flag in rf["hard"] as Array:
+		hard.append(bool(flag))
+	line_hard = hard
 	_refresh_home_chars()
 	cursor_line = int(rf["line"])
 	cursor_pos = int(rf["pos"])
@@ -892,7 +908,7 @@ func _key(l: int, p: int) -> String:
 ## (встроенные + user://texts). Целостность важнее точного размера:
 ## начинать с середины предложения и обрывать фразу нельзя
 ## (автор 10.2026). Вся механика — в Texts.
-func _load_text() -> Array[String]:
+func _load_text() -> Dictionary:
 	return Texts.load_fragment(difficulty, _text_base())
 
 
@@ -909,7 +925,17 @@ func _text_files() -> Array[String]:
 
 
 func _new_level() -> void:
-	display_lines = _fit_to_width(_load_text())
+	var frag := _load_text()
+	var fit := _fit_to_width(frag)
+	var laid: Array[String] = []
+	for piece in fit["lines"] as Array:
+		laid.append(String(piece))
+	display_lines = laid
+	line_drops = ((fit["drops"] as Array).duplicate())
+	var hard: Array[bool] = []
+	for flag in fit["hard"] as Array:
+		hard.append(bool(flag))
+	line_hard = hard
 	_refresh_home_chars()
 	# Клавиатуру пере-поднимаем: если уровень начат нажатием клавиши,
 	# сессия IME рвётся и буквы уходят в никуда (жалоба автора 10.2026:
@@ -998,17 +1024,37 @@ func _eq(a: String, b: String) -> bool:
 ## реально перейти»). Раньше перенос был автоматическим, и ввод в партии
 ## не работал вовсе.
 func _advance() -> void:
-	cursor_pos += 1
-	if cursor_line < display_lines.size():
-		if cursor_pos >= display_lines[cursor_line].length():
-			need_enter = true
-			# Последняя строка текста: дальше нечего вводить — уровень
-			# кончен, ждать переноса незачем.
-			if cursor_line + 1 >= display_lines.size():
-				_finish(true)
+	# Шаг по клеткам. Конец строки бывает двух сортов (автор 13.10.2026):
+	# строка не влезла в ширину экрана — обычный перенос, курсор едет сам;
+	# в исходнике там перенос строки (абзац, реплика, строка стиха) —
+	# игра стоит и ждёт ↵ (автор 10.2026: «если наступил конец строки и на
+	# следующую строку надо перейти энтером, то надо ожидать нажатия»).
+	while state == "playing":
+		cursor_pos += 1
+		if cursor_line >= display_lines.size():
+			_finish(true)
 			return
-	if cursor_line >= display_lines.size():
-		_finish(true)
+		if cursor_pos < display_lines[cursor_line].length():
+			return
+		# Мы за концом строки. Последняя строка текста — уровень кончен,
+		# ждать переноса незачем (вводить больше нечего).
+		if cursor_line + 1 >= display_lines.size():
+			_finish(true)
+			return
+		if _hard_line(cursor_line):
+			need_enter = true
+			return
+		# Обычный перенос: едем на следующую строку сами. Позиция -1 —
+		# чтобы шаг в начале цикла дал ровно 0: первая клетка новой строки
+		# не перепрыгивается (иначе потерялась бы клетка с меткой).
+		cursor_line += 1
+		cursor_pos = -1
+		need_enter = false
+
+
+## Строка заканчивается переносом строки исходника — там нужен ↵.
+func _hard_line(i: int) -> bool:
+	return i >= 0 and i < line_hard.size() and bool(line_hard[i])
 
 
 ## ↵ на конце строки: переходим на следующую. Из партии и с доски, и с
@@ -2848,6 +2894,35 @@ func _draw_cursor_marker() -> void:
 		cursor_sb,
 		Rect2(gx - 2.0 * k, gy, w + 4.0 * k, mono.get_height(font_size))
 	)
+	# Шеврон «↵» у конца строки, которая ждёт переноса (автор 13.10.2026):
+	# без него не видно, что здесь надо нажать ↵ — а больше на экране в
+	# этот момент ничего не меняется. Мягкая пульсация: заметно, не мигает.
+	var hint := _enter_hint()
+	if not hint.is_empty():
+		draw_string(
+			mono, Vector2(hint["x"], hint["y"]), "↵",
+			HORIZONTAL_ALIGNMENT_LEFT, -1.0, int(font_size * 0.78),
+			Color(_ui_ink(), float(hint["alpha"]))
+		)
+
+
+## Значок «↵» у конца строки, которая ждёт переноса: где он стоит и с
+## какой прозрачностью. Пусто — рисовать нечего. Отдельная функция, а не
+## код внутри _draw: решение проверяется тестом (см. _case_wrap_auto).
+func _enter_hint() -> Dictionary:
+	if state != "playing" or not need_enter or cursor_line >= display_lines.size():
+		return {}
+	var line := display_lines[cursor_line]
+	# Значок живёт ЗА рамкой курсора (рамка стоит на клетке за последней
+	# буквой), иначе он сливается с ней в одно пятно и не читается.
+	var after := margin + mono.get_string_size(
+		line, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size
+	).x + char_w * 1.4
+	return {
+		"x": after,
+		"y": _line_y(cursor_line) + mono.get_height(font_size) * 0.62,
+		"alpha": 0.38 + 0.16 * sin(time * 3.2),
+	}
 
 
 ## Заяц: один спрайт, поэтому вся анимация — трансформация. Ростом

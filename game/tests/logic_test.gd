@@ -296,6 +296,7 @@ func _process(_dt: float) -> bool:
 		_text_fragments()
 		_text_normalize()
 		_text_bases()
+		_text_breaks()
 		_marker_linear()
 		_legend_roundtrip()
 		_layout_positions()
@@ -739,6 +740,94 @@ func _marker_linear() -> void:
 ## Базы текстов: детская и взрослая классика. Про-аккаунт берёт
 ## взрослые тексты тем же тумблером «Про» (автор 10.2026: «не вижу
 ## взрослых текстов в своём про аккаунте»).
+## Перенос строки ИСХОДНИКА — там игра ждёт ↵, обычный перенос едет сам
+## (автор 13.10.2026: «где в оригинальном файле был перенос строки —
+## диалоги, концы абзацев, стихи»). Признак рождается в Texts (конец
+## физической строки файла) и едет по вёрстке в balance.gd.
+func _text_breaks() -> void:
+	var units := T.file_units("res://texts/kids/krylov_vorona_i_lisitsa.txt")
+	var texts: Array = units["texts"]
+	var hard: Array = units["hard"]
+	_check(texts.size() == hard.size() and not texts.is_empty(), "units and flags must pair up")
+	# У басни каждая строка — строка стиха, значит признак есть и он
+	# встречается чаще, чем раз в пять строк.
+	var n := 0
+	for f in hard:
+		if bool(f):
+			n += 1
+	_check(n >= 1, "no source line breaks in a fable")
+	_check(
+		T.file_sentences("res://texts/kids/krylov_vorona_i_lisitsa.txt").size() == texts.size(),
+		"file_sentences must match file_units"
+	)
+	# В прозе перенос строки — конец абзаца, то есть подряд идущие
+	# предложения внутри абзаца признака не имеют.
+	var chekhov := T.file_units("res://texts/pro/chehov_tolstyi_i_tonkii.txt")
+	var soft := 0
+	for f in chekhov["hard"]:
+		if not bool(f):
+			soft += 1
+	_check(soft > 0, "every prose sentence claimed a line break")
+	# Вёрстка: предложение — блок. Если влезло в ширину, строка целиком;
+	# если нет — режется по словам, и тогда переносы ВНУТРИ предложения
+	# мягкие. Признак «конец строки исходника» переносится на последнюю
+	# строку блока, а на строках, разрезанных по ширине, его нет.
+	var m := BB.fit_marked(
+		["Он пошёл домой.", "Потом вернулся."], 40, [false, true]
+	)
+	_check(
+		(m["lines"] as Array) == ["Он пошёл домой.", "Потом вернулся."],
+		"each sentence is its own line: %s" % str(m["lines"])
+	)
+	_check(
+		(m["hard"] as Array) == [false, true],
+		"only the source line break asks for enter: %s" % str(m["hard"])
+	)
+	var both := BB.fit_marked(["Он пошёл домой.", "Потом вернулся."], 40, [true, true])
+	_check(
+		(both["hard"] as Array) == [true, true],
+		"both lines end where the source breaks: %s" % str(both["hard"])
+	)
+	var none := BB.fit_marked(["Он пошёл домой.", "Потом вернулся."], 40, [false, false])
+	_check(
+		(none["hard"] as Array) == [false, false],
+		"a paragraph without line breaks must wrap automatically: %s" % str(none["hard"])
+	)
+	var narrow := BB.fit_marked(
+		["Ёжик ел ёжика и ёл ёршик.", "А потом спал."], 12, [false, true]
+	)
+	var nl: Array = narrow["lines"]
+	var nh: Array = narrow["hard"]
+	_check(nl.size() > 2, "the narrow layout must split the long sentence")
+	_check(nh.size() == nl.size(), "flags must follow the lines")
+	for i in nh.size() - 1:
+		_check(
+			not bool(nh[i]),
+			"a width wrap must stay soft (line %d «%s»)" % [i, nl[i]]
+		)
+	_check(bool(nh[nh.size() - 1]), "the block keeps the source break on its last line")
+	# Фрагмент уровня несёт те же признаки, разрывов по ширине в нём нет.
+	for base in ["kids", "pro"]:
+		var frag := T.load_fragment(1, base)
+		var ts: Array = frag["texts"]
+		var fs: Array = frag["hard"]
+		_check(
+			ts.size() == fs.size() and not ts.is_empty() and frag.has("drops"),
+			"%s fragment must carry lines, breaks and drops (%d/%d)"
+				% [base, ts.size(), fs.size()]
+		)
+	# ↵ должен встречаться: в каждой базе есть файлы, где перенос строки
+	# есть (диалоги, стихи, абзацы). Проверка по корпусу, а не по одному
+	# случайному фрагменту — иначе она мигала бы.
+	for sub in ["kids", "pro"]:
+		var breaks := 0
+		for path in T.list_files(sub):
+			for f4 in (T.file_units(String(path))["hard"] as Array):
+				if bool(f4):
+					breaks += 1
+		_check(breaks > 0, "%s: no source line breaks in the whole base" % sub)
+
+
 func _text_bases() -> void:
 	_check(not T.list_files("kids").is_empty(), "kids base is empty")
 	_check(not T.list_files("pro").is_empty(), "pro base is empty")

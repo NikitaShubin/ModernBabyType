@@ -194,15 +194,16 @@ static func _is_boundary(clean: String, i: int, j: int) -> bool:
 ## защита от крошки вроде «а о а о»).
 ## Возвращает сами предложения списком, а перенос по ширине экрана
 ## доделывает _fit_to_width.
-static func pick_fragment(sentences: Array[String], target: int) -> Array[String]:
+static func pick_fragment(
+	sentences: Array[String], target: int, start := -1
+) -> Array[String]:
 	var out: Array[String] = []
 	if sentences.is_empty():
 		return out
 	# Старт — чтобы вперёд влезло минимум три (как в прототипе: окно
 	# [start, start+n) внутри файла). Маленький пул отдаём целиком.
-	var start := 0
-	if sentences.size() > 3:
-		start = randi() % (sentences.size() - 2)
+	if start < 0:
+		start = _run_start(sentences.size())
 	var total := 0
 	var i := start
 	while i < sentences.size() and (total < target or out.size() < 3) and out.size() < 12:
@@ -294,28 +295,79 @@ static func playable(sentences: Array[String]) -> Array[String]:
 	return out
 
 
-## Предложения первого непустого файла базы.
-static func file_sentences(path: String) -> Array[String]:
+## Предложения файла вместе с признаком «здесь в источнике был перенос
+## строки». Физическая строка файла — это абзац, реплика диалога или
+## строка стиха; ↵ в игре ждёт ровно таких мест (автор 13.10.2026:
+## «где в оригинальном файле был перенос строки — диалоги, концы
+## абзацев, стихи»). Внутри физической строки предложения идут подряд,
+## их границы — обычный перенос, он автоматический.
+## Отдаём словарём, чтобы старый file_sentences остался совместимым.
+static func file_units(path: String) -> Dictionary:
 	var lines := read_lines(path)
 	if lines.is_empty():
-		return []
-	return split_sentences(normalize_text(" ".join(PackedStringArray(lines))))
+		return {"texts": [] as Array[String], "hard": [] as Array[bool]}
+	var texts: Array[String] = []
+	var hard: Array[bool] = []
+	for raw in lines:
+		var part := split_sentences(normalize_text(raw))
+		for i in part.size():
+			texts.append(String(part[i]))
+			hard.append(i == part.size() - 1)
+	return {"texts": texts, "hard": hard}
+
+
+## Предложения первого непустого файла базы.
+static func file_sentences(path: String) -> Array[String]:
+	var units := file_units(path)
+	var texts: Array[String] = []
+	for t in units["texts"]:
+		texts.append(String(t))
+	return texts
 
 
 ## Фрагмент уровня: случайный файл базы, в нём случайный run
 ## предложений. Пустая база откатывается к детской, дальше — запасной
 ## набор: уровень обязан собраться всегда.
-static func load_fragment(difficulty: int, base := "kids") -> Array[String]:
+static func load_fragment(difficulty: int, base := "kids") -> Dictionary:
 	ensure_user_dir()
 	var order := [base]
 	if base != "kids":
 		order.append("kids")
 	for want in order:
 		for path in list_files(want):
-			var sentences := playable(file_sentences(path))
-			if sentences.is_empty():
+			var units := file_units(path)
+			var texts: Array[String] = []
+			var hard: Array[bool] = []
+			var src_hard: Array = units["hard"]
+			for i in (units["texts"] as Array).size():
+				var one := String((units["texts"] as Array)[i])
+				if not playable([one]).is_empty():
+					texts.append(one)
+					hard.append(i < src_hard.size() and bool(src_hard[i]))
+			if texts.is_empty():
 				continue
-			var run := pick_fragment(sentences, target_for(difficulty))
+			var start := _run_start(texts.size())
+			var run := pick_fragment(texts, target_for(difficulty), start)
 			if not run.is_empty():
-				return run
-	return ["мама мыла раму.", "папа читал газету!", "солнце светило ярко?"]
+				var out_hard: Array[bool] = []
+				for i in run.size():
+					var j := start + i
+					out_hard.append(j < hard.size() and bool(hard[j]))
+				# Разрывы между предложениями пробела не добавляют: ось
+				# логики (B.logical_cells) должна считаться одинаково и до,
+				# и после пересборки строк, иначе после поворота экрана
+				# заяц и ёж расходятятся (ловил _case_relayout).
+				return {"texts": run, "hard": out_hard, "drops": [] as Array[int]}
+	return {
+		"texts": ["мама мыла раму.", "папа читал газету!", "солнце светило ярко?"] as Array[String],
+		"hard": [false, false, true] as Array[bool],
+		"drops": [0, 1, 2] as Array[int],
+	}
+
+
+## Старт run внутри файла (смещение предложений): вынесено, чтобы и
+## выбор, и сборка фрагмента считали одно и то же.
+static func _run_start(size: int) -> int:
+	if size <= 3:
+		return 0
+	return randi() % (size - 2)

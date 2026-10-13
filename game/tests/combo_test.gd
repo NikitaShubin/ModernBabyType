@@ -573,6 +573,10 @@ func _case_wrap_waits_enter() -> void:
 	_fresh(1, 1)
 	var tag := "wrap waits enter"
 	_kbd_on()
+	# Жёсткий перенос — из исходника (автор 13.10.2026: «где в оригинальном
+	# файле был перенос строки»). Случайный уровень для этого не годится:
+	# там перенос может оказаться обычным, и ждать ↵ нельзя.
+	_set_level_text(["Ёжик ел ёжика", "и ёл ёршик.", "Потом спал."], [true, true, true])
 	# Идём верными буквами до конца первой строки.
 	while not bool(_main.need_enter):
 		var want := String(_main._current())
@@ -674,6 +678,60 @@ func _case_wrap_waits_enter() -> void:
 			"%s: the physical enter did not wrap" % tag
 		)
 	_common(tag)
+
+
+## 7б. Обычный перенос (строка не влезла в ширину экрана) переезжает
+## САМ: игра не ждёт ↵, клавиша ввода на доске не нужна, уровень
+## проходится без единого энтера (автор 13.10.2026: «строка должна быть
+## автоматически перенесена на следующую строку без необходимости вбивать
+## энтер»). Раньше перенос был один и всегда требовал ↵.
+func _case_wrap_auto() -> void:
+	_fresh(1, 1)
+	var tag := "wrap auto"
+	# Первая строка — обычный перенос (в исходнике строки не было), вторая
+	# кончается переносом исходника, третья нужна затем, что последнюю
+	# строку уровень кончает сам, не спрашивая ↵.
+	_set_level_text(
+		["Ёжик ел ёжика и ёл ёршик.", "Длинная строка.", "Финал."],
+		[false, true, true]
+	)
+	var guard := 0
+	while int(_main.cursor_line) < 1 and _main.state == "playing" and guard < 200:
+		guard += 1
+		var want := String(_main._current())
+		if want == "":
+			_check(false, "%s: the soft break asked for enter" % tag)
+			return
+		_main._type_char(want)
+		_tick(tag)
+		_check(
+			not bool(_main.need_enter),
+			"%s: a soft break stopped the game on line %d" % [tag, int(_main.cursor_line)]
+		)
+	_check(int(_main.cursor_line) == 1, "%s: the soft break did not carry over (coverage)" % tag)
+	# На жёстком переносе игра встаёт и ↵ на доске есть.
+	guard = 0
+	while int(_main.cursor_line) < 2 and _main.state == "playing" and guard < 200:
+		guard += 1
+		var want2 := String(_main._current())
+		if want2 == "":
+			break
+		_main._type_char(want2)
+		_tick(tag)
+	_check(bool(_main.need_enter), "%s: the hard break did not ask for enter (coverage)" % tag)
+	_check(bool(_main._kb_enter_shown()), "%s: no enter key while waiting" % tag)
+	# Шеврон «↵» стоит у конца строки, которая ждёт переноса, и только
+	# в этом состоянии: вне ожидания на экране ничего лишнего нет.
+	var hint: Dictionary = _main._enter_hint()
+	_check(not hint.is_empty(), "%s: no ↵ chevron at the waiting line end" % tag)
+	if not hint.is_empty():
+		_check(
+			float(hint["x"]) > _main.margin,
+			"%s: the chevron is drawn before the line start" % tag
+		)
+	_hard("\r", KEY_ENTER)
+	_tick(tag)
+	_check(_main.state == "playing", "%s: the level ended at the last line" % tag)
 
 
 ## 8. Конец уровня с метками: Enter продолжает, новый уровень чист.
@@ -1697,11 +1755,18 @@ func _case_fast_doubles() -> void:
 ## Свой текст уровня. Сценарии не должны зависеть от того, какой случайный
 ## фрагмент выпал: двойная буква «нн» есть ровно в одной строке банка,
 ## и на CI сценарий «быстрые двойные» валился по coverage (10.2026).
-func _set_level_text(lines: Array) -> void:
+## Уровень из готовых строк. hard — где в исходнике был перенос строки
+## (там игра ждёт ↵); по умолчанию все строки жёсткие, иначе старые
+## сценарии ↵-переноса потеряли бы смысл.
+func _set_level_text(lines: Array, hard := []) -> void:
 	var typed: Array[String] = []
 	for l in lines:
 		typed.append(String(l))
 	_main.display_lines = typed
+	var flags: Array[bool] = []
+	for i in typed.size():
+		flags.append(true if hard.is_empty() else (i < hard.size() and bool(hard[i])))
+	_main.line_hard = flags
 	_main.line_drops = []
 	_main._reindex_lines()
 	# Набор букв — штатный для этой сложности (не «все буквы текста»):
@@ -1873,7 +1938,11 @@ func _case_idle_hint() -> void:
 	# ждёт ↵ и меток по правилу не ставит: сценарий меряет подсветку
 	# метки, а не ожидание переноса, поэтому перенос шлём (как
 	# в _case_scroll).
-	if bool(_main.need_enter):
+	# Ждать переноса после верной буквы можно на нескольких строках подряд
+	# (диалог: реплика за репликой), поэтому ↵ шлём до конца, а не раз.
+	for _g in 4:
+		if not bool(_main.need_enter):
+			break
 		_hard("\r", KEY_ENTER)
 		_tick(tag)
 	_check(not bool(_main.need_enter), "%s: could not leave the line end (coverage)" % tag)
@@ -2817,6 +2886,7 @@ func _process(_dt: float) -> bool:
 	_case_error_storm()
 	_case_line_wrap()
 	_case_wrap_waits_enter()
+	_case_wrap_auto()
 	_case_level_end()
 	_case_exact_case()
 	_case_night()
@@ -2856,7 +2926,7 @@ func _process(_dt: float) -> bool:
 	_case_grey_first_line()
 	_case_lang_state()
 	_case_chaos(1500)
-	_cases = 41
+	_cases = 42
 	_check(_steps > 1200, "the test really played (coverage: %d steps)" % _steps)
 	for f in _failures:
 		print("COMBO_TEST: FAIL: ", f)

@@ -87,33 +87,48 @@ static func cell_at(lines: Array, base: Array, offset: int) -> Vector2i:
 ## огрызок ДО каждого куска. Пробел на месте разрыва не клетка (см.
 ## fit_lines), поэтому физические смещения после пересборки не совпадают
 ## со старыми: считать надо по логической оси — без этих пробелов.
-static func fit_marked(raw: Array[String], max_chars: int) -> Dictionary:
+## Разложить предложения по строкам экрана. hard[i] — «после этого
+## предложения в источнике был перенос строки» (абзац, реплика диалога,
+## строка стиха): там игра ждёт ↵. Внутри абзаца границы предложений и
+## переносы по ширине — обычные, они едут сами (автор 13.10.2026).
+## Пробел на месте разрыва УБИРАЕМ (см. описание ниже), поэтому разрывы
+## НЕ прибавляют логического смещения: ось одна и та же до и после
+## пересборки строк.
+static func fit_marked(raw: Array[String], max_chars: int, hard: Array = []) -> Dictionary:
 	var lines: Array[String] = []
 	var drops: Array[int] = []
+	var hard_out: Array[bool] = []
 	var dropped := 0
-	for line in raw:
+	for i in raw.size():
+		var unit_hard := i < hard.size() and bool(hard[i])
+		var line := String(raw[i])
 		if line.length() <= max_chars:
 			lines.append(line)
 			drops.append(dropped)
+			hard_out.append(unit_hard)
 			continue
 		var cur := ""
 		for w0 in line.split(" ", false):
-			var w := w0
+			var w := String(w0)
 			while w.length() > max_chars:
 				# Слово-монстр (в текстах таких нет, но без страховки
 				# было бы зависание): рубим жёстко кусками.
 				if cur != "":
 					lines.append(cur)
 					drops.append(dropped)
+					hard_out.append(false)
 					dropped += 1
 					cur = ""
 				lines.append(w.left(max_chars))
 				drops.append(dropped)
+				hard_out.append(false)
+				dropped += 1
 				w = w.substr(max_chars)
 			var add := w if cur == "" else cur + " " + w
 			if add.length() > max_chars:
 				lines.append(cur)
 				drops.append(dropped)
+				hard_out.append(false)
 				dropped += 1
 				cur = w
 			else:
@@ -121,7 +136,8 @@ static func fit_marked(raw: Array[String], max_chars: int) -> Dictionary:
 		if cur != "":
 			lines.append(cur)
 			drops.append(dropped)
-	return {"lines": lines, "drops": drops}
+			hard_out.append(unit_hard)
+	return {"lines": lines, "drops": drops, "hard": hard_out}
 
 
 ## Таблица «логическое смещение → клетка»: переживает пересборку строк.
@@ -152,7 +168,7 @@ static func logical_cells(lines: Array, drops: Array) -> Dictionary:
 ## end_test (игра проходит уровень, который посреди набора сузили).
 static func reflow(
 	raw: Array[String], line: int, pos: int, max_chars: int,
-	old_drops: Array = []
+	old_drops: Array = [], hard: Array = []
 ) -> Dictionary:
 	# Логическое смещение — в пространстве «все пробелы»: старые строки
 	# могли потерять пробелы на разрывах (их считает old_drops), новые —
@@ -171,16 +187,17 @@ static func reflow(
 			"line": mini(line, same.size() - 1),
 			"pos": pos,
 			"table": logical_cells(same, []),
-			"drops": [],
+			"drops": old_drops.duplicate(),
+			"hard": hard.duplicate(),
 			"old": raw,
 		}
-	var m := fit_marked(raw, max_chars)
+	var m := fit_marked(raw, max_chars, hard)
 	var fresh: Array = m["lines"]
 	var table := logical_cells(fresh, m["drops"])
 	var cell: Vector2i = table.get(want, Vector2i(fresh.size(), 0))
 	return {
 		"lines": fresh, "line": cell.x, "pos": cell.y,
-		"table": table, "drops": m["drops"], "old": raw,
+		"table": table, "drops": m["drops"], "hard": m["hard"], "old": raw,
 	}
 
 
@@ -193,8 +210,8 @@ static func reflow(
 ## Чистая функция, матрица в logic_test и end_test (игра проходит
 ## уровень целиком на узких экранах).
 ## Тексты с одиночными пробелами (проверено grep), двойные схлопнутся.
-static func fit_lines(raw: Array[String], max_chars: int) -> Array[String]:
+static func fit_lines(raw: Array[String], max_chars: int, hard: Array = []) -> Array[String]:
 	var out: Array[String] = []
-	for piece in fit_marked(raw, max_chars)["lines"]:
+	for piece in fit_marked(raw, max_chars, hard)["lines"]:
 		out.append(String(piece))
 	return out
