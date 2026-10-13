@@ -294,6 +294,7 @@ func _process(_dt: float) -> bool:
 		_run_part2()
 		_text_coverage()
 		_text_fragments()
+		_text_bases()
 		_marker_linear()
 		_legend_roundtrip()
 		_layout_positions()
@@ -325,13 +326,15 @@ func _text_coverage() -> void:
 					direct[out] = true
 	direct[" "] = true
 	var missing := {}
-	var dir := DirAccess.open("res://texts")
-	if dir != null:
+	for sub in ["kids", "pro"]:
+		var dir := DirAccess.open("res://texts/" + sub)
+		if dir == null:
+			continue
 		dir.list_dir_begin()
 		var f := dir.get_next()
 		while f != "":
 			if not dir.current_is_dir() and f.ends_with(".txt"):
-				var fa := FileAccess.open("res://texts/" + f, FileAccess.READ)
+				var fa := FileAccess.open("res://texts/" + sub + "/" + f, FileAccess.READ)
 				if fa != null:
 					while not fa.eof_reached():
 						var line := fa.get_line()
@@ -697,7 +700,10 @@ func _marker_linear() -> void:
 	_main._relayout()
 	var fs: int = _main.font_size
 	# 2) Шаг одинаков у любых знаков.
-	var probes := ["а", "м", ",", "7", "Ё", " ", "н"]
+	# Плюс знаки, которые код сам подставляет в текст: ошибочный пробел
+	# рисуется как ␣, скобки экранируются — их шаг тоже обязан совпасть,
+	# иначе всё после метки плывёт (класс поломки из брейка: 20 против 12).
+	var probes := ["а", "м", ",", "7", "Ё", " ", "н", "␣", "[", "]"]
 	var first_w := -1.0
 	for g in probes:
 		var w: float = _main.mono.get_string_size(
@@ -726,6 +732,27 @@ func _marker_linear() -> void:
 			)
 		x += float(d.get("advance", 0.0))
 	ts.free_rid(rid)
+
+
+## Базы текстов: детская и взрослая классика. Про-аккаунт берёт
+## взрослые тексты тем же тумблером «Про» (автор 10.2026: «не вижу
+## взрослых текстов в своём про аккаунте»).
+func _text_bases() -> void:
+	_check(not T.list_files("kids").is_empty(), "kids base is empty")
+	_check(not T.list_files("pro").is_empty(), "pro base is empty")
+	# Проза с диалогами бьётся на целые предложения.
+	for path in T.list_files("pro"):
+		var ss := T.file_sentences(path)
+		_check(ss.size() >= 3, "pro file has too few sentences: %s" % path)
+	# Фрагмент собирается из обеих баз.
+	_check(not T.load_fragment(0, "kids").is_empty(), "no kids fragment")
+	_check(not T.load_fragment(0, "pro").is_empty(), "no pro fragment")
+	_check(not T.load_fragment(20, "pro").is_empty(), "no pro fragment at high difficulty")
+	# База следует за тумблером.
+	_main.all_keys_override = 1
+	_check(String(_main._text_base()) == "pro", "pro toggle must select the adult base")
+	_main.all_keys_override = 0
+	_check(String(_main._text_base()) == "kids", "kids toggle must select the kids base")
 
 
 func _report() -> void:
@@ -761,7 +788,9 @@ func _expected_keys(ch: String) -> Array:
 
 
 func _run_part1() -> void:
-	_check(_main.display_lines.size() == 3, "three text lines loaded")
+	# Уровень — run целых предложений (1+, обычно 3+), а не ровно три
+	# строки: объём теперь в знаках (автор 10.2026).
+	_check(not _main.display_lines.is_empty(), "level text loaded")
 	# Старт: курсор на активной букве (фрагмент случайный — вычисляем).
 	var ch0: String = _main._current()
 	_check(ch0 != "" and _main._is_active(ch0), "cursor starts on active")

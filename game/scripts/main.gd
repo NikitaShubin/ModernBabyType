@@ -175,6 +175,13 @@ const KB_FLASH_T := 0.55
 ## Клавиша, которую ДЕРЖАТ пальцем: шифт работает, пока его держат
 ## (автор 10.2026: «нажимаю — загорается, отпускаю — гаснет»).
 var kb_held := ""
+## Удержание для автоповтора (как в текстовых редакторах): позиция пальца
+## и таймер. live-нажатия ставят, повтор и отпускание снимают.
+var kb_held_pos := Vector2.ZERO
+var kb_repeat_t := 0.0
+## Пауза до повтора и темп повтора — как в редакторах.
+const KB_REPEAT_DELAY := 0.45
+const KB_REPEAT_RATE := 0.06
 const KB_PRESS_T := KB_FLASH_T
 var kb_shift := false
 var kb_key_sb: StyleBoxFlat
@@ -886,12 +893,19 @@ func _key(l: int, p: int) -> String:
 ## начинать с середины предложения и обрывать фразу нельзя
 ## (автор 10.2026). Вся механика — в Texts.
 func _load_text() -> Array[String]:
-	return Texts.load_fragment(difficulty)
+	return Texts.load_fragment(difficulty, _text_base())
+
+
+## База текстов: у про-аккаунта взрослая классика, у остальных — детские
+## стихи и сказки (автор 10.2026: «не вижу взрослых текстов в своём про
+## аккаунте»). Тот же тумблер «Про», что открывает все клавиши.
+func _text_base() -> String:
+	return "pro" if _all_keys() else "kids"
 
 
 ## Файлы базы для тестов и покрытия.
 func _text_files() -> Array[String]:
-	return Texts.list_files()
+	return Texts.list_files(_text_base())
 
 
 func _new_level() -> void:
@@ -1083,7 +1097,25 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if ke.keycode == KEY_SHIFT and not ke.pressed:
 		_set_kb_shift(false)
 		return
-	if not ke.pressed or ke.echo:
+	if ke.echo:
+		# Автоповтор зажатой клавиши (как в редакторах): только ввод
+		# в партии. Уровни по эху не листаем, шифт не дублируем
+		# (автор 10.2026: повтор при долгом залипании, в т.ч. бекспейс).
+		if ke.keycode == KEY_SHIFT or state != "playing":
+			return
+		_poke_idle()
+		if ke.keycode == KEY_BACKSPACE or ke.unicode == 8:
+			_backspace()
+			return
+		if ke.unicode < 32:
+			return
+		var ech := String.chr(ke.unicode)
+		var echkey := String(Kbd.combo_for(ech, kb_lang)[0]) if not Kbd.combo_for(ech, kb_lang).is_empty() else ""
+		if echkey != "":
+			_flash(echkey, _verdict(ech))
+		_type_char(ech)
+		return
+	if not ke.pressed:
 		return
 	# Раскладку физической клавиатуры мы не угадываем по сочетанию —
 	# оно у каждой системы своё (Ctrl+Shift, Alt+Shift, Win+Space, Caps).
@@ -1107,11 +1139,12 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if ke.keycode == KEY_ESCAPE:
 		if menu_open:
 			# Открыто меню — ввод его: сюда попадаем, только если меню
-			# клавишу не забрало (страховка). Там Esc тоже выход.
+			# клавишу не забрало (страховка). Там Esc — выход.
 			return
-		# Esc — всегда выход сразу, даже из полноэкранного.
-		# Полноэкранный переключается только Alt+Enter и F11.
-		get_tree().quit()
+		# Esc уводит из кона в меню, а не гасит игру (автор 10.2026:
+		# «выходить не из игры полностью, а из кона в меню»).
+		# Полный выход — повторным Esc уже в меню.
+		_open_menu()
 		return
 	if (
 		(ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER)
@@ -1609,6 +1642,16 @@ func _process(dt: float) -> void:
 	if kb_morph < 1.0:
 		kb_morph = minf(1.0, kb_morph + dt / KB_MORPH_T)
 		queue_redraw()
+	if kb_held != "" and _repeatable(kb_held):
+		if not _own_shown():
+			kb_held = ""
+			kb_repeat_t = 0.0
+		else:
+			kb_repeat_t -= dt
+			while kb_repeat_t <= 0.0:
+				kb_repeat_t += KB_REPEAT_RATE
+				if _own_shown():
+					_own_press(kb_held_pos, true)
 	if kb_press_t > 0.0:
 		kb_press_t = maxf(0.0, kb_press_t - dt)
 		queue_redraw()
@@ -2316,6 +2359,13 @@ func _draw_own_kb() -> void:
 ## Нажатие на свою клавишу: символ — в _type_char, стереть — в _backspace,
 ## слой — дальше по кругу, шифт — флип. Напрямую, без key-событий: IME тут
 ## не участвует вообще, composing-переписям неоткуда взяться.
+## Повторяется ли клавиша при удержании: буквы, знаки, пробел и
+## стереть — да; шифт (модификатор), глобус (тумблер) и ввод — нет
+## (автор 10.2026: «как в любом текстовом редакторе»).
+func _repeatable(act: String) -> bool:
+	return act != "" and act != "шифт" and act != "язык" and act != "ввод"
+
+
 ## Отпускание удерживаемой клавиши (шифта). Гасит и вспышку: палец
 ## ушёл — подсветка ушла.
 func _release_held() -> void:
@@ -2323,6 +2373,7 @@ func _release_held() -> void:
 		return
 	var was := kb_held
 	kb_held = ""
+	kb_repeat_t = 0.0
 	if was == "шифт":
 		_set_kb_shift(false)
 	if kb_press == was:
@@ -2422,13 +2473,19 @@ const HOME_LETTERS: Array[String] = ["ф", "ы", "в", "а", "п", "р", "о", "
 var home_chars: Array[String] = []
 
 
-func _own_press(pos: Vector2) -> bool:
+func _own_press(pos: Vector2, live := false) -> bool:
 	if not _own_shown():
 		return false
 	_poke_idle()
 	var act := Kbd.hit(_own_rect(), kb_shift, _kb_enter_shown(), pos)
 	if act == "":
 		return false
+	if live and _repeatable(act):
+		# Новую клавишу держим с паузой, повтор той же паузу не сносит.
+		if kb_held != act:
+			kb_repeat_t = KB_REPEAT_DELAY
+		kb_held = act
+		kb_held_pos = pos
 	# Вспышка сразу на любую нажатую клавишу — человек видит, куда попал.
 	_flash(act)
 	if act == "шифт":
@@ -2616,7 +2673,7 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	# Своя клавиатура: клавиши раньше карточки (области не пересекаются).
-	if _own_press(pos):
+	if _own_press(pos, true):
 		return
 	# Карточка: тап по ней ничего не делает, но событие съедаем, чтобы
 	# жест не утаскивал текст.

@@ -127,12 +127,22 @@ func _release_key(code: int) -> InputEventKey:
 	return ev
 
 
-func _key(code: int, uni := 0) -> InputEventKey:
+func _key(code: int, uni := 0, echo := false) -> InputEventKey:
 	var ke := InputEventKey.new()
 	ke.pressed = true
 	ke.keycode = code
 	ke.unicode = uni
+	ke.echo = echo
 	return ke
+
+
+## Нажатие мыши (палец) в точке: живое, ставит удержание.
+func _press(pos: Vector2) -> InputEventMouseButton:
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_LEFT
+	ev.pressed = true
+	ev.position = pos
+	return ev
 
 
 func _enter() -> void:
@@ -937,7 +947,11 @@ func _case_touch_keyboard() -> void:
 	_check(_main.typed_ok == ok0 + 1, "%s: the tap was not accepted (%d → %d)" % [tag, ok0, _main.typed_ok])
 	_check(_ax() > before, "%s: the tap did not advance the hare" % tag)
 	_check(_main.errors.is_empty(), "%s: a correct tap left a mark" % tag)
-	# Тап по неверной букве: метка и откат ровно на символ.
+	# Тап по неверной букве: метка и откат ровно на символ. Сначала
+	# выйти из ожидания переноса: там меток нет по правилу.
+	if _main.need_enter:
+		_hard("\r", KEY_ENTER)
+		_tick(tag)
 	var cur: String = _main._current()
 	var wrong := "ы" if cur.to_lower() != "ы" else "ж"
 	if btns.has(wrong):
@@ -975,10 +989,16 @@ func _case_kbd_shift_layer() -> void:
 		# живёт только в выводе (иначе фоновые знаки прыгают по углам —
 		# автор 10.2026).
 		_check(up.has(base), "%s: the key vanished after shift" % [tag])
-		_check(
-			String(Kbd.press_out(base, String(_main.kb_lang), true)) == base.to_upper(),
-			"%s: the key does not type the capital after shift" % [tag]
-		)
+		if Kbd.is_plain_letter(base):
+			_check(
+				String(Kbd.press_out(base, String(_main.kb_lang), true)) == base.to_upper(),
+				"%s: the key does not type the capital after shift" % [tag]
+			)
+		else:
+			_check(
+				String(Kbd.press_out(base, String(_main.kb_lang), true)) != "",
+				"%s: the key types nothing after shift" % [tag]
+			)
 		# Проверять имеет смысл, только когда игра ждёт СТРОЧНУЮ: над
 		# заглавной капитал верный и ошибкой не будет.
 		if up.has(base) and _main._current() == base:
@@ -2235,6 +2255,107 @@ func _case_press_flash() -> void:
 	_check(not bool(_main.kb_shift), "%s: the physical shift stayed armed after release" % tag)
 
 
+## 43а. Автоповтор зажатой клавиши (как в текстовых редакторах):
+## буква, пробел и стереть повторяются, шифт и глобус — нет; физическое
+## эхо повторяет ввод в партии, но не листает уровни (автор 10.2026).
+func _case_key_repeat() -> void:
+	_fresh(0, 0)
+	_kbd_on()
+	var tag := "key repeat"
+	# Держим букву пальцем: ввод повторяется сам.
+	var cur := String(_main._current()).to_lower()
+	# Пробел на доске зовётся «пробел», а не « »: тождество клавиши —
+	# подпись, не символ.
+	var cur_id := "пробел" if cur == " " else cur
+	var btns := _kbd_buttons()
+	if not btns.has(cur_id):
+		_check(false, "%s: no key for «%s» (coverage)" % [tag, cur])
+		return
+	_main.call("_input", _press(btns[cur_id]))
+	_tick(tag)
+	var tot0: int = _main.typed_ok + _main.typed_bad
+	_check(_main.typed_ok >= 1, "%s: the hold did not type at first" % tag)
+	_check(String(_main.kb_held) == cur_id, "%s: the hold did not arm" % tag)
+	# Текст случайный: повторы могут идти и мимо (курсор ходит
+	# туда-обратно), поэтому считаем ЛЮБОЙ ввод, а не только верный.
+	var guard := 0
+	while _main.typed_ok + _main.typed_bad < tot0 + 2 and guard < 200 \
+			and _main.state == "playing":
+		guard += 1
+		_tick(tag)
+	_check(
+		_main.typed_ok + _main.typed_bad >= tot0 + 2,
+		"%s: the held key did not repeat" % tag
+	)
+	# Отпустили — повтор встал.
+	_main.call("_input", _release(btns[cur_id]))
+	_tick(tag)
+	_check(String(_main.kb_held) == "", "%s: the hold stuck after release" % tag)
+	var ok1: int = _main.typed_ok + _main.typed_bad
+	for _i in 30:
+		_tick(tag)
+	_check(
+		int(_main.typed_ok) + int(_main.typed_bad) == ok1,
+		"%s: the key kept typing after release" % tag
+	)
+	# Держим стереть: метка снимается повтором. Чистый уровень: после
+	# удержания буквы курсор может стоять в ожидании переноса, а там
+	# меток не ставится по правилу.
+	_fresh(0, 0)
+	_main._type_char(_wrong())
+	_tick(tag)
+	_check(_main.errors.size() == 1, "%s: no mark to erase (coverage)" % tag)
+	_main.call("_input", _press(btns["←"]))
+	for _i in 40:
+		_tick(tag)
+	_check(_main.errors.is_empty(), "%s: the held erase did not clear the mark" % tag)
+	_main.call("_input", _release(btns["←"]))
+	_tick(tag)
+	# Держим шифт: ввода нет, шифт горит до отпускания.
+	var t0: int = _main.typed_ok
+	var b0: int = _main.typed_bad
+	_main.call("_input", _press(btns["Shift"]))
+	_tick(tag)
+	_check(bool(_main.kb_shift), "%s: shift did not arm" % tag)
+	for _i in 40:
+		_tick(tag)
+	_check(
+		int(_main.typed_ok) == t0 and int(_main.typed_bad) == b0,
+		"%s: the held shift typed (%d/%d)" % [tag, _main.typed_ok, _main.typed_bad]
+	)
+	_main.call("_input", _release(btns["Shift"]))
+	_tick(tag)
+	# Держим глобус: язык переключился один раз, дальше тишина.
+	var lang0 := String(_main.kb_lang)
+	_main.call("_input", _press(btns["глобус"]))
+	_tick(tag)
+	_check(String(_main.kb_lang) != lang0, "%s: globe did not switch" % tag)
+	var lang1 := String(_main.kb_lang)
+	for _i in 40:
+		_tick(tag)
+	_check(String(_main.kb_lang) == lang1, "%s: the held globe kept switching" % tag)
+	_main.call("_input", _release(btns["глобус"]))
+	_tick(tag)
+	# Физическое эхо: стереть чистит метку в партии...
+	_main._type_char(_wrong())
+	_tick(tag)
+	_check(_main.errors.size() == 1, "%s: no mark for echo (coverage)" % tag)
+	_main.call("_unhandled_key_input", _key(KEY_BACKSPACE, 8, true))
+	_tick(tag)
+	_check(_main.errors.is_empty(), "%s: echo backspace did not erase" % tag)
+	# ...а на финале уровни по эху не листаются.
+	_main.state = "won"
+	_main.call("_unhandled_key_input", _key(KEY_A, 97, true))
+	_tick(tag)
+	_check(
+		String(_main.state) == "won",
+		"%s: echo advanced past the win screen" % tag
+	)
+	_fresh(0, 0)
+	_tick(tag)
+	_common(tag)
+
+
 ## 44. Язык ввода доска берёт у СИСТЕМЫ, а не угадывает по сочетанию
 ## клавиш: переключатель раскладки у человека какой угодно (Ctrl+Shift,
 ## Alt+Shift, Win+Space, Caps), а вот буква всегда однозначно говорит,
@@ -2393,6 +2514,11 @@ func _case_menu_roundtrip() -> void:
 		absf(_main.enemy_x - ex) < 0.01,
 		"%s: the hedgehog moved while the menu was open" % tag
 	)
+	# Esc в партии уводит из кона в меню, а не гасит игру
+	# (автор 10.2026). Сам факт, что тест жив, — игра не вышла.
+	_main._unhandled_key_input(_key(KEY_ESCAPE))
+	_tick(tag)
+	_check(_main.menu_open, "%s: Escape did not open the menu" % tag)
 	# Возврат по F2 в меню — тот же игрок. По замыслу это НАЧАЛО уровня
 	# заново (меню выбирает игрока, а не ставит паузу), поэтому меток и
 	# счётчиков в новой партии не остаётся.
@@ -2414,6 +2540,9 @@ func _case_menu_roundtrip() -> void:
 func _case_caps_warning() -> void:
 	_fresh(3, 1)          # «все клавиши» — регистр важен
 	var tag := "caps"
+	# Фиксированный текст: заглавная и строчная активные буквы обязаны
+	# быть, а не выпасть из случайного фрагмента.
+	_set_level_text(["Мама мыла раму,", "папа нёс масло!"])
 	if not _main._exact():
 		return
 	var cell := Vector2i(-1, -1)
@@ -2498,6 +2627,10 @@ func _case_scroll() -> void:
 	_check(_advance_to(0.6), "%s: could not advance on a short screen" % tag)
 	_tick(tag)
 	# Метка на первой строке и на текущей: первая давно уехала из вида.
+	if _main.need_enter:
+		# Разгон встал на конце строки: там меток нет по правилу.
+		_hard("\r", KEY_ENTER)
+		_tick(tag)
 	var marks0: int = _main.errors.size()
 	_main._type_char(_wrong())
 	_tick(tag)
@@ -2649,6 +2782,7 @@ func _process(_dt: float) -> bool:
 	_case_night_meteors()
 	_case_enter_key()
 	_case_press_flash()
+	_case_key_repeat()
 	_case_lang_state()
 	_case_chaos(1500)
 	_cases = 40

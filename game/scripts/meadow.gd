@@ -135,12 +135,20 @@ func _spawn_meteor() -> void:
 ## прозрачностью. Затухает по краям полёта: на чём-то исчезает резко.
 func _draw_meteors() -> void:
 	var sc := _scale()
+	var ms := get_viewport_rect().size
 	for m in _meteors:
 		var p: Vector2 = m[0]
 		var dir: Vector2 = m[1]
 		var life: float = float(m[3])
 		var ln: float = float(m[2])
 		var fade := clampf(life * 2.0, 0.0, 1.0)
+		# К холмам метеор гаснет заранее и целиком — и голова, и хвост:
+		# иначе хвост обрывается вместе с головой в один кадр
+		# (автор 10.2026: «хвост тут же исчезает вместе с ним»).
+		var ground := 1.0
+		if ms.y > 0.0:
+			ground = clampf((ms.y * 0.45 - p.y) / (ms.y * 0.15), 0.0, 1.0)
+		fade *= ground
 		for i in 4:
 			var t0 := float(i) / 4.0
 			var t1 := float(i + 1) / 4.0

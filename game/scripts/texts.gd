@@ -28,17 +28,19 @@ static func target_for(difficulty: int) -> int:
 ## Все файлы базы: встроенные плюс пользовательские, в случайном порядке.
 ## Первый непустой выигрывает — то есть файл выбирается равновероятно,
 ## а внутри него уже случайный фрагмент (как в прототипе main.py).
-static func list_files() -> Array[String]:
+## База следует за тумблером «Про»: у про-аккаунта взрослая классика,
+## у остальных — детские стихи и сказки (автор 10.2026).
+static func list_files(base := "kids") -> Array[String]:
 	var names: Array[String] = []
-	for base in ["res://texts", "user://texts"]:
-		var dir := DirAccess.open(base)
+	for dir_path in ["res://texts/" + base, "user://texts/" + base]:
+		var dir := DirAccess.open(dir_path)
 		if dir == null:
 			continue
 		dir.list_dir_begin()
 		var fname := dir.get_next()
 		while fname != "":
 			if not dir.current_is_dir() and fname.ends_with(".txt"):
-				names.append(base + "/" + fname)
+				names.append(dir_path + "/" + fname)
 			fname = dir.get_next()
 		dir.list_dir_end()
 	var out: Array[String] = []
@@ -49,11 +51,12 @@ static func list_files() -> Array[String]:
 	return out
 
 
-## Папка пользовательских текстов: создаётся при первом запуске, чтобы
+## Папки пользовательских текстов: создаются при первом запуске, чтобы
 ## было куда положить свой .txt (вариант B: свой файл + импорт).
 static func ensure_user_dir() -> void:
-	if not DirAccess.dir_exists_absolute("user://texts"):
-		DirAccess.make_dir_recursive_absolute("user://texts")
+	for sub in ["kids", "pro"]:
+		if not DirAccess.dir_exists_absolute("user://texts/" + sub):
+			DirAccess.make_dir_recursive_absolute("user://texts/" + sub)
 
 
 ## Непустые обрезанные строки файла. Пустые строки, пробелы и прочий
@@ -207,14 +210,20 @@ static func file_sentences(path: String) -> Array[String]:
 	return split_sentences(" ".join(PackedStringArray(lines)))
 
 
-## Фрагмент уровня: случайный файл, в нём случайный run предложений.
-static func load_fragment(difficulty: int) -> Array[String]:
+## Фрагмент уровня: случайный файл базы, в нём случайный run
+## предложений. Пустая база откатывается к детской, дальше — запасной
+## набор: уровень обязан собраться всегда.
+static func load_fragment(difficulty: int, base := "kids") -> Array[String]:
 	ensure_user_dir()
-	for path in list_files():
-		var sentences := file_sentences(path)
-		if sentences.is_empty():
-			continue
-		var run := pick_fragment(sentences, target_for(difficulty))
-		if not run.is_empty():
-			return run
+	var order := [base]
+	if base != "kids":
+		order.append("kids")
+	for want in order:
+		for path in list_files(want):
+			var sentences := file_sentences(path)
+			if sentences.is_empty():
+				continue
+			var run := pick_fragment(sentences, target_for(difficulty))
+			if not run.is_empty():
+				return run
 	return ["мама мыла раму.", "папа читал газету!", "солнце светило ярко?"]

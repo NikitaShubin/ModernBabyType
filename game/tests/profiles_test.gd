@@ -1399,9 +1399,15 @@ func _part26_update_modal_keys() -> void:
 	_menu.call("_unhandled_key_input", n)
 	_check(not bool(_menu._upd_open), "N declines the update modal")
 	# Enter по-прежнему согласие, и Esc в обычном меню доску не трогает.
+	# Повторный Esc в меню — полный выход (автор 10.2026): настоящий quit
+	# в тесте погашен (убил бы процесс), читаем флаг намерения.
 	_menu._upd_open = false
+	_menu.quit_enabled = false
+	_menu.quit_requested = false
 	_menu.call("_unhandled_key_input", esc)
 	_check(bool(_menu.visible), "Esc outside the modal does not close the menu")
+	_check(bool(_menu.quit_requested), "Esc in the menu requests the full quit")
+	_menu.quit_enabled = true
 	# Отказ во время закачки гасит закачку: иначе файл докачается и
 	# установщик вылезет поверх игры, хотя от обновления отказались.
 	_menu._upd._pending_url = "http://x/apk"
