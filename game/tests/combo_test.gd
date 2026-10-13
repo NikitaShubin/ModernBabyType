@@ -1225,8 +1225,14 @@ func _case_own_kbd_fits() -> void:
 				kr.size.x > 24.0 and kr.size.y > 24.0,
 				"%s: the key «%s» is %.0fx%.0f on %s — finger won't hit it" % [tag, lab, kr.size.x, kr.size.y, str(wh)]
 			)
+			# Ввод вбирает остаток ряда и выходит широким (~2.4:1):
+			# при едином питче и рядах разной ширины иначе нельзя, кому-то
+			# остаток девать надо. Граница 2.6 держит его в разумном,
+			# остальные клавиши — строже. Палец всё равно попадает: ввод
+			# большой (≥ 1.2 питча и ≥ 32 px — проверки выше).
+			var flat_max := 2.6 if lab == "↵" else 2.2
 			_check(
-				kr.size.x / maxf(1.0, kr.size.y) < 2.2,
+				kr.size.x / maxf(1.0, kr.size.y) < flat_max,
 				"%s: the key «%s» is flat (%.2f) on %s" % [tag, lab, kr.size.x / maxf(1.0, kr.size.y), str(wh)]
 			)
 			# Допуск 0.1 px: питч копится float32-сложением, и крайняя
@@ -1947,8 +1953,8 @@ func _case_backslash_key() -> void:
 			_check(false, "%s: no key «%s»" % [tag, need])
 			return
 	_check(
-		Kbd.legends("\\") == ["\\", "|", "\\", "|"],
-		"%s: the backslash key holds the backslash and the bar" % tag
+		Kbd.legends("\\") == ["\\", "/", "\\", "|"],
+		"%s: the backslash key holds backslash, slash and bar" % tag
 	)
 	_check(
 		Kbd.legends(".") == [".", ",", "/", "?"],
@@ -1959,9 +1965,15 @@ func _case_backslash_key() -> void:
 		not combo.is_empty() and String(combo[0]) == "\\" and not bool(combo[1]),
 		"%s: the backslash is not a plain key in russian (%s)" % [tag, str(combo)]
 	)
+	# Косой слеш — шифт на клавише слеша в русской (автор 10.2026),
+	# в английской он сам на клавише точки.
 	_check(
-		Kbd.combo_for("/") == [".", false, "en"],
-		"%s: the slash lives on the dot key in english (%s)" % [tag, str(Kbd.combo_for("/"))]
+		Kbd.combo_for("/") == ["\\", true, "ru"],
+		"%s: the slash is shift on the backslash key (%s)" % [tag, str(Kbd.combo_for("/"))]
+	)
+	_check(
+		Kbd.combo_for("/", "en") == [".", false, "en"],
+		"%s: the slash lives on the dot key in english (%s)" % [tag, str(Kbd.combo_for("/", "en"))]
 	)
 	var marks0: int = _main.errors.size()
 	var ok0: int = _main.typed_ok

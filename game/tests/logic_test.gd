@@ -376,9 +376,15 @@ func _legend_roundtrip() -> void:
 		K.legends(".") == [".", ",", "/", "?"],
 		"the key left of the right shift is the dot"
 	)
+	# Клавиша слеша во всю ширину ряда; в русской с шифтом даёт косой
+	# слеш (автор 10.2026), угол — правый верхний, как у русского шифта.
 	_check(
-		K.legends("\\") == ["\\", "|", "\\", "|"],
-		"the backslash key holds the backslash and the bar, nothing else"
+		K.legends("\\") == ["\\", "/", "\\", "|"],
+		"the backslash key holds backslash, slash and bar"
+	)
+	_check(
+		K.corner_for("\\", "/") == 1,
+		"the russian slash sits top-right"
 	)
 	_check(K.legends("2") == ["2", "\"", "2", "@"], "digit 2 carries both layouts' signs")
 	_check(K.legends("ю") == ["ю", "Ю", ".", ">"], "ю keeps its capital next to its latin dot")
@@ -428,9 +434,10 @@ func _legend_roundtrip() -> void:
 	var bi := bottom.find("пробел")
 	# Глобус — по другую сторону пробела, слева от него только системные
 	# (автор 10.2026: пробел был не по центру).
+	# Глобус — между правыми Alt и Ctrl (автор 10.2026).
 	_check(
-		bottom.find("глобус") == bi + 1,
-		"the globe sits right of space: %s" % [str(bottom)]
+		bottom[bi + 1] == "Alt" and bottom[bi + 2] == "глобус" and bottom[bi + 3] == "Ctrl",
+		"the globe sits between the right alt and ctrl: %s" % [str(bottom)]
 	)
 	_check(
 		bottom.rfind("Alt") > bi and bottom.rfind("Ctrl") > bi,
@@ -463,10 +470,7 @@ func _layout_positions() -> void:
 	for ri in 5:
 		if rows[ri] != rows_m[ri]:
 			_check(false, "the bottom row differs in the menu: %s vs %s" % [str(rows[ri]), str(rows_m[ri])])
-	_check(
-		rows[4][rows[4].size() - 1] == "Ctrl" and rows[4][rows[4].size() - 2] == "Alt",
-		"ctrl closes the bottom row, alt next to it: %s" % [str(rows[4])]
-	)
+
 	var enters := 0
 	for ri2 in 5:
 		enters += rows[ri2].count("↵")
@@ -873,7 +877,16 @@ func _run_part2() -> void:
 	while tries < 8:
 		_main._new_level()
 		_main.active = BB.active_chars(0)
-		if _main.display_lines[0].length() >= 6:
+		# Влезет и полоса: первая строка длинная, а клетка сразу за
+		# первой активной — не пробел (пробел активен всегда, из него
+		# серую полосу не построить — ловил флаки 10.2026).
+		var ll: String = _main.display_lines[0]
+		var fa0 := -1
+		for i in ll.length():
+			if _main._is_active(ll.substr(i, 1)):
+				fa0 = i
+				break
+		if ll.length() >= 6 and fa0 >= 0 and fa0 + 1 < ll.length() and ll.substr(fa0 + 1, 1) != " ":
 			break
 		tries += 1
 	# Набираем первую активную букву и уходим на пассивную клетку после неё.
@@ -882,7 +895,8 @@ func _run_part2() -> void:
 		if _main._is_active(_main.display_lines[0].substr(i, 1)):
 			first_active = i
 			break
-	_check(first_active >= 0 and first_active + 3 <= _main.display_lines[0].length(),
+	_check(first_active >= 0 and first_active + 1 < _main.display_lines[0].length()
+		and _main.display_lines[0].substr(first_active + 1, 1) != " ",
 		"level has room for a grey run (coverage)")
 	_main.cursor_line = 0
 	_main.cursor_pos = first_active
@@ -907,10 +921,17 @@ func _run_part2() -> void:
 	# ТЕКУЩЕМ тексте: гасим буквы двух клеток за набранной. Раньше полоса
 	# везлась через _new_level, а новый уровень — случайный фрагмент, и
 	# сценарий ловил чужой текст вместо полосы.
-	if grey_run == 0 and first_active >= 0 and line0.length() >= first_active + 3:
+	# Гасим буквы следующих двух НЕ-пробелов: пробел активен всегда.
+	if grey_run == 0 and first_active >= 0:
 		var hidden: Array[String] = []
-		for i in range(first_active + 1, first_active + 3):
-			var hc := line0.substr(i, 1).to_lower()
+		var taken := 0
+		var j := first_active + 1
+		while taken < 2 and j < line0.length():
+			var hc := line0.substr(j, 1).to_lower()
+			j += 1
+			if hc == " ":
+				continue
+			taken += 1
 			if not hidden.has(hc):
 				hidden.append(hc)
 		for hc in hidden:
