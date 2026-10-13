@@ -539,18 +539,41 @@ func _case_wrap_waits_enter() -> void:
 		_main._hint_keys() == ["↵"],
 		"%s: the hint must offer enter while waiting (%s)" % [tag, str(_main._hint_keys())]
 	)
-	# Игра стоит: буквы не принимаются и ошибками не считаются.
+	# Игра стоит, но ошибки в ожидании засчитываются (автор 10.2026:
+	# «в ожидании энтера можно совершать любые ошибки и они не
+	# засчитываются»): счётчик тикает, заяц шагает назад. Метку ставить
+	# не на что — курсор за текстом; первая ошибка просто отменяет
+	# ожидание откатом, дальше идут обычные ошибки с метками.
 	var bad0: int = _main.typed_bad
-	for _i in 3:
-		_main._type_char(_wrong())
-		_tick(tag)
+	var marks0: int = _main.errors.size()
+	var len0: int = (_main.display_lines[line_before] as String).length()
+	_main._type_char(_wrong())
+	_tick(tag)
 	_check(
-		int(_main.cursor_line) == line_before
-			and int(_main.typed_bad) == bad0
-			and bool(_main.need_enter),
-		"%s: a letter passed the end of the line" % tag
+		int(_main.typed_bad) == bad0 + 1 and not bool(_main.need_enter)
+			and int(_main.errors.size()) == marks0,
+		"%s: a mistake while waiting must count without a mark" % tag
 	)
-	# ↵ с доски переносит.
+	_check(
+		int(_main.cursor_line) == line_before and int(_main.cursor_pos) == len0 - 1,
+		"%s: the mistake must knock back one cell" % tag
+	)
+	_main._type_char(_wrong())
+	_tick(tag)
+	_main._type_char(_wrong())
+	_tick(tag)
+	_check(
+		int(_main.typed_bad) == bad0 + 3 and int(_main.errors.size()) == marks0 + 2,
+		"%s: further mistakes are ordinary marks" % tag
+	)
+	# Добираем строку верными буквами (метки гаснут) и жмём ↵ с доски.
+	while not bool(_main.need_enter) and _main.state == "playing":
+		var want := String(_main._current())
+		if want == "":
+			break
+		_main._type_char(want)
+		_tick(tag)
+	_check(bool(_main.need_enter), "%s: never waited again (coverage)" % tag)
 	_main._own_press(_kbd_buttons()["↵"])
 	_tick(tag)
 	_check(
