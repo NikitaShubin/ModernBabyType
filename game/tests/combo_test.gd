@@ -61,9 +61,15 @@ func _soft(ch: String) -> void:
 ## Настоящая клавиша (keycode есть) — как с железной клавиатуры.
 ## Поставить заяца на клетку вручную. Ручное перемещение снимает
 ## ожидание переноса: сценарий ставит курсор сам, а игра ждала бы ↵.
+## Позиция прижимается к живой клетке: тексты уровней случайны, и
+## «третья строка, второй знак» может оказаться ЗА концом строки — сценарий
+## мерял бы состояние, которого игра не создаёт (ловило флаки:
+## «cursor 2:1 is not on a letter»).
 func _at(l: int, p: int) -> void:
-	_main.cursor_line = l
-	_main.cursor_pos = p
+	var li := clampi(l, 0, maxi(0, _main.display_lines.size() - 1))
+	var lp := clampi(p, 0, maxi(0, String(_main.display_lines[li]).length() - 1))
+	_main.cursor_line = li
+	_main.cursor_pos = lp
 	_main.need_enter = false
 	_main.hero_r = _main._hero_pos()
 
@@ -217,6 +223,7 @@ func _cursor_valid(tag: String) -> void:
 		)
 
 
+
 func _common(tag: String) -> void:
 	_drawed(tag)
 	_cursor_valid(tag)
@@ -279,7 +286,14 @@ func _fresh(difficulty: int, all_keys: int) -> void:
 	_main.all_keys_override = all_keys
 	_main.difficulty = difficulty
 	_main._new_level()
-	_main.need_enter = false
+	# Уровень может честно начаться с ожидания переноса: первая строка
+	# целиком из серых клеток («. . . .» у Есенина) проходится сама, и
+	# игра стоит на её конце. Снимать это руками нельзя — курсор остался
+	# бы ЗА текстом, и сценарий мерял бы состояние, которого игра не
+	# создаёт (ловило флаки: «cursor 0:1 is not on a letter»). Жмём ↵
+	# так же, как ребёнок, и получаем живую клетку.
+	while bool(_main.need_enter) and _main.state == "playing":
+		_main._enter_next_line()
 
 
 func _wrong() -> String:
@@ -1026,14 +1040,13 @@ func _case_kbd_shift_layer() -> void:
 func _case_long_press() -> void:
 	_kbd_on()
 	var tag := "long press"
-	var placed := false
-	for attempt in 12:
-		_fresh(2 + attempt / 4, 1)
-		placed = _find_soft_letter(["ё", "ъ"])
-		if placed:
-			break
+	# Фиксированный текст с обеими буквами: случайный фрагмент может
+	# двенадцать раз подряд прийти без редких ё/ъ (ловил флаки).
+	_fresh(2, 1)
+	_set_level_text(["Ёж съел мёд,", "а ёлка у подъезда."])
+	var placed := _find_soft_letter(["ё", "ъ"])
+	_check(placed, "%s: no ё/ъ in the level (coverage)" % tag)
 	if not placed:
-		_check(false, "%s: no ё/ъ in the level (coverage)" % tag)
 		return
 	var btns := _kbd_buttons()
 	var pressed: String = _main._current()
@@ -1046,6 +1059,45 @@ func _case_long_press() -> void:
 	_common(tag)
 	_check(_main.typed_ok == ok0 + 1, "%s: the tap was not accepted (%d → %d)" % [tag, ok0, _main.typed_ok])
 	_check(_main.errors.is_empty(), "%s: a direct key left a mark" % tag)
+
+
+## 41. Первая строка уровня — целиком серые клетки (у Есенина строка из
+## точек «. . . .»). Игра проходит её сама и просит ⌈↵⌉ — ровно так же,
+## как после набранной строки, и ↵ обязан быть на доске. Сценарий
+## закрывает правило и не даёт руке сценариев слепить невозможное
+## состояние: курсор ЗА текстом при need_enter = false — это не то, что
+## делает игра (флаки «cursor 0:1 is not on a letter»).
+func _case_grey_first_line() -> void:
+	_kbd_on()
+	_fresh(0, 0)
+	var tag := "grey first"
+	# Вторая строка — из букв, которые игра считает открытыми: иначе
+	# серая строка потянет и её, и уровень кончится, не дав напечатать.
+	var pool: Array[String] = []
+	for ch in B.KEY_PROGRESSION:
+		if _main.active.has(ch) and ch != " ":
+			pool.append(ch)
+	_set_level_text([".", "".join(pool) + "."])
+	_main._skip_inactive()
+	_tick(tag)
+	_check(bool(_main.need_enter), "%s: the grey line did not ask for ↵" % tag)
+	_check(int(_main.cursor_pos) == 1, "%s: the cursor is not at the grey line end (%d)" % [tag, _main.cursor_pos])
+	_check(_main._kb_enter_shown(), "%s: ↵ is not on the board while waiting" % tag)
+	# На доске клавиша подписана «↵», а действие е�� «ввод» (Kbd.hit).
+	var btns := _kbd_buttons()
+	_check(btns.has("↵"), "%s: the board has no ↵ key" % tag)
+	if not btns.has("↵"):
+		return
+	_main._own_press(btns["↵"])
+	_tick(tag)
+	_check(not bool(_main.need_enter), "%s: ↵ did not move to the next line" % tag)
+	_check(int(_main.cursor_line) == 1, "%s: ↵ left the second line (%d)" % [tag, _main.cursor_line])
+	# Ровно одна буква (а не _type_next: тот набирает уровень до конца).
+	var ok0: int = _main.typed_ok
+	_main._type_char(String(_main._current()))
+	_tick(tag)
+	_check(int(_main.typed_ok) == ok0 + 1, "%s: the letter under the cursor was not accepted" % tag)
+	_check(_main.errors.is_empty(), "%s: the first letter left a mark" % tag)
 
 
 func _find_soft_letter(letters := ["е", "ь"]) -> bool:
@@ -1817,6 +1869,16 @@ func _case_idle_hint() -> void:
 	_tick(tag)
 	_check(_main._hint_keys().is_empty(), "%s: the highlight survived a keypress" % tag)
 	# Метки зовут клавишу «стереть» на самой доске, а не текст.
+	# Верная буква выше могла довести курсор до конца строки, а там игра
+	# ждёт ↵ и меток по правилу не ставит: сценарий меряет подсветку
+	# метки, а не ожидание переноса, поэтому перенос шлём (как
+	# в _case_scroll).
+	if bool(_main.need_enter):
+		_hard("\r", KEY_ENTER)
+		_tick(tag)
+	_check(not bool(_main.need_enter), "%s: could not leave the line end (coverage)" % tag)
+	if bool(_main.need_enter):
+		return
 	_main._type_char(_wrong())
 	_main.idle_t = _main._hint_delay() + 5.0
 	_tick(tag)
@@ -2597,9 +2659,17 @@ func _case_caps_warning() -> void:
 func _case_hint_lifetime() -> void:
 	_fresh(1, 0)
 	var tag := "hint life"
-	_check(_advance_to(0.25), "%s: could not advance (coverage)" % tag)
+	# Разгон — для покрытия; замеру вспышки нужен чистый уровень.
+	# Тексты случайны: если разгон не дошёл до игры (край строки,
+	# чужой флаг), начинаем заново, а не меряем на сломанном.
+	if not _advance_to(0.25) or _main.state != "playing":
+		_fresh(1, 0)
 	# Клетка (0,0), а не курсор: тексты уровней случайны, и курсор после
 	# разгона может стоять где угодно — сценарию нужна любая живая клетка.
+	_check(
+		_main.display_lines.size() > 0 and String(_main.display_lines[0]).length() > 0,
+		"%s: no cell to flash (coverage)" % tag
+	)
 	_main._hint_at(0, 0)
 	_tick(tag)
 	_check(not _main.hints.is_empty(), "%s: the hint did not light up" % tag)
@@ -2783,9 +2853,10 @@ func _process(_dt: float) -> bool:
 	_case_enter_key()
 	_case_press_flash()
 	_case_key_repeat()
+	_case_grey_first_line()
 	_case_lang_state()
 	_case_chaos(1500)
-	_cases = 40
+	_cases = 41
 	_check(_steps > 1200, "the test really played (coverage: %d steps)" % _steps)
 	for f in _failures:
 		print("COMBO_TEST: FAIL: ", f)

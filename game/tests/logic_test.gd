@@ -294,6 +294,7 @@ func _process(_dt: float) -> bool:
 		_run_part2()
 		_text_coverage()
 		_text_fragments()
+		_text_normalize()
 		_text_bases()
 		_marker_linear()
 		_legend_roundtrip()
@@ -325,6 +326,10 @@ func _text_coverage() -> void:
 				if out != "":
 					direct[out] = true
 	direct[" "] = true
+	# Проверяем ровно то, что набирает игра: нормализованные предложения
+	# (файлы хранят оригиналы, правит парсер — автор 10.2026). Знак без
+	# клавиши — дыра в нормализации (тест падает); буква без клавиши —
+	# работа фильтра (предложение пропускается, см. playable).
 	var missing := {}
 	for sub in ["kids", "pro"]:
 		var dir := DirAccess.open("res://texts/" + sub)
@@ -334,16 +339,13 @@ func _text_coverage() -> void:
 		var f := dir.get_next()
 		while f != "":
 			if not dir.current_is_dir() and f.ends_with(".txt"):
-				var fa := FileAccess.open("res://texts/" + sub + "/" + f, FileAccess.READ)
-				if fa != null:
-					while not fa.eof_reached():
-						var line := fa.get_line()
-						for i in line.length():
-							var ch := line.substr(i, 1)
-							if ch == "":
-								continue
-							if not direct.has(ch):
-								missing[ch] = true
+				for sent in T.file_sentences("res://texts/" + sub + "/" + f):
+					for i in String(sent).length():
+						var ch := String(sent).substr(i, 1)
+						if ch == "" or ch == " " or T.is_letter_char(ch) or (ch >= "0" and ch <= "9"):
+							continue
+						if not direct.has(ch):
+							missing[ch] = true
 			f = dir.get_next()
 		dir.list_dir_end()
 	_check(missing.is_empty(), "untypable characters in texts: %s" % str(missing.keys()))
@@ -753,6 +755,62 @@ func _text_bases() -> void:
 	_check(String(_main._text_base()) == "pro", "pro toggle must select the adult base")
 	_main.all_keys_override = 0
 	_check(String(_main._text_base()) == "kids", "kids toggle must select the kids base")
+
+
+## Фильтры знаков: файлы хранят оригиналы, правит парсер (автор 10.2026).
+## Каждое правило — отдельным чеком, чтобы было видно, что именно
+## отвалилось, когда издание принесёт новый знак.
+func _text_normalize() -> void:
+	# Тире нет на клавиатуре — дефис.
+	_check(T.normalize_text("а—б") == "а-б", "em dash maps to hyphen")
+	_check(T.normalize_text("а–б") == "а-б", "en dash maps to hyphen")
+	# Ёлочек нет на клавиатуре — долой (диалоги остаются понятны).
+	_check(T.normalize_text("«а»") == "а", "guillemets drop out")
+	# Немецкие кавычки туда же (через коды: канал правит их при вводе).
+	_check(
+		T.normalize_text("а" + String.chr(0x201E) + "б" + String.chr(0x201C) + "в") == "абв",
+		"german quotes drop out"
+	)
+	# Многоточие набирается тремя точками.
+	_check(T.normalize_text("а…б") == "а...б", "ellipsis becomes three dots")
+	# Типографский апостроф — в обычный (он на клавише).
+	_check(T.normalize_text("д’о") == "д'о", "curly apostrophe straightens")
+	# Неразрывные пробелы — обычные.
+	_check(
+		T.normalize_text("а" + String.chr(0xA0) + "б" + String.chr(0x202F) + "в") == "а б в",
+		"nbsp becomes a space"
+	)
+	# Ударения изданий — типографика, не текст: снять, иначе знак
+	# нечем набрать и покрытие падает.
+	_check(
+		T.normalize_text("а" + String.chr(0x301) + "б") == "аб",
+		"combining accents drop out"
+	)
+	# Тонкие пробелы — обычные.
+	_check(
+		T.normalize_text("а б в") == "а б в",
+		"thin spaces become plain ones"
+	)
+	# Фильтр пропускает предложения с бесклавишными буквами целиком.
+	var mix: Array[String] = ["Мама мыла.", "Там всє гуляют."]
+	var kept := T.playable(mix)
+	_check(kept == ["Мама мыла."], "untypable sentences drop out whole (%s)" % str(kept))
+	# Фильтр идемпотентен: повторный прогон ничего не меняет.
+	var sample := "«Эх!» — думал… д’о а б"
+	_check(
+		T.normalize_text(T.normalize_text(sample)) == T.normalize_text(sample),
+		"normalize is idempotent"
+	)
+	# Всё, что вышло из-под фильтра, обязано набираться доской.
+	var out := T.normalize_text(sample + "—–„“" + String.chr(0x201D))
+	for i in out.length():
+		var ch := out.substr(i, 1)
+		if ch == " ":
+			continue
+		_check(
+			not K.combo_for(ch, "ru").is_empty() or not K.combo_for(ch, "en").is_empty(),
+			"filtered char has no key: «%s»" % ch
+		)
 
 
 func _report() -> void:

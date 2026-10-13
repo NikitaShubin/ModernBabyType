@@ -179,16 +179,17 @@ func _fit_invariants() -> void:
 
 func _text_paths() -> Array[String]:
 	var out: Array[String] = []
-	var dir := DirAccess.open("res://texts")
-	if dir == null:
-		return ["res://texts/demo.txt"]
-	dir.list_dir_begin()
-	var f := dir.get_next()
-	while f != "":
-		if not dir.current_is_dir() and f.ends_with(".txt"):
-			out.append("res://texts/" + f)
-		f = dir.get_next()
-	dir.list_dir_end()
+	for sub in ["kids", "pro"]:
+		var dir := DirAccess.open("res://texts/" + sub)
+		if dir == null:
+			continue
+		dir.list_dir_begin()
+		var f := dir.get_next()
+		while f != "":
+			if not dir.current_is_dir() and f.ends_with(".txt"):
+				out.append("res://texts/" + sub + "/" + f)
+			f = dir.get_next()
+		dir.list_dir_end()
 	return out
 
 

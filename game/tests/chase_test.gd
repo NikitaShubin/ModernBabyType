@@ -79,6 +79,18 @@ func _D() -> float:
 	return _main._touch_chars() + _main.CONTACT_SLACK
 
 
+## Поставить зайца на клетку вручную: сценарий ведёт его сам, поэтому
+## ожидание переноса снимается (иначе игра ждёт ↩, которого сценарий не
+## жмёт, и инвариант «ждём переноса — курсор за концом строки» падает
+## на живом уровне, который честно начался с серой строки).
+func _put(l: int, p: int) -> void:
+	var li := clampi(l, 0, maxi(0, _main.display_lines.size() - 1))
+	var lp := clampi(p, 0, maxi(0, String(_main.display_lines[li]).length() - 1))
+	_main.cursor_line = li
+	_main.cursor_pos = lp
+	_main.need_enter = false
+
+
 func _start_episode() -> void:
 	# Каждый третий эпизод — в обычном режиме (буквы серые, игра проходит
 	# их сама). Там шаг назад за ошибку идёт по СВОИМ клеткам, то есть
@@ -107,18 +119,15 @@ func _start_episode() -> void:
 	var l0 := float(_main.display_lines[0].length())
 	match _scenario:
 		0:
-			_main.cursor_line = 1
-			_main.cursor_pos = 0
+			_put(1, 0)
 			_main.enemy_line = 0
 			_main.enemy_x = _main.margin + l0 * _main.char_w * _rng.randf_range(0.75, 1.15)
 		1:
-			_main.cursor_line = 1
-			_main.cursor_pos = int(_rng.randf_range(3.0, 8.0))
+			_put(1, int(_rng.randf_range(3.0, 8.0)))
 			_main.enemy_line = 1
 			_main.enemy_x = _main.margin + _rng.randf_range(0.0, 1.0) * _main.char_w
 		2:
-			_main.cursor_line = 1
-			_main.cursor_pos = _main.display_lines[1].length() - 1
+			_put(1, _main.display_lines[1].length() - 1)
 			_main.enemy_line = 1
 			_main.enemy_x = _main.margin - _rng.randf_range(1.5, 4.0) * _main.char_w
 			_main.hero_r = _main._hero_pos()
@@ -308,14 +317,12 @@ func _process(_dt: float) -> bool:
 			# Ждём, пока ёж вберётся в строку, — и роняем зайца назад.
 			_turn += 1
 		elif _scenario == 2 and _main.cursor_line > 0:
-			_main.cursor_line -= 1
-			_main.cursor_pos = _main.display_lines[_main.cursor_line].length() - 1
+			_put(_main.cursor_line - 1, _main.display_lines[_main.cursor_line - 1].length() - 1)
 			_turn += 1
 		elif _main.cursor_pos < 2 and _main.cursor_line > 0:
 			# Откатываем куда-то назад: вот и «отпросился на предыдущую
 			# строку» из жалобы.
-			_main.cursor_line -= 1
-			_main.cursor_pos = _main.display_lines[_main.cursor_line].length() - 1
+			_put(_main.cursor_line - 1, _main.display_lines[_main.cursor_line - 1].length() - 1)
 		else:
 			_hero_advance()
 			_turn += 1

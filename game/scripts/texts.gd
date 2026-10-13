@@ -8,6 +8,9 @@
 extends RefCounted
 
 
+const Kbd := preload("res://scripts/kbd.gd")
+
+
 ## Сокращения, после которых точка НЕ кончает предложение. Однобуквенные
 ## токены (инициалы, т/д/п/н/г/в) правило покрывает отдельно, тут только
 ## многобуквенные. Список не обязан быть полным: неизвестное сокращение
@@ -73,13 +76,20 @@ static func read_lines(path: String) -> Array[String]:
 	return out
 
 
-## Буква ли символ (кириллица, латиница, ё).
-static func _is_letter(ch: String) -> bool:
+## Буква ли символ: латиница, кириллица целиком (включая украинские
+## є/і/ї/ґ и старую орфографию — сказ Лескова пишется с ними). Буква без
+## клавиши — работа фильтра (предложение пропускается), а не дыра:
+## содержимое не правим.
+static func is_letter_char(ch: String) -> bool:
 	if ch.length() != 1:
 		return false
 	var code := ch.unicode_at(0)
 	return (code >= 65 and code <= 90) or (code >= 97 and code <= 122) \
-		or (code >= 1040 and code <= 1103) or code == 1025 or code == 1105
+		or (code >= 0x0400 and code <= 0x04FF)
+
+
+static func _is_letter(ch: String) -> bool:
+	return is_letter_char(ch)
 
 
 ## Цифра ли символ.
@@ -202,12 +212,94 @@ static func pick_fragment(sentences: Array[String], target: int) -> Array[String
 	return out
 
 
+## Нормализация пунктуации под доску. Файлы хранят ОРИГИНАЛЫ, правит
+## парсер (автор 10.2026): тире нет на клавиатуре, ёлочек тоже, а "..."
+## набирается тремя точками. Слова не трогаем, только знаки.
+static func normalize_text(s: String) -> String:
+	var t := s.replace("—", "-").replace("–", "-") \
+		.replace("\u00ab", "").replace("\u00bb", "") \
+		.replace("\u201e", "").replace("\u201c", "").replace("\u201d", "") \
+		.replace("\u201f", "") \
+		.replace("…", "...").replace("\u2019", "'").replace("\u2018", "'")
+	t = _spaces_to_plain(t)
+	return _strip_combining(t)
+
+
+## Все пробельные разделители юникода — в обычный пробел. Типографика,
+## а не текст: иначе тонкий пробел издания даёт ненабираемую клетку.
+static func _spaces_to_plain(s: String) -> String:
+	var out := ""
+	for i in s.length():
+		var code := s.unicode_at(i)
+		if code == 0x00A0 or code == 0x1680 \
+			or (code >= 0x2000 and code <= 0x200A) \
+			or code == 0x202F or code == 0x205F or code == 0x3000:
+			out += " "
+		else:
+			out += s.substr(i, 1)
+	return out
+
+
+## Комбинируемые диакритические знаки (ударения изданий) — долой.
+## Типографика, а не текст: снять их нельзя только вместе с буквой.
+static func _strip_combining(s: String) -> String:
+	var out := ""
+	for i in s.length():
+		var code := s.unicode_at(i)
+		if code >= 0x0300 and code <= 0x036F:
+			continue
+		out += s.substr(i, 1)
+	return out
+
+
+## Знаки, набираемые с доски. Считается один раз и дальше только
+## читается: `Kbd.combo_for` перебирает всю доску и пересобирает легенды
+## на КАЖДЫЙ знак, а проверка идёт по каждому знаку файла (десятки
+## тысяч на уровень — на телефоне это заметная заминка).
+static var _typable: Dictionary = {}
+
+
+static func _build_typable() -> void:
+	for row in Kbd.all_rows(false):
+		for label in row:
+			for s in Kbd.legends(String(label)):
+				if String(s) != "":
+					_typable[String(s)] = true
+
+
+## Есть ли у знака клавиша на доске — оба языка и оба регистра (легенды
+## ключей). Букву без клавиши (сказовое «є») предложение просто
+## пропускает, а знак без клавиши — дыра в нормализации.
+static func _has_key(ch: String) -> bool:
+	if ch == " ":
+		return true
+	if _typable.is_empty():
+		_build_typable()
+	return _typable.has(ch)
+
+
+## Предложения без бесклавишных букв. Файл хранит оригинал целиком, но
+## уровень из такого предложения не собрать (набрать нечем): как пустые
+## строки, они отбрасываются фильтром, а не правятся (автор 10.2026).
+static func playable(sentences: Array[String]) -> Array[String]:
+	var out: Array[String] = []
+	for s in sentences:
+		var ok := true
+		for ch in String(s):
+			if not _has_key(ch):
+				ok = false
+				break
+		if ok:
+			out.append(String(s))
+	return out
+
+
 ## Предложения первого непустого файла базы.
 static func file_sentences(path: String) -> Array[String]:
 	var lines := read_lines(path)
 	if lines.is_empty():
 		return []
-	return split_sentences(" ".join(PackedStringArray(lines)))
+	return split_sentences(normalize_text(" ".join(PackedStringArray(lines))))
 
 
 ## Фрагмент уровня: случайный файл базы, в нём случайный run
@@ -220,7 +312,7 @@ static func load_fragment(difficulty: int, base := "kids") -> Array[String]:
 		order.append("kids")
 	for want in order:
 		for path in list_files(want):
-			var sentences := file_sentences(path)
+			var sentences := playable(file_sentences(path))
 			if sentences.is_empty():
 				continue
 			var run := pick_fragment(sentences, target_for(difficulty))
