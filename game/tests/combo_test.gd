@@ -1177,9 +1177,11 @@ func _case_own_kbd_fits() -> void:
 		_check(bs_w >= 32.0, "%s: erase is %.0fpx on %s" % [tag, bs_w, str(wh)])
 		_check(yo_w <= 0.0 or absf(yo_w - digit_w) <= 1.0, "%s: yo is %.0fpx, expected digit pitch %.0f on %s" % [tag, yo_w, digit_w, str(wh)])
 		if digit_w > 0.0 and bs_w > 0.0:
+			# Стереть вбирает остаток ряда до края доски (~2.5u): не
+			# меньше двойного и не шире разумного (автор 10.2026).
 			_check(
-				absf(bs_w - 2.0 * digit_w) <= 2.0,
-				"%s: erase is %.0fpx, expected double digit (%.0f) on %s" % [tag, bs_w, digit_w, str(wh)]
+				bs_w >= 2.0 * digit_w - 1.0 and bs_w <= 2.75 * digit_w + 1.0,
+				"%s: erase is %.0fpx, expected 2-2.75 digits (%.0f) on %s" % [tag, bs_w, digit_w, str(wh)]
 			)
 		# Правая колонка как на настоящей: стереть сверху, ввод
 		# посередине (справа от «э»), оба у правого края. Ввод не меньше

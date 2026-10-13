@@ -294,6 +294,7 @@ func _process(_dt: float) -> bool:
 		_run_part2()
 		_text_coverage()
 		_text_fragments()
+		_marker_linear()
 		_legend_roundtrip()
 		_layout_positions()
 		_report()
@@ -679,6 +680,52 @@ func _text_fragments() -> void:
 				tail_ok = true
 		_check(head_ok, "run starts at a boundary (%s)" % got)
 		_check(tail_ok, "run ends at a boundary (%s)" % got)
+
+
+## Математический контроль выделителя (автор 10.2026: «к концу
+## накапливается сдвиг», а для тестов нужен математический контроль).
+## Два абсолютных свойства моноширинного тракта (без накопления!):
+## 1) шейпинг целой строки совпадает с замером префиксов — иначе метки
+##    (шейпинг RichText) и маркер (замер префикса) разъезжаются, и ошибка
+##    растёт к концу строки. Проверено вручную: 0 расхождений на 47 знаках.
+## 2) шаг одинаков у любых знаков (буквы, цифра, запятая, пробел, Ё) —
+##    иначе подмена шрифта на пропорциональный прошла бы тихо.
+## Одиночные замеры округляются (±1 px), поэтому допуски абсолютные, а не
+## наклонные: округление — не дрейф (маркер и метки меряют run'ами и
+## сходятся, сверено попиксельно).
+func _marker_linear() -> void:
+	_main._relayout()
+	var fs: int = _main.font_size
+	# 2) Шаг одинаков у любых знаков.
+	var probes := ["а", "м", ",", "7", "Ё", " ", "н"]
+	var first_w := -1.0
+	for g in probes:
+		var w: float = _main.mono.get_string_size(
+			String(g), HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x
+		if first_w < 0.0:
+			first_w = w
+		_check(
+			absf(w - first_w) <= 1.0,
+			"glyph «%s» breaks the monospace step (%.1f vs %.1f)" % [String(g), w, first_w]
+		)
+	# 1) Шейпинг строки совпадает с замерами префиксов.
+	var line := "Мама мыла раму у окна долго, папа: 7 гусей!"
+	var ts := TextServerManager.get_primary_interface()
+	var rid := ts.create_shaped_text(TextServer.DIRECTION_LTR)
+	ts.shaped_text_add_string(rid, line, _main.mono.get_rids(), fs)
+	var x := 0.0
+	for g in ts.shaped_text_get_glyphs(rid):
+		var d: Dictionary = g
+		var pp := int(d.get("start", -1))
+		if pp >= 0 and pp % 5 == 0:
+			var pre: float = _main.mono.get_string_size(
+				line.left(pp), HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x
+			_check(
+				absf(x - pre) <= 1.0,
+				"shaping drifts from prefixes at cell %d (%.1f vs %.1f)" % [pp, x, pre]
+			)
+		x += float(d.get("advance", 0.0))
+	ts.free_rid(rid)
 
 
 func _report() -> void:

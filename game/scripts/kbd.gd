@@ -595,16 +595,17 @@ static func buttons(area: Rect2, shift: bool, enter := false) -> Array:
 		if rows.size() >= 5 and (ri >= 0 and ri <= 3):
 			if ri == 0:
 				# Ряд цифр тем же питчем, что буквы (автор 10.2026).
-				# Стереть — ровно двойное, как настоящее: тест держит
-				# «двойную цифру». Остаток справа не вбираем (иначе на
-				# широких досках стереть разъезжается за 2u).
+				# Стереть вбирает остаток до края доски (автор 10.2026:
+				# «бекспейс не достаточно широк, чтобы дотягиваться до
+				# края»): выходит ~2.5u — широкая мишень, как и положено
+				# краю. Потолок питча держит его не меньше 2u.
 				for label in row:
 					var s0 := String(label)
 					if s0 == "←":
 						continue
 					out.append({"r": Rect2(x, y, ru_p, rh), "s": s0})
 					x += ru_p + gap
-				out.append({"r": Rect2(x, y, 2.0 * ru_p, rh), "s": "←"})
+				out.append({"r": Rect2(x, y, area.position.x + area.size.x - x, rh), "s": "←"})
 				continue
 			if ri == 1:
 				for label in row:
