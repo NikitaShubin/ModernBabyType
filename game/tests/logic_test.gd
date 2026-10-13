@@ -8,6 +8,7 @@ extends SceneTree
 const BB := preload("res://scripts/balance.gd")
 const S := preload("res://scripts/save.gd")
 const K := preload("res://scripts/kbd.gd")
+const T := preload("res://scripts/texts.gd")
 
 var _frame := 0
 var _main: Node = null
@@ -292,6 +293,7 @@ func _process(_dt: float) -> bool:
 		_check(_main.state == "playing", "no catch from far behind")
 		_run_part2()
 		_text_coverage()
+		_text_fragments()
 		_legend_roundtrip()
 		_layout_positions()
 		_report()
@@ -424,6 +426,12 @@ func _legend_roundtrip() -> void:
 	# (требование автора 10.2026), знаков там больше нет.
 	var bottom := K.bottom_row(false)
 	var bi := bottom.find("пробел")
+	# Глобус — по другую сторону пробела, слева от него только системные
+	# (автор 10.2026: пробел был не по центру).
+	_check(
+		bottom.find("глобус") == bi + 1,
+		"the globe sits right of space: %s" % [str(bottom)]
+	)
 	_check(
 		bottom.rfind("Alt") > bi and bottom.rfind("Ctrl") > bi,
 		"alt and ctrl sit to the right of space"
@@ -610,6 +618,63 @@ func _stagger() -> void:
 		is_equal_approx(((at["я"] as Rect2).position.x - (at["ф"] as Rect2).position.x) / step, 0.5),
 		"the bottom row sits half a pitch right of the home row"
 	)
+
+
+## Фрагмент уровня: 1+ целых предложений подряд на нужное число
+## знаков. Начинать с середины предложения и обрывать фразу нельзя
+## (автор 10.2026); объём плавно растёт со сложностью.
+func _text_fragments() -> void:
+	# Границы: обычные концы предложений.
+	_check(
+		T.split_sentences("Мама мыла раму. Папа читал газету! А кот спал?") == ["Мама мыла раму.", "Папа читал газету!", "А кот спал?"],
+		"plain sentences split"
+	)
+	# Многоточие и ёлочки — тоже концы, кавычки висят на своём.
+	_check(
+		T.split_sentences("Он думал… Потом сказал: «Иди!» И ушёл.") == ["Он думал…", "Потом сказал: «Иди!»", "И ушёл."],
+		"ellipsis and quotes split"
+	)
+	# Сокращения, инициалы, десятичные и нумерация НЕ режут: лучше
+	# склеить два предложения, чем порвать фразу.
+	_check(
+		T.split_sentences("Пришёл т.е. Иванов, т.д. Петрова нет. Было 7.5 кг.") == ["Пришёл т.е. Иванов, т.д. Петрова нет.", "Было 7.5 кг."],
+		"abbreviations do not split"
+	)
+	_check(
+		T.split_sentences("Писал А. С. Пушкин. Читай вслух.") == ["Писал А. С. Пушкин.", "Читай вслух."],
+		"initials do not split"
+	)
+	# Хвост без терминатора — тоже предложение (конец файла целый).
+	_check(
+		T.split_sentences("Начало. Хвост без точки") == ["Начало.", "Хвост без точки"],
+		"tail without a terminator counts"
+	)
+	# Пустые строки и мусор фильтр выкидывает, файлы править не надо.
+	_check(
+		T.split_sentences("   \n\n  Мама.  \n") == ["Мама."],
+		"whitespace-only input cleans up"
+	)
+	# Объём: минимум одно предложение, дальше добираем до цели.
+	var two: Array[String] = ["Коротко.", "Тоже коротко."]
+	_check(not T.pick_fragment(two, 5).is_empty(), "at least one sentence")
+	_check(T.pick_fragment(two, 100) == two, "short pool always gives both")
+	# Цель растёт со сложностью и упирается в потолок.
+	_check(T.target_for(0) == 130, "base volume is about three old lines")
+	_check(T.target_for(5) > T.target_for(0), "volume grows with difficulty")
+	_check(T.target_for(1000) == 450, "volume caps out")
+	# Целостность run: начинается с начала предложения, кончается концом.
+	var pool := T.split_sentences("Раз. Два! Три? Четыре. Пять. Шесть.")
+	for _i in 20:
+		var got := " ".join(PackedStringArray(T.pick_fragment(pool, 15)))
+		var head_ok := false
+		var tail_ok := false
+		for sent in pool:
+			if got.begins_with(String(sent)):
+				head_ok = true
+			if got.ends_with(String(sent)):
+				tail_ok = true
+		_check(head_ok, "run starts at a boundary (%s)" % got)
+		_check(tail_ok, "run ends at a boundary (%s)" % got)
 
 
 func _report() -> void:
@@ -800,14 +865,25 @@ func _run_part2() -> void:
 	# Живой лог с телефона 10.2026: Backspace встал на серую клетку (стирать
 	# нечего), затем та же буква уходила в dup-ignore — на экране обе
 	# ситуации выглядели как «не считает», ребёнок крутил букву по кругу.
-	_main._new_level()
+	# Текст уровня случаен (файл и старт — randi, порядок файлов может
+	# плавать между прогонами): добираем уровень, у которого в первой
+	# строке хватит места под полосу. Иначе сценарий ловил бы форму
+	# текста, а не механику отката.
+	var tries := 0
+	while tries < 8:
+		_main._new_level()
+		_main.active = BB.active_chars(0)
+		if _main.display_lines[0].length() >= 6:
+			break
+		tries += 1
 	# Набираем первую активную букву и уходим на пассивную клетку после неё.
 	var first_active := -1
 	for i in _main.display_lines[0].length():
 		if _main._is_active(_main.display_lines[0].substr(i, 1)):
 			first_active = i
 			break
-	_check(first_active >= 0, "level has an active letter to type")
+	_check(first_active >= 0 and first_active + 3 <= _main.display_lines[0].length(),
+		"level has room for a grey run (coverage)")
 	_main.cursor_line = 0
 	_main.cursor_pos = first_active
 	_main._type_char(_main._current())
@@ -827,30 +903,18 @@ func _run_part2() -> void:
 		if _main._is_active(line0.substr(i, 1)):
 			break
 		grey_run += 1
-	# Серая полоса есть не в каждом уровне (в «Вертит» все буквы активны).
-	# Строим её явно: убираем буквы из активных на несколько клеток.
-	if grey_run == 0 and line0.length() >= first_active + 4:
-		grey_run = 2
+	# Серой полосы может не быть (все буквы активны). Строим её явно на
+	# ТЕКУЩЕМ тексте: гасим буквы двух клеток за набранной. Раньше полоса
+	# везлась через _new_level, а новый уровень — случайный фрагмент, и
+	# сценарий ловил чужой текст вместо полосы.
+	if grey_run == 0 and first_active >= 0 and line0.length() >= first_active + 3:
 		var hidden: Array[String] = []
 		for i in range(first_active + 1, first_active + 3):
-			var hc: String = line0.substr(i, 1)
+			var hc := line0.substr(i, 1).to_lower()
 			if not hidden.has(hc):
 				hidden.append(hc)
 		for hc in hidden:
 			_main.active.erase(hc)
-		_main._new_level()
-		_main.active = BB.active_chars(0)
-		for hc in hidden:
-			_main.active.erase(hc)
-		first_active = -1
-		for i in _main.display_lines[0].length():
-			if _main._is_active(_main.display_lines[0].substr(i, 1)):
-				first_active = i
-				break
-		_main.cursor_line = 0
-		_main.cursor_pos = first_active
-		_main._type_char(_main._current())
-		line0 = _main.display_lines[0]
 		grey_run = 0
 		for i in range(first_active + 1, line0.length()):
 			if _main._is_active(line0.substr(i, 1)):

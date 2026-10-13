@@ -9,6 +9,7 @@ extends Node2D
 
 const B := preload("res://scripts/balance.gd")
 const S := preload("res://scripts/save.gd")
+const Texts := preload("res://scripts/texts.gd")
 const MENU_SCENE := preload("res://scenes/menu.tscn")
 
 ## Заяц-герой: один целый рисунок. Анимация — только трансформация
@@ -45,7 +46,6 @@ const CONTACT_SLACK := 0.15
 const BASE_W := 1100.0
 const BASE_H := 650.0
 const START_DELAY := 3.0
-const TEXT_CHUNK_LINES := 3
 
 const INK := Color("#1c1a16")
 const UI_TEXT := Color("#4a4438")
@@ -881,52 +881,17 @@ func _key(l: int, p: int) -> String:
 	return "%d:%d" % [l, p]
 
 
+## Текст уровня — run целых предложений из случайного файла базы
+## (встроенные + user://texts). Целостность важнее точного размера:
+## начинать с середины предложения и обрывать фразу нельзя
+## (автор 10.2026). Вся механика — в Texts.
 func _load_text() -> Array[String]:
-	var lines: Array[String] = []
-	for path in _text_files():
-		var fa := FileAccess.open(path, FileAccess.READ)
-		if fa == null:
-			continue
-		while not fa.eof_reached():
-			var line := fa.get_line().strip_edges()
-			if line != "":
-				lines.append(line)
-		if not lines.is_empty():
-			break
-	if lines.is_empty():
-		lines.append("мама мыла раму.")
-		lines.append("папа читал газету!")
-		lines.append("солнце светило ярко?")
-	# Объём растёт со сложностью: 3 строки на старте, до 6 на высоких
-	# уровнях. Длинные уровни едут скроллом (см. scroll_y).
-	var chunk := mini(TEXT_CHUNK_LINES + difficulty / 2, 6)
-	var n := mini(chunk, lines.size())
-	var start := 0
-	if lines.size() > n:
-		start = randi() % (lines.size() - n + 1)
-	return lines.slice(start, start + n)
+	return Texts.load_fragment(difficulty)
 
 
-## Текстовые файлы в случайном порядке (как в оригинале: каждый попытка —
-## новый случайный фрагмент из банка текстов).
+## Файлы базы для тестов и покрытия.
 func _text_files() -> Array[String]:
-	var paths: Array[String] = []
-	var dir := DirAccess.open("res://texts")
-	if dir == null:
-		return ["res://texts/demo.txt"]
-	var files: Array[String] = []
-	dir.list_dir_begin()
-	var fname := dir.get_next()
-	while fname != "":
-		if not dir.current_is_dir() and fname.ends_with(".txt"):
-			files.append("res://texts/" + fname)
-		fname = dir.get_next()
-	dir.list_dir_end()
-	while not files.is_empty():
-		var i := randi() % files.size()
-		paths.append(files[i])
-		files.remove_at(i)
-	return paths if not paths.is_empty() else ["res://texts/demo.txt"]
+	return Texts.list_files()
 
 
 func _new_level() -> void:
