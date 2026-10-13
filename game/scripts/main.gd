@@ -1885,12 +1885,13 @@ func _marks_debug() -> String:
 
 func _hint_parts() -> Array:
 	if state == "won":
-		return [{"s": "Уровень пройден! Дальше — жми:", "cap": false}, {"s": "↵", "cap": true}]
+		# Только констатация: клавишу зовёт сама доска (там ↵ подсвечен).
+		return [{"s": "Уровень пройден!", "cap": false}]
 	if state == "lost":
 		# После проигрыша буквы мертвы, дальше — только Enter. Без этой
 		# строки игрок жмёт буквы в пустоту и думает, что ввод сломался
 		# (жалоба автора 10.2026: «не реагировала, пока не нажал галочку»).
-		return [{"s": "Ёж догнал! Дальше — жми:", "cap": false}, {"s": "↵", "cap": true}]
+		return [{"s": "Ёж догнал!", "cap": false}]
 	if state != "playing":
 		return []
 	if _caps_warn and _exact():
@@ -1902,36 +1903,8 @@ func _hint_parts() -> Array:
 	var cur := _current()
 	if cur == "":
 		return []
-	# Чужая раскладка: буква латиницей, а слой русский (и наоборот) —
-	# предупреждаем, как о CapsLock: иначе жмёшь не ту клавиатуру
-	# (требование автора 10.2026: взрослые тексты с латиницей).
-	if _is_latin(cur) and kb_lang != "en":
-		return [
-			{"s": "Жми:", "cap": false},
-			{"s": "EN", "cap": true},
-			{"s": "+", "cap": false},
-			{"s": cur, "cap": true},
-		]
-	if not _is_latin(cur) and kb_lang == "en":
-		return [
-			{"s": "Жми:", "cap": false},
-			{"s": "РУ", "cap": true},
-			{"s": "+", "cap": false},
-			{"s": cur, "cap": true},
-		]
-
-	# Знак без буквы: учим настоящему вводу — шифт с той клавиши, где
-	# он живёт (Shift+6 даёт «:», Shift+ю — точку). Обычные буквы
-	# проверять незачем: на буквенном слое они есть всегда.
-	if not Kbd.is_plain_letter(cur):
-		var combo := Kbd.combo_for(cur, kb_lang)
-		if not combo.is_empty() and bool(combo[1]):
-			return [
-				{"s": "Жми:", "cap": false},
-				{"s": "Shift", "cap": true},
-				{"s": "+", "cap": false},
-				{"s": String(combo[0]), "cap": true},
-			]
+	# Чужая раскладка и знаки со сдвигом зовут клавиши на самой доске
+	# (см. _hint_keys): текстовых «Жми» больше нет (автор 10.2026).
 	return []
 
 
@@ -2309,7 +2282,9 @@ func _keys_for(sym: String) -> Array:
 	if combo.is_empty():
 		return []
 	if String(combo[2]) != kb_lang:
-		return ["глобус"]
+		# Глобус плюс сама клавиша: после переключения та же доска
+		# подсветит уже только клавишу, путь не рвётся.
+		return ["глобус", String(combo[0])]
 	if bool(combo[1]):
 		return [_opp_shift(String(combo[0])), String(combo[0])]
 	return [String(combo[0])]

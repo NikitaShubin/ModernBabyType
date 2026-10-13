@@ -78,8 +78,34 @@ func _cell_ch(l: int, p: int) -> String:
 ## coords=true только там, где кадры реально идут: в сценариях без
 ## кадров заяц физически не успевает доехать до своей клетки, и это не
 ## дефект, а свойство сценария.
+## Курсор всегда стоит на букве (тот же инвариант, что в combo):
+## иначе подсветка висит между клетками (жалоба автора 10.2026).
+## Единственное исключение — ожидание переноса (курсор за концом строки
+## с флагом need_enter).
+func _cursor_valid(tag: String) -> void:
+	if _main.state != "playing":
+		return
+	var l := int(_main.cursor_line)
+	var p := int(_main.cursor_pos)
+	if l < 0 or l >= _main.display_lines.size():
+		_check(false, "%s: cursor line %d is outside the text" % [tag, l])
+		return
+	var line: String = _main.display_lines[l]
+	if bool(_main.need_enter):
+		_check(
+			p == line.length(),
+			"%s: waiting for enter but cursor %d:%d is not past the line end (%d)" % [tag, l, p, line.length()]
+		)
+	else:
+		_check(
+			p >= 0 and p < line.length(),
+			"%s: cursor %d:%d is not on a letter (line length %d)" % [tag, l, p, line.length()]
+		)
+
+
 func _invariants(tag: String, coords := false) -> void:
 	_drawn(tag)
+	_cursor_valid(tag)
 	if _main.state != "playing":
 		return
 	var l := int(_main.cursor_line)

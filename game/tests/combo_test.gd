@@ -181,8 +181,35 @@ func _drawed(tag: String) -> void:
 
 
 ## Общие инварианты: состояние обязано быть связным после ЛЮБОГО ввода.
+## Курсор всегда стоит на букве — иначе подсветка (маркер, заяц) висит
+## между клетками и захватывает края двух букв (жалоба автора 10.2026:
+## «при опечатке на энтере ... выделение попадает не на букву»).
+## Единственное законное исключение — ожидание переноса: курсор за концом
+## строки, но с флагом need_enter.
+func _cursor_valid(tag: String) -> void:
+	if _main.state != "playing":
+		return
+	var l := int(_main.cursor_line)
+	var p := int(_main.cursor_pos)
+	if l < 0 or l >= _main.display_lines.size():
+		_check(false, "%s: cursor line %d is outside the text" % [tag, l])
+		return
+	var line: String = _main.display_lines[l]
+	if bool(_main.need_enter):
+		_check(
+			p == line.length(),
+			"%s: waiting for enter but cursor %d:%d is not past the line end (%d)" % [tag, l, p, line.length()]
+		)
+	else:
+		_check(
+			p >= 0 and p < line.length(),
+			"%s: cursor %d:%d is not on a letter (line length %d)" % [tag, l, p, line.length()]
+		)
+
+
 func _common(tag: String) -> void:
 	_drawed(tag)
+	_cursor_valid(tag)
 	if _main.state != "playing":
 		return
 	_check(
@@ -1504,9 +1531,15 @@ func _case_sym_layer_hint() -> void:
 	if not need_shift:
 		_check(false, "%s: «%s» is not taught with Shift (%s)" % [tag, want, str(combo)])
 		return
-	var hint: String = _main._hint_text()
-	_check(hint.contains("Shift"), "%s: the hint does not teach Shift (%s)" % [tag, hint])
-	_check(hint.contains(digit), "%s: the hint does not name [%s] (%s)" % [tag, digit, hint])
+	# Текстовых «Жми» больше нет (автор 10.2026): учит сама доска —
+	# после паузы подсвечиваются шифт и цифра.
+	_main.idle_t = _main._hint_delay() + 0.5
+	var keys: Array = _main._hint_keys()
+	_check(keys.size() == 2, "%s: the board must name two keys, got %s" % [tag, str(keys)])
+	_check(
+		(String(keys[0]) == "Shift" or String(keys[0]) == "ShiftR") and String(keys[1]) == digit,
+		"%s: the board does not teach Shift+%s (%s)" % [tag, digit, str(keys)]
+	)
 	# Ввод по подсказке: шифт, потом цифра — знак принимается без меток,
 	# а слой не переключается (он для этого не нужен).
 	var btns := _kbd_buttons()

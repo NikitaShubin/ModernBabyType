@@ -206,6 +206,23 @@ func _process(_dt: float) -> bool:
 	_frame += 1
 
 	# --- Инвариант на КАЖДОМ кадре, независимо от сценария. -------------
+	# Курсор всегда стоит на букве (тот же инвариант, что в combo/marks):
+	# иначе подсветка висит между клетками (жалоба автора 10.2026).
+	# Исключение — ожидание переноса (курсор за концом строки).
+	if _main.state == "playing":
+		var cl := int(_main.cursor_line)
+		var cp := int(_main.cursor_pos)
+		if cl < 0 or cl >= _main.display_lines.size():
+			_failures.append("frame %d: cursor line %d is outside the text" % [_frame, cl])
+		else:
+			var cline: String = _main.display_lines[cl]
+			if bool(_main.need_enter):
+				if cp != cline.length():
+					_failures.append("frame %d: waiting for enter but cursor %d:%d is not past the line end (%d)"
+						% [_frame, cl, cp, cline.length()])
+			elif cp < 0 or cp >= cline.length():
+				_failures.append("frame %d: cursor %d:%d is not on a letter (line length %d)"
+					% [_frame, cl, cp, cline.length()])
 	if _main.state == "lost" and _main._last_reason == "behind":
 		# Укол состоялся. Проверяем его следствия, а не причину: причину
 		# решает игра, мы ловим нарушения правила.
