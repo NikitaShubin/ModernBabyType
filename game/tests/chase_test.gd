@@ -379,18 +379,18 @@ func _report() -> void:
 	print("CHASE_TEST: зазор на кадре укола: проверено=%d средний=%.2f px (0 = шары ровно касаются)"
 		% [_contact_checked, 0.0 if _touch_gap_n == 0 else _touch_gap_sum / float(_touch_gap_n)])
 	print("CHASE_TEST: откатов Backspace=%d" % _retreats)
-	# Покрытие: все три сценарии должны были отработать, иначе тест
-	# проходит вхолостую и ничего не проверяет. Порог уколов низкий (5):
-	# с медленным ежом органика догонов редкая и гуляет от прогона
-	# к прогону (15 против ≤10 на том же коде) — а основная ценность
-	# теста всё равно в инвариантах на КАЖДОМ кадре и в десятках
-	# угловых табло, а не в счётчике.
-	_check(_scenario_frames[0] > 200, "scenario hedge-behind-across-lines exercised")
-	_check(_scenario_frames[1] > 200, "scenario plain chase exercised")
-	_check(_scenario_frames[2] > 200, "scenario rollback-across-corner exercised")
-	_check(_contact_checked > 5, "contact distance checked on prick frames")
-	_check(_corner_checked > 10, "corner tableau checked (hare on hedge row, exactly at D)")
-	_check(_retreats > 20, "Backspace retreat exercised (not just error erasing)")
+	# Покрытие — только в цельном прогоне. В шарде (_of > 1) эпизодов в
+	# разы меньше, и полные пороги на нём краснели бы от недокорма, а не
+	# от дефекта (ловил слиянием: угловых табло ≤ 10 на 30 эпизодах).
+	# Суммы и те же пороги проверяет слияние в run_chase. Инварианты на
+	# каждом кадре и зачёт/незачёт держит каждый шард сам.
+	if _of == 1:
+		_check(_scenario_frames[0] > 200, "scenario hedge-behind-across-lines exercised")
+		_check(_scenario_frames[1] > 200, "scenario plain chase exercised")
+		_check(_scenario_frames[2] > 200, "scenario rollback-across-corner exercised")
+		_check(_contact_checked > 5, "contact distance checked on prick frames")
+		_check(_corner_checked > 10, "corner tableau checked (hare on hedge row, exactly at D)")
+		_check(_retreats > 20, "Backspace retreat exercised (not just error erasing)")
 	if _failures.is_empty():
 		print("CHASE_TEST: PASS")
 	else:

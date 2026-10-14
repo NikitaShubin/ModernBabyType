@@ -29,7 +29,24 @@ mkdir -p "$ROOT/tools/home" /tmp/opencode
 # поэтому правила не расходятся. Хвост вывода оставляем, чтобы в логе
 # было видно, какой образ и из чего получился; подробности сборки Godot
 # и apt при такой сборке всё равно кэшированные.
-docker build -t "$IMAGE" -f "$ROOT/tools/docker/Dockerfile" "$ROOT/tools/docker" 2>&1 | tail -n 4
+# Пересобираем, только если образ протух (нет вовсе или Dockerfile
+# новее): эквивалентно закэшированному build без --pull (base всё равно
+# брался бы из кэша), но работает и без сети — resolve метаданных
+# base-образа сеть требует всегда, даже когда менять нечего.
+need_build=1
+created="$(docker image inspect -f '{{.Created}}' "$IMAGE" 2>/dev/null || echo "")"
+if [ -n "$created" ]; then
+	created_epoch="$(date -d "$created" +%s 2>/dev/null || echo 0)"
+	docker_epoch="$(stat -c %Y "$ROOT/tools/docker/Dockerfile")"
+	if [ "$docker_epoch" -le "$created_epoch" ]; then
+		need_build=0
+	fi
+fi
+if [ "$need_build" -eq 1 ]; then
+	docker build -t "$IMAGE" -f "$ROOT/tools/docker/Dockerfile" "$ROOT/tools/docker" 2>&1 | tail -n 4
+else
+	echo "mbt-build: образ $IMAGE новее Dockerfile — сборку пропускаем"
+fi
 
 run_godot() {
 	# --timeout SECONDS перед остальными аргументами — потолок по
@@ -322,10 +339,12 @@ print("CHASE_TEST: откатов Backspace=%d" % tot["retreats"])
 if problems:
     seen = set()
     for f in problems:
-        key = f[:120]
+        # Строки шардов уже с префиксом — не дублировать.
+        text = f.split("CHASE_TEST: FAIL:", 1)[-1].strip()
+        key = text[:120]
         if key not in seen:
             seen.add(key)
-            print("CHASE_TEST: FAIL: ", f)
+            print("CHASE_TEST: FAIL:", text)
     sys.exit(1)
 print("CHASE_TEST: PASS")
 PYEOF_MERGE
