@@ -4,6 +4,7 @@
 # образе — в систему (/usr, apt) ничего не ставится.
 #
 #   tools/docker/build-game.sh --test-only   # импорт + все тесты
+#   tools/docker/build-game.sh --stress combo_test 6  # повторы для флаков
 #   tools/docker/build-game.sh --all         # тесты + экспорт 4 платформ
 #   tools/docker/build-game.sh --shot        # кадры анимации в /tmp/opencode
 #   tools/docker/build-game.sh --preset NAME # только экспорт одного пресета
@@ -184,16 +185,17 @@ ensure_android_build() {
 run_test() {
 	local script="$1"
 	local limit="${2:-600}"
+	local tag="${3:-}"
 	local base
 	base="$(basename "$script" .gd)"
-	local name="mbt-test-$base-$$"
-	local log="/tmp/opencode/$base.log"
+	local name="mbt-test-$base$tag-$$"
+	local log="/tmp/opencode/$base$tag.log"
 	: >"$log"
 	docker rm -f "$name" >/dev/null 2>&1 || true
 	MBT_CONTAINER_NAME="$name" \
-	MBT_HOME="/tmp/mbt-home-$base" \
-	MBT_XDG_CONFIG="/tmp/mbt-home-$base/.config" \
-	MBT_XDG_DATA="/tmp/mbt-home-$base/.local/share" \
+	MBT_HOME="/tmp/mbt-home-$base$tag" \
+	MBT_XDG_CONFIG="/tmp/mbt-home-$base$tag/.config" \
+	MBT_XDG_DATA="/tmp/mbt-home-$base$tag/.local/share" \
 	run_godot --headless --path game \
 		--script "res://tests/$script" >"$log" 2>&1 &
 	local pid=$!
@@ -254,6 +256,30 @@ run_chase_shard() {
 		--script res://tests/chase_test.gd -- --shard "$shard" --of "$of" >"$log" 2>&1 &
 	local pid=$!
 	_watch_docker "$name" "$log" "$limit" "$pid" || return 1
+}
+
+
+# Стресс: N полных копий одного теста параллельно — ловля флаков
+# вместо ручных циклов «запусти-посмотри». У каждой копии свои
+# контейнер, лог и дом. Зачёт: все копии зелёные.
+# Uso: build-game.sh --stress combo_test 6
+run_stress() {
+	local base="$1" count="${2:-4}" limit="${3:-600}"
+	local pids=() i failed=0
+	for i in $(seq 1 "$count"); do
+		run_test "$base.gd" "$limit" "-r$i" &
+		pids+=($!)
+	done
+	local pid
+	for pid in "${pids[@]}"; do
+		if ! wait "$pid"; then
+			failed=1
+		fi
+	done
+	if [ "$failed" -eq 0 ]; then
+		echo "СТРЕСС $base × $count: всё зелёное"
+	fi
+	return $failed
 }
 
 
@@ -593,6 +619,9 @@ case "$MODE" in
 	run_tests
 	run_exports
 	ls -la game/dist/
+	;;
+--stress)
+	run_stress "${2:?нужно имя теста}" "${3:-4}"
 	;;
 *)
 	echo "неизвестный режим: $MODE" >&2
