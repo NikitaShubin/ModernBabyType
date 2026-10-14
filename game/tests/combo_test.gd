@@ -171,6 +171,35 @@ func _ax() -> float:
 	return _main._lin(int(_main.cursor_line), float(_main.cursor_pos))
 
 
+## Клеточная мера курсора: видимые символы без съеденных на разрывах
+## пробелов. Точные шаги («откат ровно на 5», «стопка символ в символ») —
+## про клетки: _lin считает и съеденные пробелы, и шаг через перенос
+## в нём равен 2 (ось обязана их считать, иначе рвётся при пересборке —
+## см. _lin_stable). Для погони, диапазонов и долей — _ax/_lin.
+func _cax() -> float:
+	return _cx(int(_main.cursor_line), float(_main.cursor_pos))
+
+
+func _cx(l: int, p: float) -> float:
+	var acc := 0.0
+	for i in mini(l, _main.display_lines.size()):
+		acc += float(String(_main.display_lines[i]).length())
+	return acc + p
+
+
+## Поставить ежа на сквозное смещение по оси (строку и дробь считает
+## таблица, а не руки: смещение глобальное, а строка — нет; раньше база
+## строки прибавлялась дважды и ёж улетал за текст).
+func _enemy_at(ax: float) -> void:
+	var cell := B.cell_at(
+		_main.display_lines, _main.line_base, int(floor(ax)), _main.line_drops
+	)
+	var rows: int = _main.display_lines.size()
+	var l := clampi(cell.x, 0, maxi(0, rows - 1))
+	_main.enemy_line = l
+	_main.enemy_x = _main.margin + (ax - float(_main.line_base[l])) * _main.char_w
+
+
 ## Правило отрисовки (как в marks_test): заяц не выходит за полосу строк.
 func _drawed(tag: String) -> void:
 	var rows: int = _main.display_lines.size()
@@ -302,11 +331,12 @@ func _wrong() -> String:
 
 
 func _spots() -> Array[float]:
-	# Оси всех меток, по возрастанию — для проверки сплошности стопки.
+	# Клетки всех меток, по возрастанию — для проверки сплошности
+	# стопки в клетках (см. _cax).
 	var out: Array[float] = []
 	for k in _main.errors.keys():
 		var parts: PackedStringArray = String(k).split(":")
-		out.append(_main._lin(int(parts[0]), float(parts[1])))
+		out.append(_cx(int(parts[0]), float(parts[1])))
 	out.sort()
 	return out
 
@@ -373,7 +403,7 @@ func _case_ime_word() -> void:
 			"ime word: the restart did not reach a playable cell (coverage)"
 		)
 	var tag := "ime word"
-	var before := _ax()
+	var before := _cax()
 	# Пять РАЗНЫХ букв (пять одинаковых — машинный дубль, его фильтр
 	# DUP_MS глотает) и каждая не та, что ждёт игра: иначе «ошибка»
 	# окажется верной, меток выйдет меньше пяти, и сценарий валится в
@@ -394,8 +424,8 @@ func _case_ime_word() -> void:
 	_tick(tag)
 	_check(_main.errors.size() == 5, "%s: 5 soft mistakes gave %d marks" % [tag, _main.errors.size()])
 	_check(
-		absf(_ax() - (before - 5.0)) <= 0.001,
-		"%s: the hare retreated %.1f chars instead of 5" % [tag, before - _ax()]
+		absf(_cax() - (before - 5.0)) <= 0.001,
+		"%s: the hare retreated %.1f cells instead of 5" % [tag, before - _cax()]
 	)
 	_stack_is_solid(tag)
 	_common(tag)
@@ -499,14 +529,14 @@ func _case_error_storm() -> void:
 	_fresh(2, 1)
 	var tag := "error storm"
 	_check(_advance_to(0.55), "error storm: could not advance (coverage)")
-	var before := _ax()
+	var before := _cax()
 	for i in 20:
 		_main._type_char(_wrong())
 	_tick(tag)
 	_check(_main.errors.size() == 20, "%s: 20 mistakes gave %d marks" % [tag, _main.errors.size()])
 	_check(
-		absf(before - _ax() - 20.0) <= 0.001,
-		"%s: the storm moved the hare %.1f chars instead of 20" % [tag, before - _ax()]
+		absf(before - _cax() - 20.0) <= 0.001,
+		"%s: the storm moved the hare %.1f cells instead of 20" % [tag, before - _cax()]
 	)
 	_stack_is_solid(tag)
 	_finish_level(tag)
@@ -547,12 +577,12 @@ func _case_line_wrap() -> void:
 	for i in 5:
 		if _main._behind().x < 0:
 			break
-		var before := _ax()
+		var before := _cax()
 		_main._type_char(_wrong())
 		_tick(tag)
 		_check(
-			absf(before - _ax() - 1.0) <= 0.001,
-			"%s: across a line break the hare moved %.1f chars instead of 1" % [tag, before - _ax()]
+			absf(before - _cax() - 1.0) <= 0.001,
+			"%s: across a line break the hare moved %.1f cells instead of 1" % [tag, before - _cax()]
 		)
 		stepped += 1
 	_check(stepped >= 1, "%s: no retreat happened (coverage)" % tag)
@@ -654,6 +684,12 @@ func _case_wrap_waits_enter() -> void:
 	_main._backspace()
 	_tick(tag)
 	_check(not bool(_main.need_enter), "%s: backspace did not cancel the wrap" % tag)
+	# Откат встаёт НА стёртую клетку, а не висит за концом строки без
+	# ожидания (иначе курсор не на букве — ловил инвариант в хаосе).
+	_check(
+		int(_main.cursor_pos) == String(_main.display_lines[int(_main.cursor_line)]).length() - 1,
+		"%s: backspace left the cursor past the line end (%d:%d)" % [tag, int(_main.cursor_line), int(_main.cursor_pos)]
+	)
 	# ↵ после отката молчит: строка не кончилась.
 	var line_after := int(_main.cursor_line)
 	_main._own_press(_kbd_buttons()["↵"])
@@ -688,13 +724,33 @@ func _case_wrap_waits_enter() -> void:
 func _case_wrap_auto() -> void:
 	_fresh(1, 1)
 	var tag := "wrap auto"
-	# Первая строка — обычный перенос (в исходнике строки не было), вторая
-	# кончается переносом исходника, третья нужна затем, что последнюю
-	# строку уровень кончает сам, не спрашивая ↵.
+	# Первая строка кончается пробелом-КЛЕТКОЙ (в исходнике строки не
+	# было — обычный перенос), вторая кончается переносом исходника,
+	# третья нужна затем, что последнюю строку уровень кончает сам, не
+	# спрашивая ↵.
 	_set_level_text(
-		["Ёжик ел ёжика и ёл ёршик.", "Длинная строка.", "Финал."],
+		["Мама мыла ", "раму.", "Финал."],
 		[false, true, true]
 	)
+	# Все буквы открыты: считаем НАЖАТИЯ, а серый автопропуск проходит
+	# клетки молча (иначе +6 вместо +10 — ловил пробой).
+	_main.active.clear()
+	for _ln in ["Мама мыла ", "раму.", "Финал."]:
+		for _ii in String(_ln).length():
+			_main.active[String(_ln).substr(_ii, 1)] = true
+	# Пробел на переносе набирается, как в редакторе (автор 14.10.2026),
+	# и у него своя подсказка: половина пробела по руке.
+	_at(0, 9)
+	_main.press_ema = 0.6
+	_main.last_hand = ""
+	_main.idle_t = _main._hint_delay() + 0.5
+	_tick(tag)
+	_check(
+		_main._hint_keys() == ["пробел:П"],
+		"%s: the wrap space hints %s, expected the space half" % [tag, str(_main._hint_keys())]
+	)
+	_at(0, 0)
+	var spaces0: int = _main.typed_ok
 	var guard := 0
 	while int(_main.cursor_line) < 1 and _main.state == "playing" and guard < 200:
 		guard += 1
@@ -709,6 +765,10 @@ func _case_wrap_auto() -> void:
 			"%s: a soft break stopped the game on line %d" % [tag, int(_main.cursor_line)]
 		)
 	_check(int(_main.cursor_line) == 1, "%s: the soft break did not carry over (coverage)" % tag)
+	_check(
+		int(_main.typed_ok) == spaces0 + 10,
+		"%s: the wrap space was not counted (%d → %d)" % [tag, spaces0, _main.typed_ok]
+	)
 	# На жёстком переносе игра встаёт и ↵ на доске есть.
 	guard = 0
 	while int(_main.cursor_line) < 2 and _main.state == "playing" and guard < 200:
@@ -768,15 +828,15 @@ func _case_exact_case() -> void:
 				found = true
 				# Заяц ровно на этой заглавной букве.
 				_at(l, p)
-				var before := _ax()
+				var before := _cax()
 				# Строчная вместо заглавной — ошибка: метка и откат на символ.
 				_main._type_char(ch.to_lower())
 				_tick(tag)
 				var mk: String = _main._key(l, p)
 				_check(_main.errors.has(mk), "%s: a wrong case was accepted" % tag)
 				_check(
-					absf(before - _ax() - 1.0) <= 0.001,
-					"%s: the hare did not step back one symbol on a wrong case" % tag
+					absf(before - _cax() - 1.0) <= 0.001,
+					"%s: the hare did not step back one cell on a wrong case" % [tag, before - _cax()]
 				)
 				# Возвращаемся к отмеченной клетке: игра не должна её
 				# перешагнуть (она ждёт верной буквы).
@@ -1177,18 +1237,62 @@ func _case_relayout() -> void:
 	_check(_advance_to(0.3), "%s: could not advance (coverage)" % tag)
 	_main.grace_t = 0.0
 	_main.hedge_active = true
+	# Темп ежа — базовый, а не накопленный прошлыми сценариями: иначе он
+	# догоняет зайца за сорок кадров замера и сценарий меряет табло
+	# укола вместо живой погони.
+	_main.enemy_cps = B.BASE_CPS
+	# Ёж на 6 клеток позади зайца: погоня идёт, укола нет.
+	# Ежа — в ТУ ЖЕ строку, клетками назад по строке: зазор меряется
+	# иксами, а иксы осмысленны только в одной строке (соседняя строка —
+	# другой y и свой отсчёт; было: ёж строкой раньше, зазор -15).
+	# Курсор отгоняем на 6+ клеток вглубь строки, чтобы влезть.
+	var push := 0
+	while int(_main.cursor_pos) < 6 and _main.state == "playing" and push < 200:
+		push += 1
+		var adv: String = _main._current()
+		if adv == "":
+			if _main.need_enter:
+				_hard("\r", KEY_ENTER)
+				_tick(tag)
+				continue
+			break
+		_main._type_char(adv)
+		_tick(tag)
+	_check(
+		int(_main.cursor_pos) >= 6 and _main.state == "playing",
+		"%s: no room for the hedgehog on the row (coverage)" % tag
+	)
 	_main.enemy_line = int(_main.cursor_line)
-	# Ставим ёжа на расстоянии 6 глифов позади: погоня идёт.
-	_main.enemy_x = _main.margin + (_ax() - 6.0) * _main.char_w
+	_main.enemy_x = _main.margin + (float(_main.cursor_pos) - 6.0) * _main.char_w
 	for i in 20:
 		_main._process(DT)
+	_check(_main.state == "playing", "%s: the chase ended before the relayout" % tag)
+	var e_before: float = _main._lin(int(_main.enemy_line), (_main.enemy_x - _main.margin) / _main.char_w)
 	var d_before := _screen_gap()
 	var cw_before: float = _main.char_w
 	# Ужимаем окно: k, char_w и поля меняются — это и есть перераскладка.
+	# Герой долетает до новой клетки не мгновенно, а лерпом: меряем
+	# устоявшуюся геометрию погони, а не кадр перелёта (иначе замер
+	# ловит середину прыжка при каждой смене строк курсором).
 	DisplayServer.window_set_size(Vector2i(520, 900))
 	root.size = Vector2i(520, 900)
 	_main._relayout()
-	_tick(tag)
+	# Герой долетает не мгновенно: меряем устоявшуюся геометрию, а не
+	# кадр перелёта. Если за 60 кадров не долетел — это и есть падение,
+	# с понятным текстом, а не криптозагадкой про зазор.
+	for _i in 60:
+		_tick(tag)
+	_check(
+		absf(_main.hero_r.x - _main._hero_pos().x) < _main.char_w,
+		"%s: the hare did not settle after relayout (off by %.1f px)" % [tag, absf(_main.hero_r.x - _main._hero_pos().x)]
+	)
+	# Ось ежа тоже обязана уцелеть (ехал вместе с текстом, см.
+	# _remap_enemy): допуск с запасом на его ход за сорок кадров.
+	var e_after: float = _main._lin(int(_main.enemy_line), (_main.enemy_x - _main.margin) / _main.char_w)
+	_check(
+		absf(e_after - e_before) <= 3.0,
+		"%s: the hedgehog lost its place (%.1f → %.1f)" % [tag, e_before, e_after]
+	)
 	_check(
 		_main.char_w != cw_before,
 		"%s: the relayout did not change the glyph width" % tag
@@ -1201,8 +1305,14 @@ func _case_relayout() -> void:
 	)
 	# Возвращаем окно и проверяем ещё раз: туда-обратно без разрыва.
 	DisplayServer.window_set_size(Vector2i(820, 1180))
+	root.size = Vector2i(820, 1180)
 	_main._relayout()
-	_tick(tag)
+	for _i in 60:
+		_tick(tag)
+	_check(
+		absf(_main.hero_r.x - _main._hero_pos().x) < _main.char_w,
+		"%s: the hare did not settle after relayout back (off by %.1f px)" % [tag, absf(_main.hero_r.x - _main._hero_pos().x)]
+	)
 	_check(
 		absf(_screen_gap() - d_before) < 1.5,
 		"%s: the chase broke after the relayout back (gap %.1f → %.1f)"
@@ -1516,8 +1626,7 @@ func _case_broken_profile() -> void:
 	_check(not _main.display_lines.is_empty(), "%s: the level is empty" % tag)
 	_main.hedge_active = true
 	_main.grace_t = 0.0
-	_main.enemy_line = int(_main.cursor_line)
-	_main.enemy_x = _main.margin + (_main._lin(int(_main.cursor_line), 0.0) - 4.0) * _main.char_w
+	_enemy_at(_main._lin(int(_main.cursor_line), 0.0) - 4.0)
 	_main._process(_main.MAX_FRAME_DT)
 	_check(
 		_main.state == "playing",
@@ -1767,6 +1876,10 @@ func _set_level_text(lines: Array, hard := []) -> void:
 	for i in typed.size():
 		flags.append(true if hard.is_empty() else (i < hard.size() and bool(hard[i])))
 	_main.line_hard = flags
+	var glue: Array[bool] = []
+	for i in typed.size():
+		glue.append(false)
+	_main.line_glue = glue
 	_main.line_drops = []
 	_main._reindex_lines()
 	# Набор букв — штатный для этой сложности (не «все буквы текста»):

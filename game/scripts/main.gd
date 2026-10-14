@@ -106,11 +106,15 @@ var time := 0.0
 var chomp_t := 0.0
 var bounce_t := 0.0
 
-## Построчных лейблов с запасом: строк после вёрстки под узкий экран
-## бывает до 15 (chunk 6 × перенос 2–3), а лишние строки просто
-## не рисовались — «последние строки пусты» (жалоба 10.2026).
-const MAX_TEXT_LABELS := 16
-var text_labels: Array[RichTextLabel] = []
+## Строки, показанные на экране последним _refresh (для тестов: что
+## нарисовано, то и лежит в display_lines — сверка без чтения пикселей).
+var shown_rows: Array[String] = []
+## Видимое окно скролла (считает _layout_text_lines): первая строка и
+## сколько видно. Рисуем и проверяем только их.
+var vis_first := 0
+var vis_count := 3
+## Видимость игрового слоя (меню-вуаль): текст рисуется только своим.
+var play_ui := true
 var hud_label: Label
 var overlay_label: Label
 var show_dbg := false
@@ -171,6 +175,10 @@ var need_enter := false
 ## Массив параллелен display_lines, при пересборке строк едет вместе с
 ## ними (см. _reflow_text).
 var line_hard: Array[bool] = []
+## Склейка строк при пересборке: строка продолжается предыдущую БЕЗ
+## пробела (кусок разрезанного посередине слова). Параллелен
+## display_lines, едет вместе с ним (см. _reflow_text и B.fit_marked).
+var line_glue: Array[bool] = []
 var kb_press := ""
 var kb_press_t := 0.0
 ## Оттенок вспышки: верный ввод — зелёный, опечатка — красная
@@ -303,18 +311,7 @@ func _ready() -> void:
 		fallback.font_names = PackedStringArray(["monospace"])
 		mono = fallback
 
-	for i in MAX_TEXT_LABELS:
-		var tl := RichTextLabel.new()
-		tl.bbcode_enabled = true
-		tl.autowrap_mode = TextServer.AUTOWRAP_OFF
-		tl.scroll_active = false
-		tl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		# Текст — на заднем плане: герои рисуются поверх букв.
-		tl.z_index = -10
-		tl.add_theme_font_override("normal_font", mono)
-		tl.visible = false
-		add_child(tl)
-		text_labels.append(tl)
+
 
 	# Табло-дебаг (F3): в обычной игре пусто и скрыто, пилюля видна
 	# только с техническими цифрами. clip_text обязателен: без него
@@ -336,9 +333,9 @@ func _ready() -> void:
 	add_child(overlay_label)
 
 	# Оформление — отдельными узлами позади текста (z_index = -15):
-	# сами буквы живут в text_labels (z_index = -10), а _draw() рисует
-	# поверх них (z_index = 0), так что панели из _draw() текст бы
-	# перекрыли. Геометрию панелей считает _layout_card().
+	# сами буквы рисует _draw_rows() первым делом в _draw(), а маркер,
+	# герои и панели — после, поверх букв. Геометрию панелей считает
+	# _layout_card().
 	card_sb = Ui.panel_sb(Ui.CARD_DAY, 20.0, Color("#e0d5bd"), 2.0, true)
 	pill_sb = Ui.panel_sb(Color(1, 1, 1, 0.72), 14.0, Color("#e0d5bd"), 1.5, false)
 	over_sb = Ui.panel_sb(Color(0, 0, 0, 0), 22.0)
@@ -418,11 +415,9 @@ func _apply_night() -> void:
 		kb_press_ok_sb.border_color = Color("#9ad08c")
 		kb_press_err_sb.bg_color = Color("#7a2f28")
 		kb_press_err_sb.border_color = Color("#ff9a90")
-		# Ночью буквы светлые, а заяц и ёж — белые спрайты: без контура
-		# буква, попавшая на спрайт, терялась (видел на эмуляторе).
-		for tl in text_labels:
-			tl.add_theme_constant_override("outline_size", maxi(2, int(3.0 * k)))
-			tl.add_theme_color_override("font_outline_color", Color("#141a2c"))
+		# Ночью буквы светлые, а заяц и ёж — белые спрайты: контур
+		# рисует _draw_rows (без него буква на спрайте терялась —
+		# видел на эмуляторе).
 	else:
 		card_sb.bg_color = Ui.CARD_DAY
 		card_sb.border_color = Color("#e0d5bd")
@@ -446,8 +441,6 @@ func _apply_night() -> void:
 		kb_press_err_sb.border_color = Color("#8e2f26")
 		kb_on_sb.border_color = Color("#4a4438")
 		# Днём буквы тёмные на светлой карточке — контур не нужен.
-		for tl in text_labels:
-			tl.add_theme_constant_override("outline_size", 0)
 	if meadow != null:
 		meadow.night = night
 		meadow._apply_sky()
@@ -496,29 +489,32 @@ func _cmdline_mode() -> void:
 			Ui.force_touch = true
 
 
-## Уместить строки уровня в ширину экрана. На широких экранах и в
-## тестах (1100) все строки короче лимита — возвращается как было.
-## Порог 36 — между телефоном (~25) и десктопом (~39): десктопную
-## вёрстку не трогаем вообще.
+## Уместить строки уровня в ширину экрана — на ЛЮБОЙ ширине, иначе
+## длинная строка вылезает за карточку и её хвоста не видно (жалоба
+## автора 13.10.2026). Предложения внутри абзаца склеиваются в сплошной
+## текст (как в Word), абзац режется по словам; ждёт ↵ только конец
+## абзаца. Сколько знаков влезает — считает _max_chars, проверка — числом,
+## а не глазом (см. _text_geometry в logic_test).
 func _fit_to_width(frag: Dictionary) -> Dictionary:
 	# Headless-тесты и самое начало жизни сцены: вьюпорта ещё нет
-	# (64px или нули) — считаем широким экраном и не режем. Алгоритм
-	# покрыт чистыми тестами fit_lines, интеграция тривиальна.
+	# (64px или нули) — резать не на что, отдаём предложения как есть.
+	# Алгоритм покрыт чистыми тестами fit_lines, интеграция тривиальна.
 	var raw: Array[String] = []
 	for t in frag["texts"] as Array:
 		raw.append(String(t))
-	if view_w < 100.0 or _max_chars() >= 36:
-		# Широкий экран: предложение — строка. Разрывы между ними всё
-		# равно съедают по пробелу, иначе логическая ось разошлась бы с
-		# пересобранной вёрсткой на узком экране.
-		return {
-			"lines": raw, "drops": frag["drops"] as Array[int], "hard": frag["hard"] as Array,
-		}
+	if view_w < 100.0:
+		var plain: Array[bool] = []
+		for f in frag["hard"] as Array:
+			plain.append(bool(f))
+		var noglue: Array[bool] = []
+		for _t in raw:
+			noglue.append(false)
+		return {"lines": raw, "drops": [] as Array[int], "hard": plain, "glue": noglue}
 	var m := B.fit_marked(raw, _max_chars(), frag["hard"] as Array)
 	var out: Array[String] = []
 	for piece in m["lines"]:
 		out.append(String(piece))
-	return {"lines": out, "drops": m["drops"], "hard": m["hard"]}
+	return {"lines": out, "drops": m["drops"], "hard": m["hard"], "glue": m["glue"]}
 
 
 ## Сколько знаков влезает в строку. Один счёт для всех: и разбивки
@@ -535,11 +531,12 @@ func _max_chars() -> int:
 ## Пересобираем строки и переносим курсор, «пройдено» и красные метки
 ## по логической оси текста (без пробелов на местах разрыва, см.
 ## B.reflow): заяц остаётся на той же букве.
-func _reflow_text() -> void:
+func _reflow_text(pe := 0.0, pe_valid := false) -> void:
 	if display_lines.is_empty():
 		return
 	var rf: Dictionary = B.reflow(
-		display_lines, cursor_line, cursor_pos, _max_chars(), line_drops, line_hard
+		display_lines, cursor_line, cursor_pos, _max_chars(),
+		line_drops, line_hard, line_glue
 	)
 	var fresh: Array = rf["lines"]
 	if fresh == display_lines:
@@ -559,10 +556,19 @@ func _reflow_text() -> void:
 	for flag in rf["hard"] as Array:
 		hard.append(bool(flag))
 	line_hard = hard
+	var glue: Array[bool] = []
+	for flag in rf["glue"] as Array:
+		glue.append(bool(flag))
+	line_glue = glue
 	_refresh_home_chars()
 	cursor_line = int(rf["line"])
 	cursor_pos = int(rf["pos"])
 	_reindex_lines()
+	# Ёж едет вместе с текстом: сохраняем его сквозное смещение (вместе
+	# с туннелями) и кладём на те же буквы в новой сборке. Экранную
+	# позицию _relayout уже пресёк по символам; здесь правим строку.
+	if pe_valid and hedge_active and state == "playing":
+		_remap_enemy(pe, table)
 	# Ремап — по СТАРЫМ drops (они ещё в line_drops), и только потом
 	# кладём новые: иначе смещения считаются не в том пространстве.
 	_remap_cells(passed, table, rf)
@@ -587,13 +593,13 @@ func _reflow_text() -> void:
 
 ## Пересчитать смещения строк и длину уровня после сборки строк.
 func _reindex_lines() -> void:
-	line_base = B.line_bases(display_lines)
+	# Ось — со съеденными пробелами (см. B.line_bases): иначе буква едет
+	# по оси при каждой пересборке строк. А длина уровня — в клетках:
+	# съеденные пробелы никто не набирает, в прогрессе им не место.
+	line_base = B.line_bases(display_lines, line_drops)
 	level_total = 0
-	if not line_base.is_empty():
-		level_total = (
-			int(line_base[line_base.size() - 1])
-			+ display_lines[display_lines.size() - 1].length()
-		)
+	for ln in display_lines:
+		level_total += String(ln).length()
 
 
 ## Перенести отметки «пройдено»/«ошибка» на те же буквы после пересборки
@@ -601,6 +607,24 @@ func _reindex_lines() -> void:
 ## переводит логическое смещение старой сборки в клетку новой, и обе
 ## стороны — в пространстве «все пробелы» (см. B.reflow): старые drops
 ## берём из line_drops на момент вызова (до замены строк).
+## Перенести ежа на то же место текста после пересборки строк.
+## pe — сквозное смещение ежа в старой сборке (с туннелями до/после
+## строки). Дробная часть (положение между клетками) сохраняется.
+func _remap_enemy(pe: float, table: Dictionary) -> void:
+	if display_lines.is_empty():
+		return
+	var rows := display_lines.size()
+	if pe < 0.0:
+		# Предтуннель первой строки: строка та же, смещение то же.
+		enemy_line = 0
+		enemy_x = margin + pe * char_w
+		return
+	var cell := B.cell_for(table, int(floor(pe)), Vector2i(rows, 0))
+	var l := clampi(cell.x, 0, rows - 1)
+	enemy_line = l
+	enemy_x = margin + (pe - float(line_base[l])) * char_w
+
+
 func _remap_cells(src: Dictionary, table: Dictionary, rf: Dictionary) -> void:
 	if src.is_empty():
 		return
@@ -619,7 +643,9 @@ func _remap_cells(src: Dictionary, table: Dictionary, rf: Dictionary) -> void:
 			off += int(old_drops[li])
 		for i in li:
 			off += String(old_lines[i]).length()
-		var c: Vector2i = table.get(off, Vector2i(-1, -1))
+		# Съеденный пробел — на начало следующей строки (см.
+		# B.cell_for): метка переезжает, а не исчезает.
+		var c: Vector2i = B.cell_for(table, off, Vector2i(-1, -1))
 		if c.x >= 0:
 			out["%d:%d" % [c.x, c.y]] = src[k]
 	src.clear()
@@ -697,8 +723,7 @@ func _close_menu() -> void:
 func _set_play_ui(on: bool) -> void:
 	_layout_text_lines()
 	_refresh_hud()
-	for tl in text_labels:
-		tl.visible = on and tl.visible
+	play_ui = on
 	card_p.visible = on and not display_lines.is_empty()
 	hud_label.visible = on
 	hud_p.visible = on
@@ -738,6 +763,15 @@ func _relayout() -> void:
 	# (см. _lin): визуально он стоит.
 	var old_margin := margin
 	var old_cw := char_w
+	# Сквозное смещение ежа по оси текста (вместе с туннелями до/после
+	# строки): после пересборки строк его клетка едет через таблицу, как
+	# курсор и метки, — иначе строка ежа протухает и правило укола
+	# считает по чужой строке (ловил _case_relayout).
+	var pe_old := 0.0
+	var pe_valid := false
+	if state == "playing" and hedge_active and enemy_line < line_base.size():
+		pe_old = float(line_base[enemy_line]) + (enemy_x - margin) / maxf(old_cw, 0.01)
+		pe_valid = true
 	var base_w := BASE_W
 	if view_h > view_w:
 		base_w = 560.0
@@ -750,7 +784,17 @@ func _relayout() -> void:
 	if view_w < 700.0:
 		margin = view_w * 0.08
 	text_y = 80.0 * k + top_safe
-	char_w = mono.get_string_size("н", HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size).x
+	# Шаг клетки — предельный advance в строке, а не одиночный замер:
+	# одиночный глиф шейпер округляет наружу (+1 px), и сумма одиночных
+	# расходится с целым на ~пиксель/знак с накоплением к концу строки
+	# (замерено: 720 против 687 на 60 знаках; жалоба автора 13.10.2026
+	# «накопление ошибки в сдвиге курсора»). Все координаты букв — от
+	# этого числа: маркер, заяц и отрисовка считают одно и то же.
+	var probe: float = mono.get_string_size(
+		"н".repeat(64), HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size
+	).x
+	var one: float = mono.get_string_size("н", HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size).x
+	char_w = maxf(1.0, (probe - one) / 63.0)
 	if old_cw > 0.0 and char_w > 0.0:
 		# Метрики букв поменялись (поворот, системная клавиатура выехала
 		# или спряталась, узкое окно) — пересчитываем ОБОИХ героев в тех
@@ -766,13 +810,9 @@ func _relayout() -> void:
 	# Текст при этом никогда не сдвигается.
 	sep_h = mono.get_height(font_size)
 	line_h = mono.get_height(font_size) + sep_h
-	for tl in text_labels:
-		tl.position = Vector2(margin, text_y)
-		tl.size = Vector2(view_w - margin * 2.0, line_h + 8.0 * k)
-		tl.add_theme_font_size_override("normal_font_size", font_size)
 	# Метрики букв поменялись — строки могут перестать влезать, а на
 	# ходу уровня их пересобирает _reflow_text (зайца не сбивает).
-	_reflow_text()
+	_reflow_text(pe_old, pe_valid)
 	_layout_text_lines()
 	# Табло-дебаг якорится к низу ЭФФЕКТИВНОЙ области: иначе
 	# клавиатура его перекрывает. В обычной игре оно скрыто.
@@ -837,6 +877,8 @@ func _layout_text_lines() -> void:
 	var vis := _vis_lines()
 	var first := clampi(cursor_line - vis + 1, 0, maxi(0, display_lines.size() - vis))
 	scroll_y = float(first) * line_h
+	vis_first = first
+	vis_count = vis
 	# Модалка победы/поражения — под карточкой, а не поверх букв.
 	# Не шире экрана, шрифт под ширину (на телефоне 980px не влезают).
 	var ow := minf(980.0 * k, view_w - 32.0 * k)
@@ -851,12 +893,8 @@ func _layout_text_lines() -> void:
 	over_p.position = overlay_label.position + Vector2(-24.0 * k, -16.0 * k)
 	over_p.size = overlay_label.size + Vector2(48.0 * k, 32.0 * k)
 	over_p.visible = overlay_label.visible
-	for i in text_labels.size():
-		if i < display_lines.size() and i >= first and i < first + vis:
-			text_labels[i].position = Vector2(margin, _line_y(i))
-			text_labels[i].visible = true
-		else:
-			text_labels[i].visible = false
+	# Буквы рисует _draw_rows по display_lines (каждая в своей клетке
+	# pos × char_w): видимость — то же окно, что и скролл.
 
 
 ## Карточка под текстом: собирает буквы в одно «поле для чтения», чтобы
@@ -936,6 +974,10 @@ func _new_level() -> void:
 	for flag in fit["hard"] as Array:
 		hard.append(bool(flag))
 	line_hard = hard
+	var glue: Array[bool] = []
+	for flag in fit["glue"] as Array:
+		glue.append(bool(flag))
+	line_glue = glue
 	_refresh_home_chars()
 	# Клавиатуру пере-поднимаем: если уровень начат нажатием клавиши,
 	# сессия IME рвётся и буквы уходят в никуда (жалоба автора 10.2026:
@@ -985,10 +1027,15 @@ func _new_level() -> void:
 	fw_cd = 0.0
 	scroll_y = 0.0
 	_skip_inactive()
-	hero_r = _hero_pos()
 	shake_t = 0.0
 	lunge_t = 0.0
 	_refresh()
+	# Заяц встаёт ПОСЛЕ раскладки скролла под курсор: _hero_pos считается
+	# от scroll_y, а курсор после серого автопропуска глубоко в тексте.
+	# Раньше заяц вставал до скролла (на сотни px мимо уровня) и долетал
+	# десять кадров — проверки кадра это ловили, а в живой игре было видно
+	# подлёт зайца в начале каждого уровня с серым началом.
+	hero_r = _hero_pos()
 
 
 func _current() -> String:
@@ -1453,8 +1500,25 @@ func _backspace() -> void:
 		# Стояли на конце строки. Стерли последнюю букву — перенос ждать
 		# уже нечего: строка не кончилась, и лишний ↵ уводил бы дальше
 		# мимо набранного (автор 10.2026: ждать надо ровно того, что
-		# пользователь ещё не сделал).
+		# пользователь ещё не сделал). Курсор встаёт НА стёртую клетку
+		# (а не висит за концом строки без ожидания — так ловил инвариант
+		# «курсор всегда на букве»), клетка возвращается целиком, как при
+		# обычном откате; счётчики не трогаем (нажатия были).
 		need_enter = false
+		if cursor_line >= display_lines.size():
+			# Пересборка строк выкинула курсор за текст (редкий стык
+			# ожидания и поворота): ждать нечего, уровень доиграется сам.
+			_mark_press()
+			_refresh()
+			return
+		cursor_pos = maxi(0, display_lines[cursor_line].length() - 1)
+		var bk := _key(cursor_line, cursor_pos)
+		passed.erase(bk)
+		errors.erase(bk)
+		typed_cells.erase(bk)
+		_mark_press()
+		_refresh()
+		return
 	_mark_press()
 	var k := _key(cursor_line, cursor_pos)
 	if errors.has(k):
@@ -1867,54 +1931,54 @@ func _process(dt: float) -> void:
 
 ## Все буквы — одно начертание и кегль. Состояние только оттенком:
 ## активная — чернила, будущая — средний серый, пройденная — светлый.
+## Знак, нарисованный в клетке: обычно буква строки, а на красной
+## метке — нажатая буква (ошибочный пробел виден как ␣). Тот же выбор,
+## что рисует _draw_rows; тесты сверяют по нему без чтения пикселей.
+func _shown_char(l: int, p: int) -> String:
+	var line := String(display_lines[l])
+	var ch := line.substr(p, 1)
+	var kk := _key(l, p)
+	if errors.has(kk):
+		# Затирание, а не вставка: красная нажатая буква ВМЕСТО буквы в
+		# клетке. Красные копятся назад по ходу отката.
+		var shown: String = errors[kk]
+		if shown == " ":
+			return "␣"
+		return shown
+	return ch
+
+
+## Цвет знака в клетке для отрисовки (тот же, что смотрит тест).
+func _shown_color(l: int, p: int) -> Color:
+	var line := String(display_lines[l])
+	var ch := line.substr(p, 1)
+	var kk := _key(l, p)
+	if errors.has(kk):
+		var ecol := Ui.ERR_NIGHT_HEX if night else Ui.ERR_DAY_HEX
+		if hints.has(kk):
+			ecol = Ui.HINT_NIGHT_HEX if night else Ui.HINT_DAY_HEX
+		return Color(ecol)
+	return Color(_cell_color(l, p, ch, kk))
+
+
+## Видна ли строка в окне скролла (тот же порог, что у отрисовки).
+func _row_visible(i: int) -> bool:
+	return i < display_lines.size() and i >= vis_first and i < vis_first + vis_count
+
+
 func _refresh() -> void:
-	# Гасим все строки разом: иначе при переносе старый текст остаётся
-	# на старых позициях, пока новый уже нарисован (жалоба автора
-	# 10.2026 про «старое не стирается, новое поверх»). Перерисовка
-	# должна быть атомарной в пределах кадра, а не «когда получится».
-	for tl in text_labels:
-		tl.visible = false
-		tl.text = ""
-	for l in display_lines.size():
-		if l >= text_labels.size():
-			break
-		var line := display_lines[l]
-		var out := ""
-		for p in line.length():
-			var ch := line.substr(p, 1)
-			var esc := ch
-			if ch == "[":
-				esc = "[lb]"
-			elif ch == "]":
-				esc = "[rb]"
-			var kk := _key(l, p)
-			if errors.has(kk):
-				# Затирание, а не вставка: красная нажатая буква ВМЕСТО
-				# буквы в клетке. Красные копятся назад по ходу отката.
-				# Нажатый по ошибке пробел невидим — показываем знак ␣.
-				var shown: String = errors[kk]
-				if shown == " ":
-					shown = "␣"
-				elif shown == "[":
-					shown = "[lb]"
-				elif shown == "]":
-					shown = "[rb]"
-				var ecol := Ui.ERR_NIGHT_HEX if night else Ui.ERR_DAY_HEX
-				if hints.has(kk):
-					ecol = Ui.HINT_NIGHT_HEX if night else Ui.HINT_DAY_HEX
-				out += "[color=" + ecol + "]" + shown + "[/color]"
-				continue
-			# Пройденное (съеденное или пропущенное) — серым.
-			var col := _cell_color(l, p, ch, kk)
-			out += "[color=" + col + "]" + esc + "[/color]"
-		text_labels[l].text = out
-		text_labels[l].visible = true
-	# Позиции и видимость окна скролла — сразу здесь же, тем же проходом:
-	# иначе между _refresh и _layout_text_lines кадр показывает старые
-	# строки на новых местах.
+	# Снимок показанного: рисование идёт следующим кадром из тех же
+	# display_lines, так что экран и модель — одно и то же (раньше тут
+	# жили построчные RichText-лейблы со своим шейпингом — второй путь
+	# измерения координат, дававший накопление ошибки к концу строки).
+	shown_rows.clear()
+	for line in display_lines:
+		shown_rows.append(String(line))
+	# Окно скролла — сразу здесь же, тем же проходом: иначе между
+	# _refresh и _layout_text_lines кадр показывает старые строки на
+	# новых местах (жалоба автора 10.2026 про «старое не стирается»).
 	_layout_text_lines()
-	for i in range(display_lines.size(), text_labels.size()):
-		text_labels[i].visible = false
+	queue_redraw()
 
 
 ## Цвет буквы в клетке. Отдельной функцией, а не инлайном: на этом цвете
@@ -2245,26 +2309,20 @@ func _settle_contact(row: int) -> void:
 	hop_ph = roundf(hop_ph / PI) * PI
 
 
-## Экранный центр глифа под курсором: ширина — по реальной ширине уже
-## пройденного куска строки тем же шрифтом, а не номер × char_w. Тогда
-## маркер и заяц стоят ровно на букве даже при подменах шрифтов.
-## Со своим моноширинным шрифтом совпадает с pos × char_w в точности.
+## Левая граница клетки: ЕДИНСТВЕННАЯ формула координат (маркер, заяц,
+## отрисовка букв — все отсюда). Шаг — char_w (предельный advance, см.
+## _relayout): никаких замеров префиксов целой строкой — целый замер
+## округляется иначе, чем сумма клеток, и даёт накопление к концу строки.
+func _cell_x(p: int) -> float:
+	return margin + float(p) * char_w
+
+
+## Экранный центр глифа под курсором: клетка курсора, других способов
+## узнать «где буква» нет (см. _cell_x).
 func _cursor_cx() -> float:
 	if cursor_line >= display_lines.size():
 		return margin
-	var line := display_lines[cursor_line]
-	var pre := mono.get_string_size(
-		line.left(cursor_pos), HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size
-	).x
-	return margin + pre + _glyph_w(line) * 0.5
-
-
-## Ширина глифа под курсором (для центра и рамки маркера).
-func _glyph_w(line: String) -> float:
-	var ch := " "
-	if cursor_pos < line.length():
-		ch = line.substr(cursor_pos, 1)
-	return mono.get_string_size(ch, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size).x
+	return _cell_x(cursor_pos) + char_w * 0.5
 
 
 func _hero_pos() -> Vector2:
@@ -2281,10 +2339,7 @@ func _hero_pos() -> Vector2:
 	# стоит там, где закончил: последняя строка, сразу за её концом.
 	var rows: int = display_lines.size()
 	if cursor_line >= rows and rows > 0:
-		var last: String = display_lines[rows - 1]
-		var end_x: float = margin + mono.get_string_size(
-			last, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size
-		).x
+		var end_x: float = margin + float(String(display_lines[rows - 1]).length()) * char_w
 		return Vector2(end_x + half, _track_cy(rows - 1) + bounce)
 	var row: int = clampi(cursor_line, 0, maxi(0, rows - 1))
 	return Vector2(_cursor_cx() - char_w * 0.5 - half, _track_cy(row) + bounce)
@@ -2297,6 +2352,7 @@ func _draw() -> void:
 	# Исключение — текст, табло, подсказка и сами герои: сквозь вуаль
 	# меню они налезали на его подписи («Кто играет?» поверх «Сом уснул
 	# на», ночью особенно). Фон-небо остаётся: видно, что это пауза.
+	_draw_rows()
 	if state == "won" or state == "lost":
 		var dim := Color(1, 1, 1, 0.55) if not night else Color(0.05, 0.07, 0.12, 0.60)
 		draw_rect(Rect2(Vector2.ZERO, Vector2(view_w, view_h)), dim)
@@ -2878,22 +2934,55 @@ func _draw_progress() -> void:
 	)
 
 
-## Маркер текущей буквы: рамка ровно по глифу (та же ширина, что в
-## _cursor_cx), курсор всегда видно, даже после отката через строки.
-func _draw_cursor_marker() -> void:
+## Рамка маркера текущей буквы: ровно по глифу (та же ширина, что в
+## _cursor_cx), внутри своей строки и карточки — иначе выделитель
+## «захватывает конец одной строки и начало другой» (жалоба автора
+## 13.10.2026). Отдельная функция, а не код внутри _draw: геометрия
+## проверяется числом, а не глазом (см. _text_geometry в logic_test).
+func _cursor_rect() -> Rect2:
 	if state != "playing" or cursor_line >= display_lines.size():
-		return
+		return Rect2()
+	if cursor_pos < 0:
+		return Rect2()
 	var line := display_lines[cursor_line]
-	var pre := mono.get_string_size(
-		line.left(cursor_pos), HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size
-	).x
-	var w := _glyph_w(line)
-	var gx := margin + pre
-	var gy := _line_y(cursor_line)
-	draw_style_box(
-		cursor_sb,
-		Rect2(gx - 2.0 * k, gy, w + 4.0 * k, mono.get_height(font_size))
+	if cursor_pos > line.length():
+		return Rect2()
+	return Rect2(
+		_cell_x(cursor_pos) - 2.0 * k, _line_y(cursor_line),
+		char_w + 4.0 * k, mono.get_height(font_size)
 	)
+
+
+## Строки текста: каждая буква — в своей клетке (_cell_x), тем же
+## шрифтом и кеглем, что считает вёрстка. Никаких построчных лейблов со
+## своим шейпингом: второй путь измерения координат давал накопление
+## ошибки маркера к концу строки (замерено: 720 против 687 на 60 знаках).
+## Ночью — с контуром (как раньше у лейблов): без него буква на белом
+## спрайте терялась.
+func _draw_rows() -> void:
+	if not play_ui:
+		return
+	var ascent := mono.get_ascent(font_size)
+	var ow := maxi(2, int(3.0 * k))
+	for i in range(vis_first, mini(vis_first + vis_count, display_lines.size())):
+		var line := String(display_lines[i])
+		var base := Vector2(margin, _line_y(i) + ascent)
+		for p in line.length():
+			var at := Vector2(_cell_x(p), base.y)
+			var col := _shown_color(i, p)
+			var glyph := _shown_char(i, p)
+			if night:
+				draw_string_outline(mono, at, glyph, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size, ow, Color("#141a2c"))
+			draw_string(mono, at, glyph, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size, col)
+
+
+## Маркер текущей буквы: курсор всегда видно, даже после отката через
+## строки.
+func _draw_cursor_marker() -> void:
+	var r := _cursor_rect()
+	if r.size.x <= 0.0:
+		return
+	draw_style_box(cursor_sb, r)
 	# Шеврон «↵» у конца строки, которая ждёт переноса (автор 13.10.2026):
 	# без него не видно, что здесь надо нажать ↵ — а больше на экране в
 	# этот момент ничего не меняется. Мягкая пульсация: заметно, не мигает.
@@ -2915,9 +3004,7 @@ func _enter_hint() -> Dictionary:
 	var line := display_lines[cursor_line]
 	# Значок живёт ЗА рамкой курсора (рамка стоит на клетке за последней
 	# буквой), иначе он сливается с ней в одно пятно и не читается.
-	var after := margin + mono.get_string_size(
-		line, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size
-	).x + char_w * 1.4
+	var after := margin + float(line.length()) * char_w + char_w * 1.4
 	return {
 		"x": after,
 		"y": _line_y(cursor_line) + mono.get_height(font_size) * 0.62,

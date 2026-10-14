@@ -76,8 +76,7 @@ func _model(tag: String) -> String:
 	for k in _main.errors.keys():
 		var parts: PackedStringArray = String(k).split(":")
 		var ml := int(parts[0])
-		var line_txt: String = _main.display_lines[ml]
-		var w: float = _main._glyph_w(line_txt)
+		var w: float = _main.char_w
 		var cx: float = _cell_x(ml, int(parts[1]))
 		var yy: float = _main._line_y(ml)
 		var hh: float = _main.mono.get_height(_main.font_size)
@@ -87,14 +86,10 @@ func _model(tag: String) -> String:
 	return line
 
 
-## Экранный центр символа в строке l, позиции p — та же формула, что
-## в _draw_cursor_marker.
+## Экранный центр символа в строке l, позиции p — формула игры
+## (_cell_x): клетка, никаких замеров префиксов.
 func _cell_x(l: int, p: int) -> float:
-	var line: String = _main.display_lines[l]
-	var pre: float = _main.mono.get_string_size(
-		line.left(p), HORIZONTAL_ALIGNMENT_LEFT, -1.0, _main.font_size
-	).x
-	return _main.margin + pre + _main._glyph_w(line) * 0.5
+	return _main._cell_x(p)
 
 
 func _snap() -> void:
@@ -375,7 +370,15 @@ func _a_clear_all() -> void:
 
 func _a_to_second_line() -> void:
 	while int(_main.cursor_line) < 1 and _main.state == "playing":
-		_main._type_char(_main._current())
+		# Конец абзаца ждёт ↵ (жёсткий перенос): пустую клетку печатать
+		# нечего — был бы вечный цикл на _type_char("") (вис 14.10.2026).
+		if bool(_main.need_enter):
+			_main._enter_next_line()
+			continue
+		var cur := String(_main._current())
+		if cur == "":
+			break
+		_main._type_char(cur)
 
 
 ## Довести зайца до самого начала второй строки: оттуда откат назад
@@ -386,7 +389,13 @@ func _a_to_line_start() -> void:
 		guard += 1
 		if int(_main.cursor_line) >= 1 and int(_main.cursor_pos) == 0:
 			return
-		_main._type_char(_main._current())
+		if bool(_main.need_enter):
+			_main._enter_next_line()
+			continue
+		var cur := String(_main._current())
+		if cur == "":
+			return
+		_main._type_char(cur)
 
 
 func _a_night() -> void:

@@ -16,9 +16,10 @@ extends SceneTree
 
 const B := preload("res://scripts/balance.gd")
 
-## Ширины в клетках: от крошечного телефона до порога, за которым
-## вёрстка не трогает текст вовсе (36). Плюс сам порог.
-const WIDTHS: Array[int] = [12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36]
+## Ширины в клетках: от крошечного телефона до широкого десктопа.
+## Вёрстка режет под любую ширину (иначе длинная строка вылезает за
+## карточку — жалоба автора 13.10.2026), поэтому матрица идёт до 70.
+const WIDTHS: Array[int] = [12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 44, 52, 60, 70]
 
 var _frame := 0
 var _main: Node = null
@@ -104,13 +105,15 @@ func _reflow_keeps_cursor() -> void:
 	_main.view_h = 340.0
 	_main._relayout()
 	_check(int(_main._max_chars()) < 36, "узкий экран считает меньше 36 знаков")
+	# Строка с концевым пробелом-клеткой — на знак шире лимита
+	# (см. _wrap_para); жёсткие строки — в лимите.
 	_check(
-		int(_main.display_lines[0].length()) <= _main._max_chars(),
+		int(_main.display_lines[0].length()) <= _main._max_chars() + 1,
 		"строки пересобраны под новую ширину"
 	)
 	# Надписи на экране обязаны совпадать с разметкой: иначе игрок видит
 	# старый текст, обрезанный краем окна («строка пустая»).
-	var shown := String(_main.text_labels[0].get_parsed_text())
+	var shown := String(_main.shown_rows[0]) if _main.shown_rows.size() > 0 else ""
 	_check(
 		shown == String(_main.display_lines[0]),
 		"надписи перерисованы под новую вёрстку (на экране «%s»)" % shown
@@ -147,7 +150,6 @@ func _reflow_keeps_cursor() -> void:
 ## Слой 1: все тексты на всех ширинах. Пустой кусок или висячий
 ## пробел = невидимое нажатие = уровень не проходится.
 func _fit_invariants() -> void:
-	var fl: Callable = B.fit_lines
 	for path in _text_paths():
 		var raw: Array[String] = []
 		var fa := FileAccess.open(path, FileAccess.READ)
@@ -160,21 +162,69 @@ func _fit_invariants() -> void:
 				raw.append(ln)
 		var name := path.get_file()
 		for w in WIDTHS:
-			var fit: Array = fl.call(raw, w)
-			var letters := ""
-			for piece in fit:
-				var t := String(piece)
-				_check(t != "", "%s@%d: пустой кусок" % [name, w])
-				if t.right(1) == " ":
-					_failures.append("%s@%d: кусок кончается пробелом «%s»" % [name, w, t])
-				letters += t.replace(" ", "")
-			var origin := ""
-			for ln in raw:
-				origin += ln.replace(" ", "")
+			# Без флагов каждая строка файла — свой абзац (см.
+			# B._unit_hard): переносы исходника не склеиваем.
+			var m: Dictionary = B.fit_marked(raw, w)
+			var fit: Array = m["lines"]
+			var hard: Array = m["hard"]
+			var glue: Array = m["glue"]
 			_check(
-				letters == origin,
-				"%s@%d: разбивка потеряла буквы" % [name, w]
+				fit.size() == hard.size() and fit.size() == glue.size(),
+				"%s@%d: флаги не следуют за строками" % [name, w]
 			)
+			for i in fit.size():
+				var t := String(fit[i])
+				_check(t != "", "%s@%d: пустой кусок" % [name, w])
+				# Пробел в конце — клетка мягкого переноса (автор
+				# 14.10.2026: пробел набирается): у жёстких строк его нет;
+				# у кусков разрезанных слов (glue) — как вышло: чистые
+				# куски без пробела, строка с остатком — с пробелом.
+				# Двойных нет нигде.
+				_check(
+					not t.ends_with("  "),
+					"%s@%d: двойной пробел «%s»" % [name, w, t]
+				)
+				if bool(hard[i]):
+					_check(
+						not t.ends_with(" "),
+						"%s@%d: висячий пробел «%s»" % [name, w, t]
+					)
+				elif not bool(glue[i]):
+					_check(
+						t.ends_with(" "),
+						"%s@%d: мягкий перенос без пробела-клетки «%s»" % [name, w, t]
+					)
+			# Склейка обратно обязана дать абзацы целиком, буква в букву
+			# (двойные пробелы файлов схлопываются, как в split_sentences).
+			var paras: Array[String] = []
+			var cur := ""
+			for i in fit.size():
+				var t := String(fit[i])
+				if cur == "" or cur.ends_with(" ") or bool(glue[i]):
+					cur += t
+				else:
+					cur += " " + t
+				if bool(hard[i]):
+					paras.append(cur)
+					cur = ""
+			if cur != "":
+				paras.append(cur)
+			var origin: Array[String] = []
+			for ln in raw:
+				var t := String(ln)
+				while t.contains("  "):
+					t = t.replace("  ", " ")
+				origin.append(t)
+			if paras != origin:
+				var show := ""
+				for i in mini(paras.size(), origin.size()):
+					if String(paras[i]) != String(origin[i]):
+						show = "абзац %d: «%s» vs «%s»" % [i, String(paras[i]).left(80), String(origin[i]).left(80)]
+						break
+				_failures.append(
+					"%s@%d: разбивка потеряла знаки (%d абзацев, было %d): %s"
+						% [name, w, paras.size(), origin.size(), show]
+				)
 
 
 func _text_paths() -> Array[String]:
@@ -218,8 +268,13 @@ func _play(sz: Vector2i, name: String) -> void:
 	for i in _main.display_lines.size():
 		var t := String(_main.display_lines[i])
 		_check(t != "", "%s: пустая строка %d" % [name, i])
-		if t.right(1) == " ":
-			_failures.append("%s: строка %d кончается невидимым пробелом «%s»" % [name, i, t])
+		# Концевой пробел — клетка мягкого переноса (набирается,
+		# проверяется матрицей выше); у жёстких строк его нет.
+		if i < _main.line_hard.size() and bool(_main.line_hard[i]):
+			_check(
+				not t.ends_with(" "),
+				"%s: жёсткая строка %d кончается пробелом «%s»" % [name, i, t]
+			)
 
 
 ## Подсказка («Жми: X») не должна уезжать под клавиатуру: жалоба автора

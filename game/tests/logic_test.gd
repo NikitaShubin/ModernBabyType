@@ -297,7 +297,10 @@ func _process(_dt: float) -> bool:
 		_text_normalize()
 		_text_bases()
 		_text_breaks()
-		_marker_linear()
+		_text_geometry()
+		_reflow_wrap_space()
+		_lin_stable()
+		_marker_cells()
 		_legend_roundtrip()
 		_layout_positions()
 		_report()
@@ -699,42 +702,66 @@ func _text_fragments() -> void:
 ## Одиночные замеры округляются (±1 px), поэтому допуски абсолютные, а не
 ## наклонные: округление — не дрейф (маркер и метки меряют run'ами и
 ## сходятся, сверено попиксельно).
-func _marker_linear() -> void:
+## Маркер стоит в клетках: центр = margin + (pos + 0.5) × char_w, где
+## char_w — предельный advance в строке. Раньше центр считался замером
+## префикса целой строкой, а одиночный замер давал другой шаг: целый
+## против суммы расходились на ~пиксель/знак (замерено 720 против 687 на
+## 60 знаках) — маркер уползал от букв с накоплением к концу строки
+## (жалоба автора 13.10.2026). Теперь второго пути измерения нет:
+## вёрстка, маркер, заяц и отрисовка считают одно и то же.
+func _marker_cells() -> void:
 	_main._relayout()
 	var fs: int = _main.font_size
-	# 2) Шаг одинаков у любых знаков.
-	# Плюс знаки, которые код сам подставляет в текст: ошибочный пробел
-	# рисуется как ␣, скобки экранируются — их шаг тоже обязан совпасть,
-	# иначе всё после метки плывёт (класс поломки из брейка: 20 против 12).
-	var probes := ["а", "м", ",", "7", "Ё", " ", "н", "␣", "[", "]"]
-	var first_w := -1.0
-	for g in probes:
-		var w: float = _main.mono.get_string_size(
-			String(g), HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x
-		if first_w < 0.0:
-			first_w = w
+	var mono: Font = _main.mono
+	# 1) char_w — это внутристрочный шаг на любом кегле: целый(N) ≈
+	# целый(1) + (N-1)×char_w. Одиночный замер округляется наружу и для
+	# шага не годится (см. комментарий в _relayout).
+	var one: float = mono.get_string_size("н", HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x
+	for n in [2, 8, 64]:
+		var whole: float = mono.get_string_size(
+			"н".repeat(n), HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x
 		_check(
-			absf(w - first_w) <= 1.0,
-			"glyph «%s» breaks the monospace step (%.1f vs %.1f)" % [String(g), w, first_w]
+			absf(whole - (one + float(n - 1) * _main.char_w)) <= 1.0,
+			"char_w is not the in-run advance at N=%d (whole %.1f)" % [n, whole]
 		)
-	# 1) Шейпинг строки совпадает с замерами префиксов.
-	var line := "Мама мыла раму у окна долго, папа: 7 гусей!"
-	var ts := TextServerManager.get_primary_interface()
-	var rid := ts.create_shaped_text(TextServer.DIRECTION_LTR)
-	ts.shaped_text_add_string(rid, line, _main.mono.get_rids(), fs)
-	var x := 0.0
-	for g in ts.shaped_text_get_glyphs(rid):
-		var d: Dictionary = g
-		var pp := int(d.get("start", -1))
-		if pp >= 0 and pp % 5 == 0:
-			var pre: float = _main.mono.get_string_size(
-				line.left(pp), HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x
-			_check(
-				absf(x - pre) <= 1.0,
-				"shaping drifts from prefixes at cell %d (%.1f vs %.1f)" % [pp, x, pre]
-			)
-		x += float(d.get("advance", 0.0))
-	ts.free_rid(rid)
+	for sz in [Vector2i(520, 900), Vector2i(1560, 1040)]:
+		DisplayServer.window_set_size(sz)
+		root.size = sz
+		_main._relayout()
+		var fs2: int = _main.font_size
+		var one2: float = mono.get_string_size("н", HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs2).x
+		var whole64: float = mono.get_string_size(
+			"н".repeat(64), HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs2).x
+		_check(
+			absf(whole64 - (one2 + 63.0 * _main.char_w)) <= 1.0,
+			"char_w is not the in-run advance at %dx%d (whole %.1f, char %.2f)"
+				% [sz.x, sz.y, whole64, _main.char_w]
+		)
+	DisplayServer.window_set_size(Vector2i(1100, 650))
+	root.size = Vector2i(1100, 650)
+	_main._relayout()
+	# 2) Центр маркера — ровно клетка, на нескольких позициях.
+	_main.display_lines = ["мама мыла раму"]
+	_main.line_drops = []
+	var hard: Array[bool] = [true]
+	_main.line_hard = hard
+	var noglue: Array[bool] = [false]
+	_main.line_glue = noglue
+	_main._reindex_lines()
+	for p in [0, 1, 7, 13]:
+		_main.cursor_line = 0
+		_main.cursor_pos = p
+		_main.state = "playing"
+		_check(
+			absf(_main._cursor_cx() - (_main.margin + (float(p) + 0.5) * _main.char_w)) <= 0.001,
+			"marker center is not on its cell at %d (%.2f)" % [p, _main._cursor_cx()]
+		)
+		var r: Rect2 = _main._cursor_rect()
+		_check(
+			absf(r.position.x - (_main.margin + float(p) * _main.char_w - 2.0 * _main.k)) <= 0.001
+				and absf(r.size.x - (_main.char_w + 4.0 * _main.k)) <= 0.001,
+			"marker box is not on its cell at %d (%s)" % [p, str(r)]
+		)
 
 
 ## Базы текстов: детская и взрослая классика. Про-аккаунт берёт
@@ -768,44 +795,86 @@ func _text_breaks() -> void:
 		if not bool(f):
 			soft += 1
 	_check(soft > 0, "every prose sentence claimed a line break")
-	# Вёрстка: предложение — блок. Если влезло в ширину, строка целиком;
-	# если нет — режется по словам, и тогда переносы ВНУТРИ предложения
-	# мягкие. Признак «конец строки исходника» переносится на последнюю
-	# строку блока, а на строках, разрезанных по ширине, его нет.
+	# Вёрстка: предложения внутри абзаца СКЛЕИВАЮТСЯ в сплошной текст,
+	# как в Word (автор 13.10.2026: переносы «не надо ни исключать, ни
+	# добавлять»). Видимый разрыв — либо перенос по ширине (мягкий,
+	# курсор едет сам), либо конец абзаца (жёсткий, ждёт ↵).
 	var m := BB.fit_marked(
 		["Он пошёл домой.", "Потом вернулся."], 40, [false, true]
 	)
 	_check(
-		(m["lines"] as Array) == ["Он пошёл домой.", "Потом вернулся."],
-		"each sentence is its own line: %s" % str(m["lines"])
+		(m["lines"] as Array) == ["Он пошёл домой. Потом вернулся."],
+		"one paragraph flows as one wrapped line: %s" % str(m["lines"])
 	)
 	_check(
-		(m["hard"] as Array) == [false, true],
-		"only the source line break asks for enter: %s" % str(m["hard"])
+		(m["hard"] as Array) == [true],
+		"the paragraph end asks for enter: %s" % str(m["hard"])
 	)
 	var both := BB.fit_marked(["Он пошёл домой.", "Потом вернулся."], 40, [true, true])
+	_check(
+		(both["lines"] as Array) == ["Он пошёл домой.", "Потом вернулся."],
+		"source line breaks are kept, not merged: %s" % str(both["lines"])
+	)
 	_check(
 		(both["hard"] as Array) == [true, true],
 		"both lines end where the source breaks: %s" % str(both["hard"])
 	)
-	var none := BB.fit_marked(["Он пошёл домой.", "Потом вернулся."], 40, [false, false])
+	# Без флагов каждая единица — свой абзац: прямые вызовы со строками
+	# файла ничего не склеивают.
+	var plain := BB.fit_marked(["Он пошёл домой.", "Потом вернулся."], 40)
 	_check(
-		(none["hard"] as Array) == [false, false],
-		"a paragraph without line breaks must wrap automatically: %s" % str(none["hard"])
+		(plain["lines"] as Array) == ["Он пошёл домой.", "Потом вернулся."],
+		"units without flags stay separate: %s" % str(plain["lines"])
 	)
 	var narrow := BB.fit_marked(
 		["Ёжик ел ёжика и ёл ёршик.", "А потом спал."], 12, [false, true]
 	)
 	var nl: Array = narrow["lines"]
 	var nh: Array = narrow["hard"]
-	_check(nl.size() > 2, "the narrow layout must split the long sentence")
+	# Один абзац «Ёжик ел ёжика и ёл ёршик. А потом спал.» режется по
+	# словам: куски мягкие и кончаются пробелом-КЛЕТКОЙ (автор 14.10.2026:
+	# пробел на переносе набирается, как в редакторе), последний кончает
+	# абзац и пробелом не кончается.
+	_check(nl.size() > 2, "the narrow layout must split the paragraph")
 	_check(nh.size() == nl.size(), "flags must follow the lines")
 	for i in nh.size() - 1:
 		_check(
 			not bool(nh[i]),
 			"a width wrap must stay soft (line %d «%s»)" % [i, nl[i]]
 		)
-	_check(bool(nh[nh.size() - 1]), "the block keeps the source break on its last line")
+		_check(
+			String(nl[i]).ends_with(" ") and not String(nl[i]).ends_with("  "),
+			"a soft row must end with exactly one typed space (line %d «%s»)" % [i, nl[i]]
+		)
+	_check(bool(nh[nh.size() - 1]), "the paragraph keeps the source break on its last line")
+	_check(
+		not String(nl[nl.size() - 1]).ends_with(" "),
+		"the paragraph end has no trailing space: «%s»" % nl[nl.size() - 1]
+	)
+	var letters := ""
+	for piece in nl:
+		letters += String(piece)
+	_check(
+		letters == "Ёжик ел ёжика и ёл ёршик. А потом спал.",
+		"wrapping must not lose characters: %s" % letters
+	)
+	# reflow склеивает мягкие строки обратно в абзац: сузили-расширили —
+	# вернулись к тем же строкам, курсор на той же букве.
+	var wide := BB.fit_marked(["Ёжик ел.", "Ёл ёршик.", "А потом спал."], 40, [false, false, true])
+	var rf := BB.reflow(wide["lines"] as Array[String], 0, 3, 12, wide["drops"], wide["hard"])
+	_check(
+		(rf["lines"] as Array).size() > 1,
+		"reflow must rewrap rows that no longer fit: %s" % str(rf["lines"])
+	)
+	_check(
+		int(rf["line"]) == 0 and int(rf["pos"]) == 3,
+		"the cursor letter must survive the rewrap (got %d:%d)" % [int(rf["line"]), int(rf["pos"])]
+	)
+	var back := BB.reflow(rf["lines"] as Array[String], 0, 0, 40, rf["drops"], rf["hard"])
+	_check(
+		(back["lines"] as Array) == (wide["lines"] as Array),
+		"widening back must restore the rows: %s" % str(back["lines"])
+	)
 	# Фрагмент уровня несёт те же признаки, разрывов по ширине в нём нет.
 	for base in ["kids", "pro"]:
 		var frag := T.load_fragment(1, base)
@@ -826,6 +895,160 @@ func _text_breaks() -> void:
 				if bool(f4):
 					breaks += 1
 		_check(breaks > 0, "%s: no source line breaks in the whole base" % sub)
+
+
+## Геометрия строк и маркера — числом, а не глазом (автор 13.10.2026:
+## «строка выходит за рамку» и «выделитель захватывает конец одной
+## строки и начало другой»). На четырёх ширинах — от узкого телефона до
+## широкого десктопа — каждая строка обязана влезть в карточку (в знаках
+## И в пикселях), а рамка маркера — лежать внутри своей строки и
+## карточки в трёх точках строки и в ожидании переноса.
+func _text_geometry() -> void:
+	var sizes := [Vector2i(520, 900), Vector2i(820, 1180), Vector2i(1560, 1040), Vector2i(2000, 1200)]
+	for sz in sizes:
+		DisplayServer.window_set_size(sz)
+		root.size = sz
+		_main._relayout()
+		for d in [0, 3, 7]:
+			_main.all_keys_override = 1
+			_main.difficulty = d
+			_main._new_level()
+			_geo_level("geo %dx%d d%d" % [sz.x, sz.y, d])
+	# Окно обратно в реалистичное для остальных частей.
+	DisplayServer.window_set_size(Vector2i(1100, 650))
+	root.size = Vector2i(1100, 650)
+	_main._relayout()
+
+
+func _geo_level(tag: String) -> void:
+	_check(not _main.display_lines.is_empty(), "%s: no lines" % tag)
+	print("ГЕО %s: margin=%.1f char_w=%.1f max=%d rows=%d kb_h=%.0f" % [
+		tag, _main.margin, _main.char_w, _main._max_chars(),
+		_main.display_lines.size(), _main.kb_h])
+	var card_right: float = float(_main.view_w - _main.margin)
+	for l in _main.display_lines.size():
+		var line: String = _main.display_lines[l]
+		_check(line.length() > 0, "%s: empty row %d" % [tag, l])
+		# В знаках: строка не шире лимита (с концевым пробелом-клеткой
+		# мягкого переноса — на знак шире, см. _wrap_para).
+		var lim: int = _main._max_chars() + (1 if line.ends_with(" ") else 0)
+		_check(
+			line.length() <= lim,
+			"%s: row %d has %d chars, fits %d" % [tag, l, line.length(), lim]
+		)
+		# В пикселях: строка не вылезает за карточку. Ширина — клетки
+		# (len × char_w): так рисуются глифы, целый замер шейпера врёт
+		# на округлении (см. _marker_cells).
+		var w: float = float(line.length()) * _main.char_w
+		_check(
+			_main.margin + w <= card_right + 1.0,
+			"%s: row %d is %.0f px wide, card ends at %.0f" % [tag, l, _main.margin + w, card_right]
+		)
+		# Маркер в трёх точках строки — внутри своей полосы и карточки.
+		for cp in [0, line.length() / 2, line.length() - 1]:
+			_geo_marker(tag, l, cp, false)
+		# И в ожидании переноса (курсор за концом строки): тоже внутри
+		# своей полосы — иначе «захват» соседней строки. Ждать игра
+		# может только на жёсткой строке (конец абзаца); на мягкой
+		# курсор едет сам, такого состояния игра не создаёт.
+		if l < _main.line_hard.size() and bool(_main.line_hard[l]):
+			_geo_marker(tag, l, line.length(), true)
+
+
+func _geo_marker(tag: String, l: int, cp: int, wait: bool) -> void:
+	_main.cursor_line = l
+	_main.cursor_pos = cp
+	_main.need_enter = wait
+	_main.state = "playing"
+	_main._layout_text_lines()
+	var r: Rect2 = _main._cursor_rect()
+	_check(r.size.x > 0.0, "%s: no marker at %d:%d" % [tag, l, cp])
+	var top: float = float(_main._line_y(l))
+	_check(
+		r.position.y >= top - 1.0 and r.end.y <= top + _main.line_h + 1.0,
+		"%s: marker at %d:%d leaves its row band (%.0f..%.0f vs %.0f..%.0f)"
+			% [tag, l, cp, r.position.y, r.end.y, top, top + _main.line_h]
+	)
+	_check(
+		r.position.x >= _main.margin - 8.0 and r.end.x <= _main.view_w - _main.margin + 8.0,
+		"%s: marker at %d:%d leaves the card (%.0f..%.0f)" % [tag, l, cp, r.position.x, r.end.x]
+	)
+	if wait:
+		var hint: Dictionary = _main._enter_hint()
+		_check(not hint.is_empty(), "%s: no chevron while waiting at %d:%d" % [tag, l, cp])
+
+
+## Пробел на переносе — клетка: курсор стоит НА нём, метки на нём
+## держатся, пересборка строк его не ест (автор 14.10.2026: пробел
+## набирается, как в редакторе).
+func _reflow_wrap_space() -> void:
+	# Абзац «ab cd ef» шириной 6: «ab cd », «ef» — пробел клетка.
+	var m := BB.fit_marked(["ab cd ef"], 6, [true])
+	_check(
+		(m["lines"] as Array) == ["ab cd ", "ef"],
+		"wrap spaces must stay cells: %s" % str(m["lines"])
+	)
+	# Курсор на пробеле переживает сужение: тот же пробел, новая строка.
+	var rf := BB.reflow(["ab cd ", "ef"], 0, 5, 4, [0, 0], [false, true], [false, false])
+	_check(
+		(rf["lines"] as Array) == ["ab ", "cd ", "ef"],
+		"narrowing must rewrap, keeping the space: %s" % str(rf["lines"])
+	)
+	_check(
+		int(rf["line"]) == 1 and int(rf["pos"]) == 2,
+		"the cursor stays on its space (got %d:%d)" % [int(rf["line"]), int(rf["pos"])]
+	)
+	# Метка на том же пробеле переезжает вместе с курсором.
+	var errs := {"0:5": "ж"}
+	_main.line_drops = [0, 0]
+	_main._remap_cells(errs, rf["table"], rf)
+	_check(errs.has("1:2"), "the mark on the wrap space must survive: %s" % str(errs.keys()))
+	# А конец уровня — всё равно конец: за последней строкой клеток нет.
+	var rf2 := BB.reflow(["а б"], 0, 3, 8, [0], [true], [false])
+	_check(
+		int(rf2["line"]) == int((rf2["lines"] as Array).size()) and int(rf2["pos"]) == 0,
+		"past-the-end must stay past-the-end"
+	)
+
+
+## Ось текста не рвётся при пересборке строк: та же буква — та же
+## координата (ловил _case_relayout: зазор 46 → 76 при зайце на той же
+## букве — съеденных пробелов до курсора стало меньше, а _lin их не
+## считал). Детерминированная миниатюра релэута: широкая вёрстка, курсор
+## на пробеле, сузить окно — буква и координата те же.
+func _lin_stable() -> void:
+	DisplayServer.window_set_size(Vector2i(820, 1180))
+	root.size = Vector2i(820, 1180)
+	_main._relayout()
+	var typed: Array[String] = ["танец маму.", "А отец танцевать не умел."]
+	_main.display_lines = typed
+	var hard: Array[bool] = [true, true]
+	_main.line_hard = hard
+	var noglue: Array[bool] = [false, false]
+	_main.line_glue = noglue
+	_main.line_drops = [0, 0]
+	_main._reindex_lines()
+	_main.cursor_line = 0
+	_main.cursor_pos = 5
+	_main.need_enter = false
+	_main.state = "playing"
+	var letter := String(_main._current())
+	var ax0: float = _main._lin(0, 5.0)
+	DisplayServer.window_set_size(Vector2i(520, 900))
+	root.size = Vector2i(520, 900)
+	_main._relayout()
+	_check(
+		String(_main._current()) == letter,
+		"the same letter after reflow (was «%s», got «%s»)" % [letter, String(_main._current())]
+	)
+	_check(
+		absf(_main._lin(int(_main.cursor_line), float(_main.cursor_pos)) - ax0) <= 0.001,
+		"the axis must not move under the hare (%.1f → %.1f)"
+			% [ax0, _main._lin(int(_main.cursor_line), float(_main.cursor_pos))]
+	)
+	DisplayServer.window_set_size(Vector2i(1100, 650))
+	root.size = Vector2i(1100, 650)
+	_main._relayout()
 
 
 func _text_bases() -> void:
@@ -996,9 +1219,10 @@ func _run_part1() -> void:
 	if exp4 != "" and exp4 != " ":
 		_main._type_char(" ")
 		var found := false
-		for i in _main.display_lines.size():
-			if "␣" in _main.text_labels[i].text:
-				found = true
+		for l in _main.display_lines.size():
+			for q in String(_main.display_lines[l]).length():
+				if _main._shown_char(l, q) == "␣":
+					found = true
 		_check(found, "wrong space shows visible marker")
 		_main._backspace()
 		_check(_main.errors.is_empty(), "space error erased")
@@ -1425,16 +1649,17 @@ func _run_part2() -> void:
 	_main.view_h = 650.0
 
 	# --- Разбивка строк под узкий экран: слова целы, символы не теряются.
-	# Пробел на месте разрыва убираем: он невидим, а игра ждёт нажатия
-	# (жалоба автора: на телефоне уровень не проходился). Склейка кусков
-	# сравнивается без пробелов. Массивы типизированные: нетипизированный
-	# литерал в Array[String]-параметр 4.3 не принимает (молча error).
+	# Пробел на месте разрыва — клетка: набирается, как в редакторе
+	# (автор 14.10.2026; раньше его убирали — и на телефоне уровень не
+	# проходился: «строка кончилась, а что нажимать?»). Массивы
+	# типизированные: нетипизированный литерал в Array[String]-параметр
+	# 4.3 не принимает (молча error).
 	var fl: Callable = BB.fit_lines
 	var raw1: Array[String] = ["мама мыла раму", "папа"]
 	var fit1: Array = fl.call(raw1, 10)
-	_check(fit1 == ["мама мыла", "раму", "папа"], "long line wraps by words")
+	_check(fit1 == ["мама мыла ", "раму", "папа"], "long line wraps by words")
 	_check(
-		"".join(fit1).replace(" ", "") == "мамамыларамупапа",
+		String(fit1[0]) + String(fit1[1]) == "мама мыла раму" and String(fit1[2]) == "папа",
 		"wrap loses no characters"
 	)
 	var raw2: Array[String] = ["а б в"]
@@ -1443,9 +1668,9 @@ func _run_part2() -> void:
 	)
 	var raw3: Array[String] = ["раз два три"]
 	var fit2: Array = fl.call(raw3, 7)
-	_check(fit2 == ["раз два", "три"], "wrap point is exact")
+	_check(fit2 == ["раз два ", "три"], "wrap point is exact")
 	_check(
-		fit2[0].right(1) != " ", "no invisible space at the wrap point"
+		String(fit2[0]).right(1) == " ", "the wrap space stays a cell"
 	)
 	var raw4: Array[String] = ["супердлинноеслово", "а"]
 	_check(
@@ -1469,7 +1694,7 @@ func _run_part2() -> void:
 	_check(vis >= 2 and vis < 6, "window smaller than the text")
 	for i in 6:
 		_check(
-			_main.text_labels[i].visible == (i >= 6 - vis),
+			_main._row_visible(i) == (i >= 6 - vis),
 			"visibility follows the window"
 		)
 	_check(

@@ -183,6 +183,17 @@ func _drawn(tag: String) -> void:
 
 
 ## Метки по оси текста: не впереди всего набранного и не позади зайца.
+## Клеточная мера: видимые символы без съеденных на разрывах пробелов.
+## Точные шаги («откат ровно на символ», «стопка символ в символ»,
+## «разброс не шире пачки») — про клетки: _lin считает и съеденные
+## пробелы (иначе рвётся при пересборке — см. _lin_stable в logic_test).
+func _cx(l: int, p: float) -> float:
+	var acc := 0.0
+	for i in mini(l, _main.display_lines.size()):
+		acc += float(String(_main.display_lines[i]).length())
+	return acc + p
+
+
 func _mark_axis_check(tag: String) -> void:
 	var hare: float = _main._lin(int(_main.cursor_line), float(_main.cursor_pos))
 	var hi := hare
@@ -289,18 +300,18 @@ func _settle(tag: String) -> void:
 ## Ошибка моделем. Откат обязан быть РОВНО на один символ назад по
 ## сквозной оси (правило 1) — это и есть моноширинный «шаг назад».
 func _mistake(tag: String) -> float:
-	var before: float = _main._lin(int(_main.cursor_line), float(_main.cursor_pos))
+	var before: float = _cx(int(_main.cursor_line), float(_main.cursor_pos))
 	var cur: String = _main._current()
 	if cur == "":
 		return before
 	var behind: Vector2i = _main._behind()
 	_errors_total += 1
 	_main._type_char("ы" if cur.to_lower() != "ы" else "ж")
-	var after: float = _main._lin(int(_main.cursor_line), float(_main.cursor_pos))
+	var after: float = _cx(int(_main.cursor_line), float(_main.cursor_pos))
 	if behind.x >= 0:
 		_check(
 			absf(after - (before - 1.0)) <= 0.001,
-			"%s: a mistake moved the hare %.2f chars back, expected exactly 1"
+			"%s: a mistake moved the hare %.2f cells back, expected exactly 1"
 				% [tag, before - after]
 		)
 	else:

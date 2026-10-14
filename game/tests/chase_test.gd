@@ -174,13 +174,22 @@ func _hero_advance() -> void:
 ## сквозной оси, клетка снова становится ненабранной (буква появляется
 ## перед зайцем), счётчики набора не трогаются. Если отката не вышло
 ## (стирали метку или чинили впереди) — курсор не должен уехать назад.
+## Клеточная мера (см. _cax в combo_test): точный шаг отката — про
+## видимые клетки, _lin считает и съеденные пробелы.
+func _cx(l: int, p: float) -> float:
+	var acc := 0.0
+	for i in mini(l, _main.display_lines.size()):
+		acc += float(String(_main.display_lines[i]).length())
+	return acc + p
+
+
 func _backspace_turn() -> void:
-	var before: float = _main._lin(_main.cursor_line, float(_main.cursor_pos))
+	var before: float = _cx(_main.cursor_line, float(_main.cursor_pos))
 	var ok0: int = _main.typed_ok
 	var bad0: int = _main.typed_bad
 	var marks0: int = _main.errors.size()
 	_main._backspace()
-	var after: float = _main._lin(_main.cursor_line, float(_main.cursor_pos))
+	var after: float = _cx(_main.cursor_line, float(_main.cursor_pos))
 	if after < before:
 		_retreats += 1
 		# Откат Backspace отменяет последнюю НАБРАННУЮ букву и перепрыгивает
@@ -189,7 +198,7 @@ func _backspace_turn() -> void:
 		# marks_test). Откат всегда НАЗАД, форсеред разрешён только
 		# «починить метку впереди» — он ниже, отдельной веткой.
 		if _main.all_keys_override == 1 and absf(after - (before - 1.0)) > 0.001:
-			_failures.append("frame %d: retreat moved %.2f chars, expected exactly 1 back"
+			_failures.append("frame %d: retreat moved %.2f cells, expected exactly 1 back"
 				% [_frame, before - after])
 		if _main.passed.has(_main._key(_main.cursor_line, _main.cursor_pos)):
 			_failures.append("frame %d: retreated cell is still marked passed (letter not restored)"
