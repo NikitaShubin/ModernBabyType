@@ -257,6 +257,57 @@ run_chase_shard() {
 }
 
 
+# Шардированный тест: N процессов по кругу работ, у каждого свой
+# контейнер, лог и дом (профили!). Зачёт общий: ни SCRIPT ERROR, в каждом
+# логе есть PASS, нигде нет FAIL. Покрытие на шард держат сами тесты
+# (глобальные счётчики в шардах делятся — см. их _report).
+run_sharded() {
+	local base="$1" shards="$2" limit="$3"
+	local pids=() i
+	for i in $(seq 0 $((shards - 1))); do
+		run_shard "$base" "$i" "$shards" "$limit" &
+		pids+=($!)
+	done
+	local failed=0 pid
+	for pid in "${pids[@]}"; do
+		if ! wait "$pid"; then
+			failed=1
+		fi
+	done
+	if [ "$failed" -eq 0 ]; then
+		echo "$base: PASS ($shards шарда)"
+	fi
+	return $failed
+}
+
+
+run_shard() {
+	local base="$1" shard="$2" of="$3" limit="$4"
+	local name="mbt-test-$base-s$shard-$$"
+	local log="/tmp/opencode/$base-s$shard.log"
+	: >"$log"
+	docker rm -f "$name" >/dev/null 2>&1 || true
+	MBT_CONTAINER_NAME="$name" \
+	MBT_HOME="/tmp/mbt-home-$base-s$shard" \
+	MBT_XDG_CONFIG="/tmp/mbt-home-$base-s$shard/.config" \
+	MBT_XDG_DATA="/tmp/mbt-home-$base-s$shard/.local/share" \
+	run_godot --headless --path game \
+		--script "res://tests/$base.gd" -- --shard "$shard" --of "$of" >"$log" 2>&1 &
+	local pid=$!
+	_watch_docker "$name" "$log" "$limit" "$pid" || return 1
+	if ! grep -qE ": PASS" "$log"; then
+		echo "ТЕСТ $base шард $shard: нет строки PASS, последние строки:" >&2
+		tail -n 20 "$log" >&2
+		return 1
+	fi
+	if grep -qE ": FAIL: " "$log"; then
+		echo "ТЕСТ $base шард $shard: есть падения:" >&2
+		grep -E ": FAIL: " "$log" | head -n 10 >&2
+		return 1
+	fi
+}
+
+
 # Погоня в N шардов параллельно + слияние. Эпизоды независимы (каждый
 # начинается с чистого уровня), сиды разные, бюджеты делят 120 эпизодов
 # полного прогона. Итоговые пороги — те же, что в _report, но на суммах.
@@ -371,12 +422,20 @@ run_tests() {
 	# Погоня гоняет живой цикл кадр за кадром — самый долгий тест.
 	local pids=() failed=0
 	local s pid
-	for s in logic_test.gd update_test.gd end_test.gd profiles_test.gd marks_test.gd combo_test.gd; do
+	# Мелочь — целиком, каждая своим процессом.
+	for s in logic_test.gd update_test.gd profiles_test.gd; do
 		run_test "$s" 600 &
 		pids+=($!)
 	done
+	# Тяжёлые — шардами по всем ядрам (см. run_sharded).
+	run_sharded combo_test 4 600 &
+	pids+=($!)
+	run_sharded marks_test 4 600 &
+	pids+=($!)
+	run_sharded end_test 3 600 &
+	pids+=($!)
 	# Погоня гоняет живой цикл кадр за кадром — самый долгий тест,
-	# поэтому сама идёт шардами (см. run_chase).
+	# поэтому сама идёт шардами со своим слиянием (см. run_chase).
 	run_chase &
 	pids+=($!)
 	for pid in "${pids[@]}"; do
@@ -444,25 +503,65 @@ run_exports() {
 	mkdir -p game/dist
 	stamp_version
 	trap restore_preset EXIT
+	# Экспорты независимы (выходные файлы разные; wine нужен только
+	# Windows-пресету, gradle — только Android, так что общие дома им не
+	# мешают): гоним параллельно, время определяет самый долгий
+	# (обычно Android), а не сумма. Лог у каждого свой, иначе выводы
+	# перемежаются в одну кашу.
+	local pids=() failed=0
+	local preset pid
 	for preset in "${PRESETS[@]}"; do
-		echo "--- экспорт: $preset"
-		case "$preset" in
-		Windows) out=dist/ModernBabyType.exe ;;
-		Linux) out=dist/ModernBabyType.x86_64 ;;
-		macOS) out=dist/ModernBabyType.zip ;;
-		Android) out=dist/ModernBabyType.apk ;;
-		AndroidEmu) out=dist/ModernBabyType.emu.apk ;;
-		*) echo "неизвестный пресет: $preset" >&2; exit 2 ;;
-		esac
-		run_godot --headless --path game --export-release "$preset" "$out"
-		if [ "$preset" = "Android" ]; then
-			# apksigner рядом с .apk кладёт подпись v4 (idsig) — она для
-			# установки через adb, а не для раздачи людям. В релиз не
-			# попадает, иначе в артефактах лишний файл.
-			rm -f "game/$out.idsig"
+		run_export "$preset" &
+		pids+=($!)
+	done
+	for pid in "${pids[@]}"; do
+		if ! wait "$pid"; then
+			failed=1
 		fi
 	done
+	return $failed
 }
+
+
+## Один пресет: выходной путь, экспорт, чистка idsig.
+run_export() {
+	local preset="$1" out log
+	case "$preset" in
+	Windows) out=dist/ModernBabyType.exe ;;
+	Linux) out=dist/ModernBabyType.x86_64 ;;
+	macOS) out=dist/ModernBabyType.zip ;;
+	Android) out=dist/ModernBabyType.apk ;;
+	AndroidEmu) out=dist/ModernBabyType.emu.apk ;;
+	*)
+		echo "неизвестный пресет: $preset" >&2
+		return 2
+		;;
+	esac
+	log="/tmp/opencode/export-$preset.log"
+	: >"$log"
+	echo "--- экспорт: $preset"
+	# Свой дом на пресет: Godot при экспорте дёргает editor_settings
+	# в XDG_CONFIG (бэкап .mbt.1), и параллельные экспорты на общем доме
+	# роняют друг друга (ловил: mv — один и тот же файл). Шаблоны
+	# экспорта живут в общем XDG_DATA — их не трогаем, экспорту они
+	# нужны только на чтение. Wineprefix едет за домом следом.
+	if ! MBT_CONTAINER_NAME="" \
+	MBT_HOME="/tmp/mbt-home-exp-$preset" \
+	MBT_XDG_CONFIG="/tmp/mbt-home-exp-$preset/.config" \
+	run_godot --headless --path game --export-release "$preset" "$out" >"$log" 2>&1; then
+		echo "ЭКСПОРТ $preset: провал, последние строки:" >&2
+		tail -n 20 "$log" >&2
+		return 1
+	fi
+	if [ "$preset" = "Android" ]; then
+		# apksigner рядом с .apk кладёт подпись v4 (idsig) — она для
+		# установки через adb, а не для раздачи людям. В релиз не
+		# попадает, иначе в артефактах лишний файл.
+		rm -f "game/$out.idsig"
+	fi
+	ls -la "game/$out"
+}
+
 
 case "$MODE" in
 --test-only)

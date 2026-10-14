@@ -31,8 +31,22 @@ func _check(cond: bool, what: String) -> void:
 		_failures.append(what)
 
 
+## Шардирование: -- --shard I --of N. Матрица делится по файлам,
+## прогоны — по размерам экрана (см. combo_test).
+var _shard := 0
+var _of := 1
+
+
 func _initialize() -> void:
-	seed(20261006)
+	var args := OS.get_cmdline_user_args()
+	var i := 0
+	while i < args.size():
+		if String(args[i]) == "--shard" and i + 1 < args.size():
+			_shard = int(args[i + 1])
+		elif String(args[i]) == "--of" and i + 1 < args.size():
+			_of = maxi(1, int(args[i + 1]))
+		i += 1
+	seed(20261006 + _shard)
 	var scene: PackedScene = load("res://scenes/main.tscn")
 	_main = scene.instantiate()
 	# Механика, а не интерфейс: сразу в игру, гостем, без меню.
@@ -45,13 +59,23 @@ func _process(_dt: float) -> bool:
 	_frame += 1
 	if _frame < 3:
 		return false
-	_fit_invariants()
-	_reflow_keeps_cursor()
-	_play(Vector2i(360, 240), "крошечный телефон")
-	_play(Vector2i(520, 300), "узкий телефон")
-	_play(Vector2i(800, 360), "телефон")
-	_play(Vector2i(1280, 700), "десктоп")
-	_hint_stays_above_keyboard()
+	# Работы идут по кругу между шардами: матрица — самый тяжёлый кусок.
+	var jobs: Array = ["matrix", "reflow", "play0", "play1", "play2", "play3", "hint"]
+	var sizes := [Vector2i(360, 240), Vector2i(520, 300), Vector2i(800, 360), Vector2i(1280, 700)]
+	var names := ["крошечный телефон", "узкий телефон", "телефон", "десктоп"]
+	for idx in jobs.size():
+		if idx % _of != _shard:
+			continue
+		match String(jobs[idx]):
+			"matrix":
+				_fit_invariants()
+			"reflow":
+				_reflow_keeps_cursor()
+			"hint":
+				_hint_stays_above_keyboard()
+			_:
+				var k := int(String(jobs[idx]).substr(4))
+				_play(sizes[k], names[k])
 	_report()
 	return true
 
@@ -150,7 +174,14 @@ func _reflow_keeps_cursor() -> void:
 ## Слой 1: все тексты на всех ширинах. Пустой кусок или висячий
 ## пробел = невидимое нажатие = уровень не проходится.
 func _fit_invariants() -> void:
-	for path in _text_paths():
+	var all := _text_paths()
+	all.sort()
+	var mine: Array[String] = []
+	for idx in all.size():
+		if idx % _of == _shard:
+			mine.append(all[idx])
+	_check(not mine.is_empty(), "shard got no files")
+	for path in mine:
 		var raw: Array[String] = []
 		var fa := FileAccess.open(path, FileAccess.READ)
 		if fa == null:

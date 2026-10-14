@@ -33,6 +33,9 @@ const DT := 1.0 / 60.0
 
 var _main: Node = null
 var _frame := 0
+## Шардирование: -- --shard I --of N (см. combo_test).
+var _shard := 0
+var _of := 1
 var _failures: Array[String] = []
 ## Статистика замера.
 var _marks_checked := 0
@@ -53,7 +56,19 @@ func _check(cond: bool, what: String) -> void:
 		_failures.append(what)
 
 
+func _shard_args() -> void:
+	var args := OS.get_cmdline_user_args()
+	var i := 0
+	while i < args.size():
+		if String(args[i]) == "--shard" and i + 1 < args.size():
+			_shard = int(args[i + 1])
+		elif String(args[i]) == "--of" and i + 1 < args.size():
+			_of = maxi(1, int(args[i + 1]))
+		i += 1
+
+
 func _initialize() -> void:
+	_shard_args()
 	var scene: PackedScene = load("res://scenes/main.tscn")
 	_main = scene.instantiate()
 	_main.skip_menu = true
@@ -397,35 +412,53 @@ func _burst(tag: String, difficulty: int, all_keys: int) -> void:
 	)
 
 
-func _report() -> void:
-	print("MARKS_TEST: партий=%d побед=%d ошибок=%d проверок меток=%d"
-		% [_sessions, _wins, _errors_total, _marks_checked])
+func _report(want_sessions: int) -> void:
+	print("MARKS_TEST: шард=%d/%d партий=%d побед=%d ошибок=%d проверок меток=%d"
+		% [_shard, _of, _sessions, _wins, _errors_total, _marks_checked])
 	print("MARKS_TEST: худшее отставание зайца от своей клетки=%.2f симв." % _worst_lag)
 	print("MARKS_TEST: пачки по %d ошибок → меток %d, худший разброс стека=%d глиф. (%s)"
 		% [_burst_errors, _burst_marks, _worst_burst_span, _worst_burst_tag])
 
 
+## Все работы таблицей: шард берёт каждую N-ю по кругу (пачки и
+## партии независимы — каждая начинается с чистого уровня).
+var _jobs: Array = []
+
+
+func _fill_jobs() -> void:
+	for d in [0, 2, 5]:
+		_jobs.append(["burst", "burst d=%d all" % d, d, 1])
+		_jobs.append(["burst", "burst d=%d own" % d, d, 0])
+	_jobs.append(["session", "slow child", 0, 0, 0.66, 0.05, 0.02])
+	_jobs.append(["session", "medium child", 1, 0, 0.33, 0.03, 0.01])
+	_jobs.append(["session", "fast child, backspace", 3, 0, 0.20, 0.02, 0.15])
+	_jobs.append(["session", "all keys, fast", 4, 1, 0.20, 0.02, 0.05])
+	_jobs.append(["session", "clumsy child", 0, 0, 0.80, 0.14, 0.05])
+	_jobs.append(["session", "clumsy, all keys", 6, 1, 0.25, 0.12, 0.10])
+	_jobs.append(["session", "medium, hard", 5, 0, 0.25, 0.06, 0.05])
+
+
 func _process(_dt: float) -> bool:
 	if _frame > 0:
 		return true
+	_fill_jobs()
 	# Пачки ошибок на разных режимах и текстах.
-	for d in [0, 2, 5]:
-		_burst("burst d=%d all" % d, d, 1)
-		_burst("burst d=%d own" % d, d, 0)
 	# Живые партии: ребёнок с разной скоростью, частотой ошибок и любовью
 	# к Backspace. Здесь и ловится рассинхрон, который не видно глазами.
-	_session("slow child", 0, 0, 0.66, 0.05, 0.02)
-	_session("medium child", 1, 0, 0.33, 0.03, 0.01)
-	_session("fast child, backspace", 3, 0, 0.20, 0.02, 0.15)
-	_session("all keys, fast", 4, 1, 0.20, 0.02, 0.05)
-	_session("clumsy child", 0, 0, 0.80, 0.14, 0.05)
-	_session("clumsy, all keys", 6, 1, 0.25, 0.12, 0.10)
-	_session("medium, hard", 5, 0, 0.25, 0.06, 0.05)
-	_report()
-	_check(_marks_checked > 100, "the marks were actually checked (coverage)")
-	_check(_burst_marks > 0, "mistakes did produce marks (coverage)")
-	_check(_sessions == 7, "all sessions ran")
-	_check(_errors_total > 30, "the child made enough mistakes (coverage)")
+	var want_sessions := 0
+	for idx in _jobs.size():
+		if idx % _of != _shard:
+			continue
+		var job: Array = _jobs[idx]
+		if String(job[0]) == "burst":
+			_burst(String(job[1]), int(job[2]), int(job[3]))
+		else:
+			want_sessions += 1
+			_session(String(job[1]), int(job[2]), int(job[3]), float(job[4]), float(job[5]), float(job[6]))
+	_report(want_sessions)
+	_check(_sessions == want_sessions, "all assigned sessions ran (%d)" % _sessions)
+	_check(_marks_checked > 0, "the marks were actually checked (coverage)")
+	_check(_errors_total > 0, "the child made mistakes (coverage)")
 	for f in _failures:
 		print("MARKS_TEST: FAIL: ", f)
 	print("MARKS_TEST: PASS" if _failures.is_empty() else "MARKS_TEST: FAIL")

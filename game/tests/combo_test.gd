@@ -30,6 +30,11 @@ var _frame := 0
 var _failures: Array[String] = []
 var _cases := 0
 var _steps := 0
+## Шардирование: -- --shard I --of N. Сценарии независимы (каждый
+## начинается с чистого уровня через _fresh), идут по кругу: шард берёт
+## каждый N-й. Без аргументов — все подряд, как раньше.
+var _shard := 0
+var _of := 1
 
 
 func _check(cond: bool, what: String) -> void:
@@ -38,6 +43,14 @@ func _check(cond: bool, what: String) -> void:
 
 
 func _initialize() -> void:
+	var args := OS.get_cmdline_user_args()
+	var i := 0
+	while i < args.size():
+		if String(args[i]) == "--shard" and i + 1 < args.size():
+			_shard = int(args[i + 1])
+		elif String(args[i]) == "--of" and i + 1 < args.size():
+			_of = maxi(1, int(args[i + 1]))
+		i += 1
 	var scene: PackedScene = load("res://scenes/main.tscn")
 	_main = scene.instantiate()
 	_main.skip_menu = true
@@ -1324,6 +1337,10 @@ func _contact_px() -> float:
 ## не плоские и все попадают в палец.
 func _case_own_kbd_fits() -> void:
 	_kbd_on()
+	# С чистого уровня: сценарий меряет геометрию на чужих окнах, а чужие
+	# метки/курсор из прошлого сценария ему не нужны (ловил в шарде:
+	# метка прошлого сценария позади зайца).
+	_fresh(1, 1)
 	var tag := "own kbd fit"
 	var old := root.size
 	# Портрет телефона, альбом телефона, маленький телефон в альбоме.
@@ -1938,6 +1955,12 @@ func _case_ime_frames() -> void:
 
 func _ime_frames_run(seed_v: int) -> void:
 	var tag := "ime frames"
+	# Сценарий про ввод (кадры IME), а не про темп погони: замораживаем
+	# ежа, иначе выживание 140 небрежных шагов зависит от скорости ежа
+	# из истории прошлых сценариев и длины случайного уровня (ловил
+	# в шарде: state lost при свежем профиле).
+	_main.grace_t = 9999.0
+	_main.enemy_cps = B.BASE_CPS
 	_advance_to(0.25)
 	var word := ["о", "б", "с", "т", "р", "а", "х", "й", "у", "м", "к", "н"]
 	for step in 140:
@@ -2972,6 +2995,59 @@ func _finish_level(tag: String) -> void:
 ## Телефонный портрет вместо headless-умолчания 64x64: карточка текста и
 ## своя клавиатура туда не влезают. Задавать надо на ПЕРВОМ кадре —
 ## в _initialize окно ещё не создано и размер запроса теряется.
+## Все сценарии таблицей: шард берёт каждый N-й по кругу.
+var _cases_list: Array = []
+
+
+func _fill_cases() -> void:
+	_cases_list.append(["_case_ime_word", Callable(self, "_case_ime_word"), 0])
+	_cases_list.append(["_case_autocorrect", Callable(self, "_case_autocorrect"), 0])
+	_cases_list.append(["_case_backspace_chain", Callable(self, "_case_backspace_chain"), 0])
+	_cases_list.append(["_case_backspace_at_start", Callable(self, "_case_backspace_at_start"), 0])
+	_cases_list.append(["_case_mistake_at_start", Callable(self, "_case_mistake_at_start"), 0])
+	_cases_list.append(["_case_error_storm", Callable(self, "_case_error_storm"), 0])
+	_cases_list.append(["_case_line_wrap", Callable(self, "_case_line_wrap"), 0])
+	_cases_list.append(["_case_wrap_waits_enter", Callable(self, "_case_wrap_waits_enter"), 0])
+	_cases_list.append(["_case_wrap_auto", Callable(self, "_case_wrap_auto"), 0])
+	_cases_list.append(["_case_level_end", Callable(self, "_case_level_end"), 0])
+	_cases_list.append(["_case_exact_case", Callable(self, "_case_exact_case"), 0])
+	_cases_list.append(["_case_night", Callable(self, "_case_night"), 0])
+	_cases_list.append(["_case_ime_duplicate", Callable(self, "_case_ime_duplicate"), 0])
+	_cases_list.append(["_case_last_cell", Callable(self, "_case_last_cell"), 0])
+	_cases_list.append(["_case_loss_with_marks", Callable(self, "_case_loss_with_marks"), 0])
+	_cases_list.append(["_case_touch_keyboard", Callable(self, "_case_touch_keyboard"), 0])
+	_cases_list.append(["_case_kbd_shift_layer", Callable(self, "_case_kbd_shift_layer"), 0])
+	_cases_list.append(["_case_long_press", Callable(self, "_case_long_press"), 0])
+	_cases_list.append(["_case_auto_punctuation", Callable(self, "_case_auto_punctuation"), 0])
+	_cases_list.append(["_case_time_jump", Callable(self, "_case_time_jump"), 0])
+	_cases_list.append(["_case_menu_roundtrip", Callable(self, "_case_menu_roundtrip"), 0])
+	_cases_list.append(["_case_caps_warning", Callable(self, "_case_caps_warning"), 0])
+	_cases_list.append(["_case_hint_lifetime", Callable(self, "_case_hint_lifetime"), 0])
+	_cases_list.append(["_case_scroll", Callable(self, "_case_scroll"), 0])
+	_cases_list.append(["_case_enter_spam", Callable(self, "_case_enter_spam"), 0])
+	_cases_list.append(["_case_undo_cap", Callable(self, "_case_undo_cap"), 0])
+	_cases_list.append(["_case_relayout", Callable(self, "_case_relayout"), 0])
+	_cases_list.append(["_case_own_kbd_fits", Callable(self, "_case_own_kbd_fits"), 0])
+	_cases_list.append(["_case_yo_hint", Callable(self, "_case_yo_hint"), 0])
+	_cases_list.append(["_case_frame_spike", Callable(self, "_case_frame_spike"), 0])
+	_cases_list.append(["_case_broken_profile", Callable(self, "_case_broken_profile"), 0])
+	_cases_list.append(["_case_long_press_grey", Callable(self, "_case_long_press_grey"), 0])
+	_cases_list.append(["_case_rotate_with_marks", Callable(self, "_case_rotate_with_marks"), 0])
+	_cases_list.append(["_case_sym_layer_hint", Callable(self, "_case_sym_layer_hint"), 0])
+	_cases_list.append(["_case_fast_doubles", Callable(self, "_case_fast_doubles"), 0])
+	_cases_list.append(["_case_long_press_then_backspace", Callable(self, "_case_long_press_then_backspace"), 0])
+	_cases_list.append(["_case_ime_frames", Callable(self, "_case_ime_frames"), 0])
+	_cases_list.append(["_case_idle_hint", Callable(self, "_case_idle_hint"), 0])
+	_cases_list.append(["_case_reflow_typed_cells", Callable(self, "_case_reflow_typed_cells"), 0])
+	_cases_list.append(["_case_shift_hands", Callable(self, "_case_shift_hands"), 0])
+	_cases_list.append(["_case_backslash_key", Callable(self, "_case_backslash_key"), 0])
+	_cases_list.append(["_case_night_meteors", Callable(self, "_case_night_meteors"), 0])
+	_cases_list.append(["_case_enter_key", Callable(self, "_case_enter_key"), 0])
+	_cases_list.append(["_case_press_flash", Callable(self, "_case_press_flash"), 0])
+	_cases_list.append(["_case_key_repeat", Callable(self, "_case_key_repeat"), 0])
+	_cases_list.append(["_case_grey_first_line", Callable(self, "_case_grey_first_line"), 0])
+	_cases_list.append(["_case_lang_state", Callable(self, "_case_lang_state"), 0])
+	_cases_list.append(["_case_chaos", Callable(self, "_case_chaos"), 1500])
 func _fit_window() -> void:
 	DisplayServer.window_set_size(Vector2i(820, 1180))
 	root.size = Vector2i(820, 1180)
@@ -2983,56 +3059,20 @@ func _process(_dt: float) -> bool:
 		return true
 	_frame = 1
 	_fit_window()
-	_case_ime_word()
-	_case_autocorrect()
-	_case_backspace_chain()
-	_case_backspace_at_start()
-	_case_mistake_at_start()
-	_case_error_storm()
-	_case_line_wrap()
-	_case_wrap_waits_enter()
-	_case_wrap_auto()
-	_case_level_end()
-	_case_exact_case()
-	_case_night()
-	_case_ime_duplicate()
-	_case_last_cell()
-	_case_loss_with_marks()
-	_case_touch_keyboard()
-	_case_kbd_shift_layer()
-	_case_long_press()
-	_case_auto_punctuation()
-	_case_time_jump()
-	_case_menu_roundtrip()
-	_case_caps_warning()
-	_case_hint_lifetime()
-	_case_scroll()
-	_case_enter_spam()
-	_case_undo_cap()
-	_case_relayout()
-	_case_own_kbd_fits()
-	_case_yo_hint()
-	_case_frame_spike()
-	_case_broken_profile()
-	_case_long_press_grey()
-	_case_rotate_with_marks()
-	_case_sym_layer_hint()
-	_case_fast_doubles()
-	_case_long_press_then_backspace()
-	_case_ime_frames()
-	_case_idle_hint()
-	_case_reflow_typed_cells()
-	_case_shift_hands()
-	_case_backslash_key()
-	_case_night_meteors()
-	_case_enter_key()
-	_case_press_flash()
-	_case_key_repeat()
-	_case_grey_first_line()
-	_case_lang_state()
-	_case_chaos(1500)
-	_cases = 42
-	_check(_steps > 1200, "the test really played (coverage: %d steps)" % _steps)
+	_fill_cases()
+	var ran := 0
+	for idx in _cases_list.size():
+		if idx % _of != _shard:
+			continue
+		ran += 1
+		_cases += 1
+		var job: Array = _cases_list[idx]
+		if int(job[2]) > 0:
+			(job[1] as Callable).call(int(job[2]))
+		else:
+			(job[1] as Callable).call()
+	_check(ran > 0, "shard got no scenarios")
+	_check(_steps > 200, "the test really played (coverage: %d steps)" % _steps)
 	for f in _failures:
 		print("COMBO_TEST: FAIL: ", f)
 	print("COMBO_TEST: шагов=%d проверок=%d" % [_steps, _failures.size()])
