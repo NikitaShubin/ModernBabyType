@@ -51,16 +51,22 @@ run_godot() {
 		extra_env+=(-e "ANDROID_HOME=/work/tools/emulator/sdk")
 		extra_env+=(-e "ANDROID_SDK_ROOT=/work/tools/emulator/sdk")
 	fi
+	# Домашний каталог и XDG можно переопределить на тест
+	# (MBT_HOME): параллельные тесты не должны делить user://-профили
+	# (гость, сохранения уровней) — иначе чтения/записи гоняются.
+	local mbt_home="${MBT_HOME:-/tmp/mbt-home}"
+	local mbt_cfg="${MBT_XDG_CONFIG:-/home/agent/.config}"
+	local mbt_data="${MBT_XDG_DATA:-/home/agent/.local/share}"
 	local cmd=(docker run --rm
 		--user "$UID_GID"
 		-v "$ROOT:/work"
 		-v "$ROOT/tools/home:/home/agent"
 		-v /tmp/.X11-unix:/tmp/.X11-unix
 		-v /tmp/opencode:/tmp/opencode
-		-e HOME=/tmp/mbt-home
-		-e WINEPREFIX=/tmp/mbt-home/.wine
-		-e XDG_CONFIG_HOME=/home/agent/.config
-		-e XDG_DATA_HOME=/home/agent/.local/share
+		-e HOME="$mbt_home"
+		-e WINEPREFIX="$mbt_home/.wine"
+		-e XDG_CONFIG_HOME="$mbt_cfg"
+		-e XDG_DATA_HOME="$mbt_data"
 		-e DISPLAY="${DISPLAY:-:99}"
 		-e MBT_KEYSTORE="${MBT_KEYSTORE:-}"
 		-e MBT_KEY_ALIAS="${MBT_KEY_ALIAS:-}"
@@ -161,13 +167,35 @@ ensure_android_build() {
 run_test() {
 	local script="$1"
 	local limit="${2:-600}"
-	local name="mbt-test-$(basename "$script" .gd)-$$"
-	local log="/tmp/opencode/$(basename "$script" .gd).log"
+	local base
+	base="$(basename "$script" .gd)"
+	local name="mbt-test-$base-$$"
+	local log="/tmp/opencode/$base.log"
 	: >"$log"
 	docker rm -f "$name" >/dev/null 2>&1 || true
-	MBT_CONTAINER_NAME="$name" run_godot --headless --path game \
+	MBT_CONTAINER_NAME="$name" \
+	MBT_HOME="/tmp/mbt-home-$base" \
+	MBT_XDG_CONFIG="/tmp/mbt-home-$base/.config" \
+	MBT_XDG_DATA="/tmp/mbt-home-$base/.local/share" \
+	run_godot --headless --path game \
 		--script "res://tests/$script" >"$log" 2>&1 &
 	local pid=$!
+	_watch_docker "$name" "$log" "$limit" "$pid" || return 1
+	grep -E "_TEST: " "$log" | head -n 20 || true
+	if [ -s "$log" ] && ! grep -qE "_TEST: PASS" "$log"; then
+		echo "ТЕСТ $script: нет строки PASS, последние строки:" >&2
+		tail -n 20 "$log" >&2
+		return 1
+	fi
+}
+
+
+# Сторож одного контейнерного прогона: docker уже запущен в фоне
+# (pid — клиентская сторона), ждём его, убиваем контейнер по
+# SCRIPT ERROR и потолку времени. Возвращает 0, если контейнер
+# доработал сам (успех смотрит вызывающий по логу).
+_watch_docker() {
+	local name="$1" log="$2" limit="$3" pid="$4"
 	local waited=0 killed=""
 	while kill -0 "$pid" 2>/dev/null; do
 		if grep -q "SCRIPT ERROR" "$log"; then
@@ -185,24 +213,125 @@ run_test() {
 	done
 	wait "$pid" || true
 	docker rm -f "$name" >/dev/null 2>&1 || true
-	grep -E "_TEST: " "$log" | head -n 20 || true
 	if [ -n "$killed" ]; then
-		echo "ТЕСТ $script: снят сторожем ($killed), последние строки:" >&2
-		tail -n 20 "$log" >&2
-		return 1
-	fi
-	if [ -s "$log" ] && ! grep -qE "_TEST: PASS" "$log"; then
-		echo "ТЕСТ $script: нет строки PASS, последние строки:" >&2
+		echo "ТЕСТ $name: снят сторожем ($killed), последние строки:" >&2
 		tail -n 20 "$log" >&2
 		return 1
 	fi
 }
 
-# Все шесть тестов обязательны: логика ввода, обновление, проходимость
-# уровня, профили игроков, метки и координаты героев, инвариант погони.
-# Тест, который ни разу не падает на сломанном коде, бесполезен: правя
-# геометрию погони, сначала ломаем правило руками, убеждаемся, что
-# CHASE_TEST это ловит, и только потом ставим исправленное.
+
+# Один шард погони: свой контейнер, лог и дом (профили!), свой сид.
+# Решение о зачёте принимает слияние (run_chase), а не шард.
+run_chase_shard() {
+	local shard="$1" of="$2" limit="$3"
+	local name="mbt-test-chase-s$shard-$$"
+	local log="/tmp/opencode/chase-s$shard.log"
+	: >"$log"
+	docker rm -f "$name" >/dev/null 2>&1 || true
+	MBT_CONTAINER_NAME="$name" \
+	MBT_HOME="/tmp/mbt-home-chase-s$shard" \
+	MBT_XDG_CONFIG="/tmp/mbt-home-chase-s$shard/.config" \
+	MBT_XDG_DATA="/tmp/mbt-home-chase-s$shard/.local/share" \
+	run_godot --headless --path game \
+		--script res://tests/chase_test.gd -- --shard "$shard" --of "$of" >"$log" 2>&1 &
+	local pid=$!
+	_watch_docker "$name" "$log" "$limit" "$pid" || return 1
+}
+
+
+# Погоня в N шардов параллельно + слияние. Эпизоды независимы (каждый
+# начинается с чистого уровня), сиды разные, бюджеты делят 120 эпизодов
+# полного прогона. Итоговые пороги — те же, что в _report, но на суммах.
+run_chase() {
+	local shards=4 limit=1800
+	local pids=() i
+	for i in 0 1 2 3; do
+		run_chase_shard "$i" "$shards" "$limit" &
+		pids+=($!)
+	done
+	local failed=0 pid
+	for pid in "${pids[@]}"; do
+		if ! wait "$pid"; then
+			failed=1
+		fi
+	done
+	if [ "$failed" -ne 0 ]; then
+		return 1
+	fi
+	python3 - "$shards" <<'PYEOF_MERGE'
+import re, sys
+
+def parse(path):
+    txt = open(path, encoding="utf-8", errors="replace").read()
+    if "SCRIPT ERROR" in txt:
+        return None, ["SCRIPT ERROR в " + path]
+    m = re.search(r"шард=(\d+)/(\d+) эпизодов=(\d+) кадров=(\d+) сценарии\(угол_сзади/догон/откат_угол\)=\[(\d+), (\d+), (\d+)\]", txt)
+    p = re.search(r"уколов=(\d+) \(одна_строка=(\d+) откат_через_угол=(\d+)\) табло_угла_проверено=(\d+) ближайшая_d=(-?[\d.]+)", txt)
+    c = re.search(r"зазор на кадре укола: проверено=(\d+) средний=(-?[\d.]+) px", txt)
+    r = re.search(r"откатов Backspace=(\d+)", txt)
+    if not (m and p and c and r):
+        return None, ["неполный отчёт в " + path]
+    fails = [ln for ln in txt.splitlines() if "CHASE_TEST: FAIL: " in ln]
+    ok = "CHASE_TEST: PASS" in txt
+    return {
+        "episodes": int(m.group(3)), "frames": int(m.group(4)),
+        "sc": [int(m.group(5)), int(m.group(6)), int(m.group(7))],
+        "pricks": int(p.group(1)), "same": int(p.group(2)), "cross": int(p.group(3)),
+        "corner": int(p.group(4)), "closest": float(p.group(5)),
+        "contact_n": int(c.group(1)), "gap_sum": float(c.group(2)) * int(c.group(1)),
+        "retreats": int(r.group(1)), "fails": fails, "ok": ok,
+    }, []
+
+n = int(sys.argv[1])
+tot = {"episodes": 0, "frames": 0, "sc": [0, 0, 0], "pricks": 0, "same": 0,
+       "cross": 0, "corner": 0, "closest": -999.0, "contact_n": 0,
+       "gap_sum": 0.0, "retreats": 0}
+problems = []
+for i in range(n):
+    d, errs = parse("/tmp/opencode/chase-s%d.log" % i)
+    problems += errs
+    if d is None:
+        continue
+    if not d["ok"] or d["fails"]:
+        problems += d["fails"] or ["шард %d без PASS" % i]
+    for k in ("episodes", "frames", "pricks", "same", "cross", "corner",
+              "contact_n", "retreats"):
+        tot[k] += d[k]
+    for j in range(3):
+        tot["sc"][j] += d["sc"][j]
+    tot["closest"] = max(tot["closest"], d["closest"])
+    tot["gap_sum"] += d["gap_sum"]
+for j, need in ((0, 200), (1, 200), (2, 200)):
+    if tot["sc"][j] <= need:
+        problems.append("сценарий %d: кадров %d, надо > %d" % (j, tot["sc"][j], need))
+if tot["contact_n"] <= 5:
+    problems.append("контакт проверен %d раз, надо > 5" % tot["contact_n"])
+if tot["corner"] <= 10:
+    problems.append("угловых табло %d, надо > 10" % tot["corner"])
+if tot["retreats"] <= 20:
+    problems.append("откатов %d, надо > 20" % tot["retreats"])
+avg = tot["gap_sum"] / tot["contact_n"] if tot["contact_n"] else 0.0
+print("CHASE_TEST: шардов=%d эпизодов=%d кадров=%d сценарии(угол_сзади/догон/откат_угол)=%s"
+      % (n, tot["episodes"], tot["frames"], tot["sc"]))
+print("CHASE_TEST: уколов=%d (одна_строка=%d откат_через_угол=%d) табло_угла_проверено=%d ближайшая_d=%.2f"
+      % (tot["pricks"], tot["same"], tot["cross"], tot["corner"], tot["closest"]))
+print("CHASE_TEST: зазор на кадре укола: проверено=%d средний=%.2f px (0 = шары ровно касаются)"
+      % (tot["contact_n"], avg))
+print("CHASE_TEST: откатов Backspace=%d" % tot["retreats"])
+if problems:
+    seen = set()
+    for f in problems:
+        key = f[:120]
+        if key not in seen:
+            seen.add(key)
+            print("CHASE_TEST: FAIL: ", f)
+    sys.exit(1)
+print("CHASE_TEST: PASS")
+PYEOF_MERGE
+}
+
+
 run_tests() {
 	run_godot --headless --path game --import
 	# Мёртвый путь не возвращается молча: ввод — только своей экранной
@@ -216,14 +345,27 @@ run_tests() {
 		echo "mbt-build: в коде игры остались следы слоя знаков или долгого нажатия" >&2
 		return 1
 	fi
-	run_test logic_test.gd
-	run_test update_test.gd
-	run_test end_test.gd
-	run_test profiles_test.gd
-	run_test marks_test.gd
-	run_test combo_test.gd
+	# Все тесты — параллельно (ядер хватает, каждый лёгкий): общее время
+	# определяет самый долгий (chase), а не сумма. Дома и логи у каждого
+	# свои (см. run_test), контейнеры — тоже, так что тесты не мешают
+	# друг другу. Импорт и линты выше идут строго до — они общие.
 	# Погоня гоняет живой цикл кадр за кадром — самый долгий тест.
-	run_test chase_test.gd 1800
+	local pids=() failed=0
+	local s pid
+	for s in logic_test.gd update_test.gd end_test.gd profiles_test.gd marks_test.gd combo_test.gd; do
+		run_test "$s" 600 &
+		pids+=($!)
+	done
+	# Погоня гоняет живой цикл кадр за кадром — самый долгий тест,
+	# поэтому сама идёт шардами (см. run_chase).
+	run_chase &
+	pids+=($!)
+	for pid in "${pids[@]}"; do
+		if ! wait "$pid"; then
+			failed=1
+		fi
+	done
+	return $failed
 }
 
 # Пресеты в том порядке, в каком они лежат в export_presets.cfg.

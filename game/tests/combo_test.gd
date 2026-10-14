@@ -1241,34 +1241,15 @@ func _case_relayout() -> void:
 	# догоняет зайца за сорок кадров замера и сценарий меряет табло
 	# укола вместо живой погони.
 	_main.enemy_cps = B.BASE_CPS
-	# Ёж на 6 клеток позади зайца: погоня идёт, укола нет.
-	# Ежа — в ТУ ЖЕ строку, клетками назад по строке: зазор меряется
-	# иксами, а иксы осмысленны только в одной строке (соседняя строка —
-	# другой y и свой отсчёт; было: ёж строкой раньше, зазор -15).
-	# Курсор отгоняем на 6+ клеток вглубь строки, чтобы влезть.
-	var push := 0
-	while int(_main.cursor_pos) < 6 and _main.state == "playing" and push < 200:
-		push += 1
-		var adv: String = _main._current()
-		if adv == "":
-			if _main.need_enter:
-				_hard("\r", KEY_ENTER)
-				_tick(tag)
-				continue
-			break
-		_main._type_char(adv)
-		_tick(tag)
-	_check(
-		int(_main.cursor_pos) >= 6 and _main.state == "playing",
-		"%s: no room for the hedgehog on the row (coverage)" % tag
-	)
-	_main.enemy_line = int(_main.cursor_line)
-	_main.enemy_x = _main.margin + (float(_main.cursor_pos) - 6.0) * _main.char_w
+	# Ёж на 6 клеток позади зайца по оси (таблица считает строку сама;
+	# иксы через строки не сравниваем — граница строк легитимно падает
+	# между героями, а дистанция по оси обязана уцелеть).
+	_enemy_at(_ax() - 6.0)
 	for i in 20:
 		_main._process(DT)
 	_check(_main.state == "playing", "%s: the chase ended before the relayout" % tag)
 	var e_before: float = _main._lin(int(_main.enemy_line), (_main.enemy_x - _main.margin) / _main.char_w)
-	var d_before := _screen_gap()
+	var h_before := _ax()
 	var cw_before: float = _main.char_w
 	# Ужимаем окно: k, char_w и поля меняются — это и есть перераскладка.
 	# Герой долетает до новой клетки не мгновенно, а лерпом: меряем
@@ -1286,6 +1267,7 @@ func _case_relayout() -> void:
 		absf(_main.hero_r.x - _main._hero_pos().x) < _main.char_w,
 		"%s: the hare did not settle after relayout (off by %.1f px)" % [tag, absf(_main.hero_r.x - _main._hero_pos().x)]
 	)
+	_check(_main.state == "playing", "%s: the chase ended during the relayout" % tag)
 	# Ось ежа тоже обязана уцелеть (ехал вместе с текстом, см.
 	# _remap_enemy): допуск с запасом на его ход за сорок кадров.
 	var e_after: float = _main._lin(int(_main.enemy_line), (_main.enemy_x - _main.margin) / _main.char_w)
@@ -1297,12 +1279,21 @@ func _case_relayout() -> void:
 		_main.char_w != cw_before,
 		"%s: the relayout did not change the glyph width" % tag
 	)
-	var d_after := _screen_gap()
 	_common(tag)
 	_check(
-		absf(d_after - d_before) < 1.5,
-		"%s: the chase broke on the screen — gap %.1f → %.1f px" % [tag, d_before, d_after]
+		absf(_ax() - h_before) <= 0.5,
+		"%s: the hare lost its letter (%.1f → %.1f)" % [tag, h_before, _ax()]
 	)
+	_check(
+		absf((_ax() - e_after) - (h_before - e_before)) <= 3.5,
+		"%s: the chase distance broke (%.1f → %.1f)" % [tag, h_before - e_before, _ax() - e_after]
+	)
+	# Обратный ход — отдельный замер со свежим лидом: за шестьдесят
+	# кадров погони ёж подъедает лид, и старый лид 6 может кончиться
+	# уколом посреди замера (а не разрывом вёрстки).
+	_enemy_at(_ax() - 6.0)
+	_check(_main.state == "playing", "%s: the chase ended before the relayout back" % tag)
+	var h_before2 := _ax()
 	# Возвращаем окно и проверяем ещё раз: туда-обратно без разрыва.
 	DisplayServer.window_set_size(Vector2i(820, 1180))
 	root.size = Vector2i(820, 1180)
@@ -1313,10 +1304,10 @@ func _case_relayout() -> void:
 		absf(_main.hero_r.x - _main._hero_pos().x) < _main.char_w,
 		"%s: the hare did not settle after relayout back (off by %.1f px)" % [tag, absf(_main.hero_r.x - _main._hero_pos().x)]
 	)
+	_check(_main.state == "playing", "%s: the chase ended during the relayout back" % tag)
 	_check(
-		absf(_screen_gap() - d_before) < 1.5,
-		"%s: the chase broke after the relayout back (gap %.1f → %.1f)"
-			% [tag, d_before, _screen_gap()]
+		absf(_ax() - h_before2) <= 0.5,
+		"%s: the hare lost its letter on the way back (%.1f → %.1f)" % [tag, h_before2, _ax()]
 	)
 	_common(tag)
 
@@ -1324,14 +1315,6 @@ func _case_relayout() -> void:
 ## Пиксельный зазор между шарами: 0 = ровно касание (табло укола).
 func _contact_px() -> float:
 	return _main.hero_r.x - (_main.enemy_x + _main._hedge_half())
-
-
-## Экранная дистанция между зайцем и ежом в символах оси: столько же,
-## сколько по логике (_lin). Её разрыв = ёж уехал один, без зайца.
-func _screen_gap() -> float:
-	var h: float = _main._lin(int(_main.cursor_line), float(_main.cursor_pos))
-	var e: float = _main._lin(int(_main.enemy_line), (_main.enemy_x - _main.margin) / _main.char_w)
-	return (_main.hero_r.x - (_main.enemy_x + _main._hedge_half())) / _main.char_w - (h - e)
 
 
 ## 27. Своя клавиатура обязана помещаться на экране при ЛЮБОЙ ориентации:
@@ -2887,6 +2870,11 @@ func _case_scroll() -> void:
 	_main._type_char(_wrong())
 	_tick(tag)
 	_check(_main.errors.size() == marks0 + 1, "%s: no mark on the scrolled text" % tag)
+	# Полные инварианты — ДО телепорта: _at уводит зайца вперёд мимо
+	# свежей метки, а игра сама такого не делает (проход стирает метки
+	# под ногой — доказано разбором; телепорт метку позади оставляет).
+	# После телепорта проверяем только курсор, счётчики и картинку.
+	_common(tag)
 	_drawed(tag)
 	# Курсор на третьей строке — она обязана быть в видимой полосе.
 	_at(mini(2, _main.display_lines.size() - 1), 1)
@@ -2898,7 +2886,11 @@ func _case_scroll() -> void:
 		_main.scroll_y >= 0.0,
 		"%s: the text scrolled above zero (%.0f)" % [tag, _main.scroll_y]
 	)
-	_common(tag)
+	_cursor_valid(tag)
+	_check(
+		_main.errors.size() <= _main.typed_bad,
+		"%s: marks %d > mistakes %d" % [tag, _main.errors.size(), _main.typed_bad]
+	)
 	root.size = old_size
 	_main._relayout()
 

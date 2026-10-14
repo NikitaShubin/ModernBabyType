@@ -18,6 +18,13 @@ var _main: Node = null
 var _frame := 0
 var _failures: Array[String] = []
 var _rng := RandomNumberGenerator.new()
+## Шардирование прогона: -- --shard I --of N. Каждый шард играет свою
+## треть/свою четверть эпизодов на своём сиде, слияние — в build-game.sh
+## (суммы счётчиков + те же пороги). Без аргументов — как раньше: весь
+## прогон одним процессом до лимита кадров.
+var _shard := 0
+var _of := 1
+var _episode_budget := 1 << 30
 ## Сколько «ходов» героя уже сделано (для выбора ввода).
 var _turn := 0
 ## Состояние до конца эпизода: ждём, пока ёж догонит.
@@ -58,7 +65,18 @@ func _check(cond: bool, what: String) -> void:
 
 
 func _initialize() -> void:
-	_rng.seed = 20261003
+	var args := OS.get_cmdline_user_args()
+	var i := 0
+	while i < args.size():
+		if String(args[i]) == "--shard" and i + 1 < args.size():
+			_shard = int(args[i + 1])
+		elif String(args[i]) == "--of" and i + 1 < args.size():
+			_of = maxi(1, int(args[i + 1]))
+		i += 1
+	_rng.seed = 20261003 + _shard
+	if _of > 1:
+		# 120 эпизодов на полный прогон — делим поровну.
+		_episode_budget = 120 / _of
 	var scene: PackedScene = load("res://scenes/main.tscn")
 	_main = scene.instantiate()
 	# Инвариант погони проверяется на живом цикле, а не в меню игроков.
@@ -347,15 +365,15 @@ func _process(_dt: float) -> bool:
 	_closest = maxf(_closest, _d())
 	_prev_ex = _main.enemy_x
 
-	if _failures.size() > 8 or _frame > 60 * 60 * 12:
+	if _failures.size() > 8 or _episodes >= _episode_budget or _frame > 60 * 60 * 12:
 		_report()
 		return true
 	return false
 
 
 func _report() -> void:
-	print("CHASE_TEST: эпизодов=%d кадров=%d сценарии(угол_сзади/догон/откат_угол)=%s"
-		% [_episodes, _frames_played, str(_scenario_frames)])
+	print("CHASE_TEST: шард=%d/%d эпизодов=%d кадров=%d сценарии(угол_сзади/догон/откат_угол)=%s"
+		% [_shard, _of, _episodes, _frames_played, str(_scenario_frames)])
 	print("CHASE_TEST: уколов=%d (одна_строка=%d откат_через_угол=%d) табло_угла_проверено=%d ближайшая_d=%.2f (D=%.2f)"
 		% [_pricks, _prick_same, _prick_cross, _corner_checked, _closest, _D()])
 	print("CHASE_TEST: зазор на кадре укола: проверено=%d средний=%.2f px (0 = шары ровно касаются)"

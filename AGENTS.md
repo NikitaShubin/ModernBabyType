@@ -455,12 +455,20 @@ source .venv/bin/activate
   game/tests/marks_test.gd game/tests/combo_test.gd game/tests/chase_test.gd \
   game/tests/shot_driver.gd game/tests/visual_driver.gd \
   game/tests/menu_driver.gd
-tools/docker/build-game.sh --test-only          # семь тестов
+tools/docker/build-game.sh --test-only          # семь тестов, параллельно
 tools/docker/build-game.sh --all                # тесты + 4 платформы
 tools/docker/build-game.sh --preset Android     # одна платформа
 tools/docker/build-game.sh --shot               # кадры анимации
 tools/docker/build-game.sh --visual             # кадры партии + модель, потом меню
 ```
+
+Тесты идут параллельно (ядер хватает): шесть быстрых плюс погоня
+четырьмя шардами (`-- --shard I --of 4`, эпизоды независимы, сиды
+разные, бюджет делит 120 эпизодов; слияние в `run_chase` суммирует
+счётчики и держит те же пороги). У каждого
+теста и шарда свой контейнер, лог и дом (`user://`-профили общие
+не делят). Общее время определяют самые долгие шарды (минуты), а не
+сумма (~25 мин).
 
 Тесты: `LOGIC_TEST` (логика ввода), `PROFILES_TEST` (меню игроков),
 `MARKS_TEST` (метки и координаты героев), `COMBO_TEST` (комбинации
