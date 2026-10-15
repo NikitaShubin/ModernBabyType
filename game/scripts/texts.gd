@@ -46,6 +46,11 @@ static func list_files(base := "kids") -> Array[String]:
 				names.append(dir_path + "/" + fname)
 			fname = dir.get_next()
 		dir.list_dir_end()
+	# Порядок обхода каталога зависит от файловой системы: без сортировки
+	# один и тот же сид тасовал бы по-разному на разных машинах, и
+	# seeded-прогоны расходились бы (ловил CI 15.10.2026: backspace-цепочка
+	# зелёная дома, красная на раннере). Сортируем — дальше всё решает сид.
+	names.sort()
 	var out: Array[String] = []
 	while not names.is_empty():
 		var i := randi() % names.size()

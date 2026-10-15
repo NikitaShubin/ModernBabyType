@@ -856,7 +856,7 @@ func _case_exact_case() -> void:
 				_check(_main.errors.has(mk), "%s: a wrong case was accepted" % tag)
 				_check(
 					absf(before - _cax() - 1.0) <= 0.001,
-					"%s: the hare did not step back one cell on a wrong case" % [tag, before - _cax()]
+					"%s: the hare did not step back one cell on a wrong case (off by %.2f)" % [tag, before - _cax() - 1.0]
 				)
 				# Возвращаемся к отмеченной клетке: игра не должна её
 				# перешагнуть (она ждёт верной буквы).
