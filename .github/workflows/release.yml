@@ -66,6 +66,11 @@ jobs:
           name: ModernBabyType-${{ github.ref_name }}
           path: game/dist/
           if-no-files-found: error
+          # Артефакты — только для отладки прогона (файлы живут на
+          # странице релиза): без срока каждый релизный прогон кладёт
+          # ~130 МБ на 90 дней и забивает 0.5 ГБ хранилища за пару
+          # недель (октябрь 2026: ~4 ГБ, письмо о 100%).
+          retention-days: 5
 
       - name: Релиз
         if: startsWith(github.ref, 'refs/tags/')
