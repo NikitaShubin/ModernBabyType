@@ -91,7 +91,9 @@ func _a_phone_cards() -> void:
 ## Тап по галочке «Про» второй карточки: чип заливается и внизу
 ## появляется пояснение (в карточках шапки колонок нет).
 func _a_tap_pro() -> void:
-	_menu.call("_input", _tap(Rect2(_menu.call("_pro_tap_rect", 1)).get_center()))
+	var pro_pos: Vector2 = Rect2(_menu.call("_pro_tap_rect", 1)).get_center()
+	_menu.call("_input", _tap(pro_pos))
+	_menu.call("_input", _release(pro_pos))
 
 
 func _a_name_field() -> void:
@@ -103,7 +105,9 @@ func _a_name_field() -> void:
 func _a_delete_confirm() -> void:
 	_menu.input_active = false
 	_menu.input_text = ""
-	_menu.call("_input", _tap(Rect2(_menu.call("_del_tap_rect", 0)).get_center()))
+	var del_pos: Vector2 = Rect2(_menu.call("_del_tap_rect", 0)).get_center()
+	_menu.call("_input", _tap(del_pos))
+	_menu.call("_input", _release(del_pos))
 
 
 func _a_night() -> void:
@@ -122,6 +126,14 @@ func _tap(pos: Vector2) -> InputEventMouseButton:
 	var ev := InputEventMouseButton.new()
 	ev.button_index = MOUSE_BUTTON_LEFT
 	ev.pressed = true
+	ev.position = pos
+	return ev
+
+
+func _release(pos: Vector2) -> InputEventMouseButton:
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_LEFT
+	ev.pressed = false
 	ev.position = pos
 	return ev
 

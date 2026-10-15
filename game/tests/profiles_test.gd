@@ -70,6 +70,10 @@ func _process(_dt: float) -> bool:
 	_part25_corrupt_file()
 	_part26_update_modal_keys()
 	_part28_cards()
+	_part29_card_scroll()
+	_part30_bunny_strip()
+	_part31_menu_no_overlap()
+	_part32_pre_ready_geometry()
 	_part27_menu_chaos()
 	_report()
 	return true
@@ -286,23 +290,23 @@ func _part6_navigation() -> void:
 		_menu.chosen.connect(_on_chosen)
 	var ti: int = _menu.users.find("Снос3")
 	_menu.sel = ti
-	_menu.call("_input", _tap(_menu.call("_del_tap_rect", ti).get_center()))
+	_menu_tap(_menu.call("_del_tap_rect", ti).get_center())
 	printerr("DBG vw=", _menu.view_w, " k=", _menu.k, " touch=", Ui.force_touch, " cols=", _menu._table_cols(), " del=", Rect2(_menu.call("_del_tap_rect", ti)))
 	_check(
 		String(_menu.confirm_name) == "Снос3", "cross tap arms the confirm"
 	)
 	_picked = ""
-	_menu.call("_input", _tap(_menu.call("_row_tap_rect", ti).get_center()))
+	_menu_tap(_menu.call("_row_tap_rect", ti).get_center())
 	_check(
 		_picked == "", "row tap is swallowed while confirming"
 	)
 	_check(
 		_menu.users.has("Снос3"), "row tap while confirming deletes nothing"
 	)
-	_menu.call("_input", _tap(_menu.call("_confirm_no_rect").get_center()))
+	_menu_tap(_menu.call("_confirm_no_rect").get_center())
 	_check(_menu.users.has("Снос3"), "No button keeps the user")
-	_menu.call("_input", _tap(_menu.call("_del_tap_rect", ti).get_center()))
-	_menu.call("_input", _tap(_menu.call("_confirm_yes_rect").get_center()))
+	_menu_tap(_menu.call("_del_tap_rect", ti).get_center())
+	_menu_tap(_menu.call("_confirm_yes_rect").get_center())
 	_check(not _menu.users.has("Снос3"), "Yes button removes the user")
 	_check(
 		_menu.users.size() == n, "temp profiles are gone, list is intact"
@@ -412,7 +416,9 @@ func _part9_main_game() -> void:
 	# убьёт прогон). Гость — только кнопкой «Без профиля»: вся
 	# проводка от тапа до сигнала chosen.
 	_picked = ""
-	menu.call("_input", _tap(menu.call("_guest_tap_rect").get_center()))
+	var gpos: Vector2 = menu.call("_guest_tap_rect").get_center()
+	menu.call("_input", _tap(gpos))
+	menu.call("_input", _release(gpos))
 	_check(not _main.menu_open, "guest choice closes the menu")
 	_check(_main.profile_name == S.GUEST, "guest choice switches to guest")
 	_check(_main.state == "playing", "guest choice starts the game")
@@ -518,7 +524,18 @@ func _part9_main_game() -> void:
 	# скорость и ошибки.
 	_check("Уровень" not in _main.overlay_label.text, "won modal has no header")
 	_check("Enter" not in _main.overlay_label.text, "won modal has no enter hint")
-	_check("★" in _main.overlay_label.text, "won modal keeps the stars")
+	# Звёзды — крупно на самом игровом поле, а не в модалке (автор
+	# 15.10.2026): в модалке они лезли на текст.
+	_check("★" not in _main.overlay_label.text, "won modal has no stars inside")
+	_check(
+		"★" in _main.stars_label.text and _main.stars_label.visible,
+		"won stars live big on the field"
+	)
+	var star_fs: int = _main._star_fs
+	_check(
+		star_fs > _main._over_fs,
+		"field stars are bigger than the modal font (%d > %d)" % [star_fs, _main._over_fs]
+	)
 	# Проигрыш — та же краткость, без «укололся».
 	_main._new_level()
 	_main._finish(false)
@@ -560,7 +577,7 @@ func _part10_first_run() -> void:
 	_check(String(_menu.input_text) == "", "name field starts empty")
 	# Галочка на пустом списке относится к вводимому имени: включаем,
 	# набираем, создаём — флаг переезжает в профиль.
-	_menu.call("_input", _tap(_menu.call("_check_tap_rect").get_center()))
+	_menu_tap(_menu.call("_check_tap_rect").get_center())
 	_check(_menu.input_all_keys, "checkbox arms the typed name")
 	for ch in "Гри":
 		_menu.call("_unhandled_key_input", _key_event(ch))
@@ -572,7 +589,7 @@ func _part10_first_run() -> void:
 	_menu.call("_reload")
 	# Компактная галка «Ё»: тап снимает строгость, флаг переезжает
 	# в профиль и сбрасывается в строго. Список пуст — поле открыто.
-	_menu.call("_input", _tap(_menu.call("_yocheck_tap_rect").get_center()))
+	_menu_tap(_menu.call("_yocheck_tap_rect").get_center())
 	_check(not _menu.input_yo_strict, "yo checkbox disarms strictness")
 	for ch in "Гоша":
 		_menu.call("_unhandled_key_input", _key_event(ch))
@@ -682,31 +699,31 @@ func _part13_touch() -> void:
 	var first := String(_menu.users[0])
 	var second := String(_menu.users[1])
 	_picked = ""
-	_menu.call("_input", _tap(_menu.call("_row_tap_rect", 1).get_center()))
+	_menu_tap(_menu.call("_row_tap_rect", 1).get_center())
 	_check(_picked == second, "tap on a row plays as that user")
-	_menu.call("_input", _tap(_menu.call("_field_tap_rect").get_center()))
+	_menu_tap(_menu.call("_field_tap_rect").get_center())
 	_check(_menu.input_active, "tap on the field opens input")
 	_picked = ""
-	_menu.call("_input", _tap(_menu.call("_guest_tap_rect").get_center()))
+	_menu_tap(_menu.call("_guest_tap_rect").get_center())
 	_check(_picked == S.GUEST, "guest button enters as guest")
 	_menu.sel = 0
 	_picked = ""
-	_menu.call("_input", _tap(_menu.call("_play_tap_rect").get_center()))
+	_menu_tap(_menu.call("_play_tap_rect").get_center())
 	_check(_picked == first, "play button enters the selected profile")
 	# Галочка «Про» в строке: тап переключает флаг ЭТОГО профиля
 	# и не играет им (picked пуст).
 	_picked = ""
-	_menu.call("_input", _tap(_menu.call("_pro_tap_rect", 0).get_center()))
+	_menu_tap(_menu.call("_pro_tap_rect", 0).get_center())
 	_check(S.get_all_keys(first), "pro checkbox turns all_keys on")
 	_check(_picked == "", "pro tap does not play the profile")
-	_menu.call("_input", _tap(_menu.call("_pro_tap_rect", 0).get_center()))
+	_menu_tap(_menu.call("_pro_tap_rect", 0).get_center())
 	_check(not S.get_all_keys(first), "pro checkbox turns all_keys off")
 	# Галочка «Ё» в строке: тап переключает строгость ЭТОГО профиля.
 	_check(S.get_yo_strict(first), "yo is strict by default")
-	_menu.call("_input", _tap(_menu.call("_yo_tap_rect", 0).get_center()))
+	_menu_tap(_menu.call("_yo_tap_rect", 0).get_center())
 	_check(not S.get_yo_strict(first), "yo tap relaxes strictness")
 	_check(_picked == "", "yo tap does not play the profile")
-	_menu.call("_input", _tap(_menu.call("_yo_tap_rect", 0).get_center()))
+	_menu_tap(_menu.call("_yo_tap_rect", 0).get_center())
 	_check(S.get_yo_strict(first), "yo tap restores strictness")
 	# Стрелки ←/→ выбирают колонку, пробел переключает её флаг.
 	# Поле ввода гасим: иначе пробел — это ввод, а не переключатель.
@@ -723,17 +740,17 @@ func _part13_touch() -> void:
 	_menu.call("_unhandled_key_input", _key(KEY_SPACE))
 	_check(not S.get_all_keys(first), "space toggles the pro flag back")
 	# Тап по заголовку объясняет галку, повторный гасит.
-	_menu.call("_input", _tap(_menu.call("_yo_head_rect").get_center()))
+	_menu_tap(_menu.call("_yo_head_rect").get_center())
 	_check(String(_menu.hint_header) == "yo", "yo header tap explains the flag")
-	_menu.call("_input", _tap(_menu.call("_yo_head_rect").get_center()))
+	_menu_tap(_menu.call("_yo_head_rect").get_center())
 	_check(String(_menu.hint_header) == "", "yo header tap again hides it")
-	_menu.call("_input", _tap(_menu.call("_pro_head_rect").get_center()))
+	_menu_tap(_menu.call("_pro_head_rect").get_center())
 	_check(String(_menu.hint_header) == "pro", "pro header tap explains the flag")
-	_menu.call("_input", _tap(_menu.call("_pro_head_rect").get_center()))
+	_menu_tap(_menu.call("_pro_head_rect").get_center())
 	_check(String(_menu.hint_header) == "", "pro header tap again hides it")
 	# Тап по второй строке играет вторым (галочки не мешают).
 	_picked = ""
-	_menu.call("_input", _tap(_menu.call("_row_tap_rect", 1).get_center()))
+	_menu_tap(_menu.call("_row_tap_rect", 1).get_center())
 	_check(_picked == second, "tap on a row plays as that user")
 	# Колонки таблицы: галочки обоих строк на одной вертикали.
 	var p0 := Rect2(_menu.call("_pro_tap_rect", 0))
@@ -761,7 +778,22 @@ func _part13_touch() -> void:
 	_menu.view_w = 412.0
 	_menu.view_h = 915.0
 	_menu.k = 0.736
-	_check(_menu.call("_rows_top") > y_land, "portrait block sits lower")
+	# Портрет: список занимает ВСЮ середину экрана — от шапки до поля
+	# ввода. Прежде блок «опускался» и оставлял дыру снизу (жалоба
+	# автора 10.2026), теперь растягивается на окно.
+	var view_p := Rect2(_menu.call("_list_rect"))
+	_check(
+		view_p.end.y <= float(_menu.call("_field_line_y")) - 30.0 * _menu.k,
+		"the portrait list ends above the field"
+	)
+	_check(
+		view_p.position.y >= float(_menu.call("_rows_top")) - 1.0,
+		"the portrait list starts under the header"
+	)
+	_check(
+		view_p.size.y > 160.0,
+		"the portrait list is taller than the header, not a strip"
+	)
 	# Длинное имя и ширина. Геометрия чистая: профиль создавать не надо,
 	# меряем только текст и прямоугольники.
 	#   — таблица (узкий альбом) режет имя многоточием;
@@ -828,7 +860,7 @@ func _part13_touch() -> void:
 	# Скрытое меню тычков не видит.
 	_menu.visible = false
 	_picked = ""
-	_menu.call("_input", _tap(_menu.call("_row_tap_rect", 0).get_center()))
+	_menu_tap(_menu.call("_row_tap_rect", 0).get_center())
 	_check(_picked == "", "hidden menu ignores taps")
 	_menu.visible = true
 	for u in S.user_list():
@@ -852,14 +884,14 @@ func _part14_night() -> void:
 	_menu.night = false
 	_menu.nmode = S.NIGHT_DAY
 	# Кнопка крутит по кругу день → ночь → авто → день.
-	_menu.call("_input", _tap(_menu.call("_night_tap_rect").get_center()))
+	_menu_tap(_menu.call("_night_tap_rect").get_center())
 	_check(_menu.night, "night button flips the mode on")
 	_check(S.get_night_mode() == 1, "flip persists as night")
 	_check(_menu.nmode == S.NIGHT_ON, "mode tracks night")
-	_menu.call("_input", _tap(_menu.call("_night_tap_rect").get_center()))
+	_menu_tap(_menu.call("_night_tap_rect").get_center())
 	_check(S.get_night_mode() == -1, "second flip goes auto")
 	_check(_menu.nmode == S.NIGHT_AUTO, "mode tracks auto")
-	_menu.call("_input", _tap(_menu.call("_night_tap_rect").get_center()))
+	_menu_tap(_menu.call("_night_tap_rect").get_center())
 	_check(not _menu.night, "third flip returns to day")
 	_check(S.get_night_mode() == 0, "day persists after the full circle")
 
@@ -893,7 +925,7 @@ func _part15_update() -> void:
 	)
 	# Тап по кнопке — проверка (сеть не трогаем: дальше вызываем
 	# приёмники напрямую).
-	_menu.call("_input", _tap(ub.get_center()))
+	_menu_tap(ub.get_center())
 	_check(String(_menu._upd_state) == "checking", "update tap starts checking")
 	_check(String(_menu._upd_msg) != "", "checking shows a status")
 	# Свежее — строкой, модалки нет.
@@ -905,10 +937,10 @@ func _part15_update() -> void:
 	_check(bool(_menu._upd_open), "available opens the modal")
 	_check(String(_menu._upd_tag) == "v0.0.10", "modal carries the tag")
 	# «Позже» гасит модалку.
-	_menu.call("_input", _tap(yes.get_center()))
+	_menu_tap(yes.get_center())
 	_check(String(_menu._upd_state) == "error", "yes without URL fails loudly")
 	_menu.call("_on_upd_checked", true, "v0.0.10", "a\nb", "http://x")
-	_menu.call("_input", _tap(no.get_center()))
+	_menu_tap(no.get_center())
 	_check(not bool(_menu._upd_open), "no button closes the modal")
 	# Ошибка сети — строкой.
 	_menu.call("_on_upd_failed", "нет сети")
@@ -952,16 +984,39 @@ func _part23_portrait_dense() -> void:
 	var want_plain := minf(1080.0 / 1100.0, 2280.0 / 650.0)
 	var want_dense := minf(want_plain * 2.6, 2.5)
 	_check(want_dense > 2.0, "sanity: density grows the portrait scale")
-	# Много строк: полный масштаб не влезает — _fit_k ужимает, но блок
-	# остаётся на экране, а не уезжает.
+	# Много игроков: масштаб НЕ ужимается — список листается. Раньше
+	# двенадцать карточек ужимали весь интерфейс до нечитаемого (жалоба
+	# автора 10.2026: в портрете всё мелкое), теперь интерфейс крупный,
+	# а лишнее листается пальцем.
 	var k_full: float = _menu.call("_fit_k", 2.5, 0.7)
-	_check(k_full < 2.5, "fit shrinks an overflowing portrait (k=%.2f)" % k_full)
+	_check(
+		k_full >= 2.0,
+		"a crowded portrait keeps the big scale (k=%.2f)" % k_full
+	)
 	_menu.k = k_full
 	var n: int = _menu.users.size()
-	var last_y: float = _menu.call("_rows_top") + float(n - 1) * _menu.call("_row_step")
-	_check(last_y <= _menu.view_h, "the last of 12 rows stays on screen")
-	_check(Rect2(_menu.call("_play_tap_rect")).end.y <= _menu.view_h,
-		"action buttons stay on screen after fit")
+	var step: float = _menu.call("_row_step")
+	var card_h: float = _menu.call("_card_h")
+	var list_h: float = Rect2(_menu.call("_list_rect")).size.y
+	_check(
+		float(_menu.call("_list_max_scroll")) >= float(n - 1) * step + card_h - list_h,
+		"the twelfth player is reachable by scrolling"
+	)
+	_check(
+		Rect2(_menu.call("_play_tap_rect")).end.y <= _menu.view_h,
+		"action buttons stay on screen with twelve players"
+	)
+	# Карточка не мельчает от числа игроков: при десяти и при трёх
+	# высота почти одна (иначе список снова станет нечитаемым).
+	_menu.users = u12
+	var h12: float = _menu.call("_card_h")
+	var u3: Array[String] = ["Ю1", "Ю2", "Ю3"]
+	_menu.users = u3
+	var h3: float = _menu.call("_card_h")
+	_check(
+		h3 <= h12 * 1.35,
+		"cards grow with free space, not with the player count (%.0f vs %.0f)" % [h3, h12]
+	)
 	# Мало строк: плотность даёт крупный масштаб без ужима.
 	var u1: Array[String] = ["Ю"]
 	_menu.users = u1
@@ -1302,6 +1357,578 @@ func _tap(pos: Vector2) -> InputEventMouseButton:
 	return ev
 
 
+## Полный тап: нажатие и отпускание. По листаемому списку меню ждёт
+## отпускания (иначе жест прокрутки успевал бы выбрать игрока), поэтому
+## одним нажатием тап больше не проходит.
+func _menu_tap(pos: Vector2) -> void:
+	_menu.call("_input", _tap(pos))
+	_menu.call("_input", _release(pos))
+
+
+func _release(pos: Vector2) -> InputEventMouseButton:
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_LEFT
+	ev.pressed = false
+	ev.position = pos
+	return ev
+
+
+## Движение пальца с зажатой левой кнопкой — так приходит прокрутка.
+func _motion(from: Vector2, to: Vector2) -> InputEventMouseMotion:
+	var ev := InputEventMouseMotion.new()
+	ev.position = to
+	ev.relative = to - from
+	ev.button_mask = MOUSE_BUTTON_MASK_LEFT
+	return ev
+
+
+func _wheel(pos: Vector2, up: bool) -> InputEventMouseButton:
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_WHEEL_UP if up else MOUSE_BUTTON_WHEEL_DOWN
+	ev.pressed = true
+	ev.position = pos
+	return ev
+
+
+## Прокрутка списка игроков в портрете: карточек много, окно одно —
+## листается пальцем (автор 10.2026: в портрете либо всё мелкое, либо
+## половина игроков не влезает). Проверяем числами: на сколько уехал
+## список, чем он зажат, и что тап после жеста игрока не выбирает.
+func _part29_card_scroll() -> void:
+	var was_touch := Ui.force_touch
+	Ui.force_touch = true
+	var saved_users: Array = _menu.users.duplicate()
+	_menu.users = saved_users.duplicate()
+	_menu.visible = true
+	_menu.confirm_name = ""
+	_menu.hint_header = ""
+	_menu.input_active = false
+	_menu.view_w = 1080.0
+	_menu.view_h = 1900.0
+	_menu.top_safe = 0.0
+	_menu.k = _menu.call("_fit_k", 2.5, 0.7)
+	var many: Array[String] = []
+	for i in 12:
+		many.append("Пок%d" % i)
+	_menu.users = many
+	_menu._scroll = 0.0
+	var view := Rect2(_menu.call("_list_rect"))
+	var max_scroll: float = _menu.call("_list_max_scroll")
+	_check(max_scroll > 0.0, "twelve cards do not fit and scroll")
+	_check(
+		Rect2(_menu.call("_card_rect", 0)).position.y >= view.position.y - 1.0,
+		"the first card starts at the top of the window"
+	)
+	# Палец вверх на 240px — список вниз на 240 (список едет за пальцем).
+	var at := view.get_center()
+	_menu.call("_input", _tap(at))
+	_menu.call("_input", _motion(at, at - Vector2(0.0, 240.0)))
+	_check(
+		absf(_menu._scroll - 240.0) < 1.0,
+		"a 240px drag scrolls the list by 240px (got %.1f)" % _menu._scroll
+	)
+	_check(
+		absf(
+			Rect2(_menu.call("_card_rect", 0)).position.y - view.position.y + 240.0
+		) < 1.0,
+		"cards moved up together with the window"
+	)
+	# Жест до конца списка — зажим: листать дальше некуда.
+	_menu.call("_input", _motion(at - Vector2(0.0, 240.0), at - Vector2(0.0, 9000.0)))
+	_check(
+		absf(_menu._scroll - max_scroll) < 1.0,
+		"the list stops at the last card (%.1f of %.1f)" % [_menu._scroll, max_scroll]
+	)
+	# Тап после жеста игрока НЕ выбирает: это была прокрутка.
+	_picked = ""
+	var last := Rect2(_menu.call("_card_rect", 11))
+	_menu.call("_input", _tap(last.get_center()))
+	_menu.call("_input", _motion(last.get_center(), last.get_center() - Vector2(0.0, 60.0)))
+	_menu.call("_input", _release(last.get_center() - Vector2(0.0, 60.0)))
+	_check(_picked == "", "a drag over a card does not play that profile")
+	# Короткий тап (без жеста) выбирает — как раньше.
+	_menu._scroll = max_scroll
+	var tap_at := Rect2(_menu.call("_card_rect", 11)).get_center()
+	_picked = ""
+	_menu.call("_input", _tap(tap_at))
+	_check(_picked == "", "a press alone does not play yet (waits for release)")
+	_menu.call("_input", _release(tap_at))
+	_check(_picked == many[11], "a short tap plays that profile")
+	# Вниз до упора — тоже зажим, в ноль не уходит.
+	_menu._scroll = max_scroll
+	var at2 := view.get_center()
+	_menu.call("_input", _tap(at2))
+	_menu.call("_input", _motion(at2, at2 + Vector2(0.0, 9000.0)))
+	_check(
+		absf(_menu._scroll) < 1.0,
+		"the list stops at the first card (%.1f)" % _menu._scroll
+	)
+	_menu.call("_input", _release(at2 + Vector2(0.0, 9000.0)))
+	# Колесо мыши (десктоп) листает список так же.
+	_menu.call("_input", _wheel(at2, false))
+	_check(_menu._scroll > 90.0, "the wheel scrolls the list down")
+	_menu.call("_input", _wheel(at2, true))
+	_check(absf(_menu._scroll) < 1.0, "the wheel scrolls the list back")
+	# Стрелки держат выбранного в окне.
+	_menu._scroll = 0.0
+	_menu.sel = 10
+	_menu.call("_nav", 1)
+	_check(_menu.sel == 11, "arrow keys move the selection on")
+	_check(
+		Rect2(_menu.call("_card_rect", 11)).end.y <= view.end.y + 1.0
+			and Rect2(_menu.call("_card_rect", 11)).position.y >= view.position.y - 1.0,
+		"arrow keys keep the selected card inside the window"
+	)
+	# Прокрутка не ломает раскладку: окно между шапкой и полем.
+	_menu._scroll = max_scroll
+	_check(
+		Rect2(_menu.call("_list_rect")).end.y
+			<= float(_menu.call("_field_line_y")) + 1.0,
+		"the window still ends above the field when scrolled"
+	)
+	# Пояснение галки не ложится на поле ввода и на свою клавиатуру:
+	# в карточках оно над полем, внутри окна списка (ловил на кадре
+	# «name-field» — текст был на верхнем ряду клавиш).
+	_menu.input_active = true
+	var expl_y: float = _menu.call("_chip_hint_y")
+	var fld: Rect2 = Rect2(_menu.call("_field_tap_rect"))
+	var expl_top: float = expl_y - 24.0 * _menu.k
+	_check(
+		expl_top <= fld.position.y,
+		"the chip explanation stays above the field (%.0f <= %.0f)" % [
+			expl_top, fld.position.y]
+	)
+	# Поднять пояснение к нижнему краю экрана нельзя: там своя
+	# клавиатура, и текст ложился на верхний ряд клавиш.
+	_check(
+		expl_y < _menu.view_h - _menu.call("_own_h"),
+		"the chip explanation does not reach the own keyboard"
+	)
+	_menu.input_active = false
+	# В альбомной прокрутки нет: таблица вся на экране или ужата по k.
+	_menu.view_w = 2280.0
+	_menu.view_h = 1080.0
+	_menu.k = 1.0
+	_menu.users = saved_users.duplicate()
+	_check(
+		float(_menu.call("_list_max_scroll")) == 0.0,
+		"the landscape table never scrolls"
+	)
+	_menu.users = saved_users.duplicate()
+	_menu.view_w = 1080.0
+	_menu.view_h = 1900.0
+	_menu._scroll = 0.0
+	Ui.force_touch = was_touch
+
+
+## Зайчик в своей полосе слева от списка и прыжок за выделением
+## (автор 15.10.2026: «не удалять и не уменьшать кролика, отвести под
+## него столбик и пусть он прыгает от строки к строке»). Прежде он стоял
+## у заголовка и закрывал имя первого игрока.
+func _part30_bunny_strip() -> void:
+	var was_touch := Ui.force_touch
+	Ui.force_touch = true
+	var saved_users: Array = _menu.users.duplicate()
+	_menu.visible = true
+	_menu.confirm_name = ""
+	_menu.hint_header = ""
+	_menu.input_active = false
+	_menu.view_w = 1080.0
+	_menu.view_h = 1900.0
+	_menu.top_safe = 0.0
+	_menu.k = _menu.call("_fit_k", 2.5, 0.7)
+	var many: Array[String] = []
+	for i in 3:
+		many.append("Игрок%d" % i)
+	_menu.users = many
+	_menu.sel = 0
+	_menu._scroll = 0.0
+	_menu._bunny_t = 1.0
+	# Полоса существует и список начинается за ней: иначе кролик снова
+	# наезжает на имя.
+	var strip: float = _menu.call("_bunny_strip")
+	_check(strip > 0.0, "the bunny gets its own column")
+	var card0: Rect2 = Rect2(_menu.call("_card_rect", 0))
+	_check(
+		absf(card0.position.x - (float(_menu.call("_list_left0")) + strip)) <= 1.0,
+		"the list starts after the bunny column"
+	)
+	var bx: float = _menu.call("_bunny_x")
+	var bw: float = _menu.call("_bunny_w")
+	_check(
+		bx - bw * 0.5 >= float(_menu.call("_list_left0")) - 1.0
+			and bx + bw * 0.5 <= card0.position.x + 1.0,
+		"the bunny fits its column and does not reach the name"
+	)
+	# Прыжок за выделением: после стрелки зайчик в полёте и приземляется
+	# на середину новой карточки.
+	var y0: float = _menu.call("_bunny_y")
+	_menu.call("_nav", 1)
+	_check(_menu.sel == 1, "the selection moved")
+	_check(float(_menu._bunny_t) < 1.0, "the bunny starts hopping")
+	var card1: Rect2 = Rect2(_menu.call("_card_rect", 1))
+	var dest1: float = card1.position.y + card1.size.y * 0.5
+	# Форма прыжка — парабола с ускорением вниз: отклонение от прямой на
+	# четверти пути и в середине соотносятся как 4:3 (4h·t(1-t)). Любое
+	# сглаживание это ломает — автор просил прыжок, а не сдвиг с горкой.
+	var dev := {}
+	for tt in [0.25, 0.5, 0.75]:
+		_menu._bunny_t = float(tt)
+		dev[tt] = lerpf(y0, dest1, float(tt)) - float(_menu.call("_bunny_y"))
+	_check(
+		absf(float(dev[0.5]) / maxf(1.0, float(dev[0.25])) - 4.0 / 3.0) < 0.05,
+		"the hop is a parabola, not an eased slide (%.2f vs 1.33)" % [
+			float(dev[0.5]) / maxf(1.0, float(dev[0.25]))]
+	)
+	_check(
+		float(dev[0.25]) > 0.0 and float(dev[0.5]) > float(dev[0.25])
+			and float(dev[0.75]) > 0.0,
+		"the bunny is off the rows the whole flight"
+	)
+	# Даже короткий прыжок подпрыгивает, а не ползёт по строке.
+	_menu._bunny_t = 0.5
+	_check(
+		float(dev[0.5]) >= 20.0 * _menu.k,
+		"the hop has a visible height (%.0f px)" % float(dev[0.5])
+	)
+	_menu.call("_bunny_advance", 10.0)
+	_check(
+		absf(float(_menu.call("_bunny_y")) - dest1) <= 1.0,
+		"the bunny lands on the selected card"
+	)
+	# Скорость: полпути за половину длительности (0.13 с, автор 15.10.2026:
+	# «в два раза медленнее, чем надо» — было 0.26 с).
+	_menu.call("_nav", -1)
+	_menu.call("_bunny_advance", 0.065)
+	_check(
+		absf(float(_menu._bunny_t) - 0.5) < 0.05,
+		"half the time is half the flight (t=%.2f)" % _menu._bunny_t
+	)
+	_menu.call("_bunny_advance", 10.0)
+	# Серия стрелок подряд: второй прыжок начинается с предыдущей ЦЕЛИ,
+	# а не с середины полёта — иначе высота складывается и заяц улетает
+	# вверх (автор 15.10.2026). Сейчас sel=0, зайчик стоит на карточке 0.
+	_menu.call("_nav", 1)
+	_check(_menu.sel == 1, "the selection moved on")
+	_menu._bunny_t = 0.5
+	var mid_air: float = _menu.call("_bunny_y")
+	var card2: Rect2 = Rect2(_menu.call("_card_rect", 2))
+	var dest2: float = card2.position.y + card2.size.y * 0.5
+	_menu.call("_nav", 1)
+	_check(_menu.sel == 2, "the selection moved again")
+	_check(
+		absf(float(_menu._bunny_from) - dest1) <= 1.0,
+		"a chained hop starts at the previous target, not mid-air (%.0f vs %.0f)" % [
+			_menu._bunny_from, dest1]
+	)
+	_check(
+		absf(float(_menu._bunny_from) - mid_air) > 1.0,
+		"mid-air is not the start"
+	)
+	# Пик цепочки — как у одиночного прыжка на ту же дистанцию, не выше.
+	_menu._bunny_t = 0.5
+	var single_h: float = _menu.call("_bunny_h", absf(dest2 - dest1))
+	var peak: float = lerpf(dest1, dest2, 0.5) - float(_menu.call("_bunny_y"))
+	_check(
+		peak <= single_h + 1.0,
+		"chained hops do not stack height (%.0f <= %.0f)" % [peak, single_h]
+	)
+	_menu.call("_bunny_advance", 10.0)
+	# Деформация прыгучего мячика: присед → вытягивание → присед,
+	# горизонталь — обратно (объём сохраняется).
+	var sys := {}
+	for tt in [0.0, 0.15, 0.45, 0.8, 1.0]:
+		sys[tt] = _menu.call("_bunny_sy", float(tt))
+	_check(
+		absf(float(sys[0.0]) - 1.0) < 0.01
+			and absf(float(sys[0.15]) - 0.82) < 0.02
+			and absf(float(sys[0.45]) - 1.18) < 0.02
+			and absf(float(sys[1.0]) - 0.86) < 0.02,
+		"the squash goes crouch-stretch-crouch (%.2f %.2f %.2f %.2f)" % [
+			sys[0.0], sys[0.15], sys[0.45], sys[1.0]]
+	)
+	_menu._bunny_t = 0.45
+	var sq: Vector2 = _menu.call("_bunny_sq")
+	_check(
+		absf(sq.x - (1.0 - (sq.y - 1.0) * 0.75)) < 0.01,
+		"width mirrors height"
+	)
+	# После приземления — пружина к единице, а не щелчок.
+	_menu._bunny_land = 99.0
+	_check(
+		absf(float(_menu.call("_bunny_sy", 1.0)) - 1.0) < 0.01,
+		"long landed stays calm"
+	)
+	_menu.call("_nav", -1)
+	_menu.call("_bunny_advance", 10.0)
+	# Прыжок назад, к первой карточке.
+	_menu.call("_nav", -1)
+	# Форма прыжка — парабола: отклонение от прямой на четверти пути и в
+	# середине соотносятся как 4:3 (4h·t(1-t)). Любое сглаживание это
+	# ломает — автор просил именно прыжок, а не сдвиг с горкой.
+	_menu.call("_bunny_advance", 10.0)
+	var back: Rect2 = Rect2(_menu.call("_card_rect", 0))
+	_check(
+		absf(
+			float(_menu.call("_bunny_y")) - (back.position.y + back.size.y * 0.5)
+		) <= 1.0,
+		"the bunny lands back on the first card (%.0f vs %.0f, sel=%d, card0 была %.0f)" % [
+			float(_menu.call("_bunny_y")), back.position.y + back.size.y * 0.5,
+			_menu.sel, card0.position.y]
+	)
+	# За полосой прокрутки кролик едет вместе со строкой выделения.
+	var empty: Array[String] = []
+	_menu.users = empty
+	for i in 12:
+		_menu.users.append("И%d" % i)
+	_menu.sel = 11
+	_menu._scroll = float(_menu.call("_list_max_scroll"))
+	_menu._bunny_t = 1.0
+	var last: Rect2 = Rect2(_menu.call("_card_rect", 11))
+	_check(
+		absf(float(_menu.call("_bunny_y")) - (last.position.y + last.size.y * 0.5)) <= 1.0,
+		"the bunny follows the selection after scrolling"
+	)
+	var sprite := Rect2(
+		Vector2(bx - bw * 0.5, last.position.y), Vector2(bw, last.size.y)
+	)
+	var name_col := Rect2(
+		Vector2(48.0 * _menu.k + strip, last.position.y), Vector2(20.0, last.size.y)
+	)
+	_check(
+		not sprite.intersects(name_col),
+		"the bunny column stays free of the list columns"
+	)
+	# В альбомной раскладке полоса вычитается из доступной ширины, и
+	# первая колонка встаёт за ней (иначе кролик сел бы на имя).
+	_menu.view_w = 2280.0
+	_menu.view_h = 1080.0
+	_menu.k = 1.0
+	_menu.sel = 0
+	_menu._bunny_t = 1.0
+	var cols: Array[float] = _menu.call("_table_cols")
+	_check(
+		cols[0] >= 48.0 * _menu.k + float(_menu.call("_bunny_strip")) - 1.0,
+		"the table's name column starts after the bunny column"
+	)
+	_check(
+		absf(
+			float(_menu.call("_bunny_y"))
+			- (float(_menu.call("_rows_top")) + _menu.call("_row_step") * 0.5
+				- 38.0 * _menu.k)
+		) <= 1.0,
+		"in the table the bunny sits on the selected row"
+	)
+	# Заголовок не наезжает на шапки колонок: в таблице они стоят на 44k
+	# выше первой строки (ловил на кадре 3120x2080: «Кто играет?» лёг на
+	# «Ур» и «Победы»).
+	var head_top: float = (
+		float(_menu.call("_rows_top")) - 44.0 * _menu.k - 20.0 * _menu.k
+	)
+	# Заголовок рисуется по базовой линии: его строка занимает
+	# [y - высота глифа, y], то есть низ заголовка — сама базовая линия.
+	var title_fs: int = _menu.call("_title_fs")
+	var title_bottom: float = float(_menu.call("_title_y"))
+	_check(
+		title_bottom - float(_menu.mono.get_height(title_fs)) >= 8.0 * _menu.k
+			and title_bottom <= head_top,
+		"the title clears the column headers in the table (%.0f <= %.0f)" % [
+			title_bottom, head_top]
+	)
+	_menu.view_w = 1080.0
+	_menu.view_h = 1900.0
+	_menu.k = _menu.call("_fit_k", 2.5, 0.7)
+	_menu._bunny_t = 1.0
+	# Пустой список: полосы нет, кролик стоит у заголовка и на имя
+	# первого игрока не лезет (списка нет — лезть некуда).
+	var none: Array[String] = []
+	_menu.users = none
+	_check(
+		float(_menu.call("_bunny_strip")) == 0.0,
+		"an empty list needs no bunny column"
+	)
+	_check(
+		float(_menu.call("_bunny_y")) <= float(_menu.call("_rows_top")),
+		"with no players the bunny stays by the title"
+	)
+	_menu.users = saved_users.duplicate()
+	_menu.sel = 0
+	_menu._scroll = 0.0
+	_menu._bunny_t = 1.0
+	Ui.force_touch = was_touch
+
+
+## Ничего не наезжает друг на друга — ни в портрете, ни в альбоме, ни
+## на пустом списке, ни с сообщением об обновлении, ни со своей
+## клавиатурой (автор 15.10.2026: «элементы интерфейса теперь накладываются
+## друг на друга»). Верхняя панель: «Обновления» слева, «Кто играет?» по
+## центру, солнце-луна справа.
+func _part31_menu_no_overlap() -> void:
+	var was_touch := Ui.force_touch
+	Ui.force_touch = true
+	var saved_users: Array = _menu.users.duplicate()
+	_menu.visible = true
+	_menu.confirm_name = ""
+	_menu._upd_open = false
+	_menu.hint_header = ""
+	var sizes := [
+		Vector2i(540, 1140), Vector2i(820, 1180), Vector2i(1080, 1900),
+		Vector2i(1080, 2280), Vector2i(2280, 1080), Vector2i(1000, 700),
+		Vector2i(412, 915),
+		# 64x64 НЕ берём: это дефолтный вьюпорт headless, там не влезает
+		# даже одна кнопка под палец (64px). Его отдельно жмёт
+		# _part16_touch_sizes — на отсутствие наездов, а не на влезание.
+	]
+	var msgs := ["", "Проверяю… 42%"]
+	for sz in sizes:
+		for n_users in [0, 3, 12]:
+			for msg in msgs:
+				for night in [false, true]:
+					_overlap_case(sz, n_users, msg, night)
+	_menu.users = saved_users.duplicate()
+	_menu._upd_msg = ""
+	_menu.input_active = false
+	_menu._scroll = 0.0
+	_menu._bunny_t = 1.0
+	Ui.force_touch = was_touch
+
+
+## Один случай матрицы: все прямоугольники меню попарно не пересекаются
+## и лежат на экране. Прямоугольники — те же функции, что рисует _draw.
+func _overlap_case(sz: Vector2i, n_users: int, msg: String, night: bool) -> void:
+	_menu.view_w = float(sz.x)
+	_menu.view_h = float(sz.y)
+	_menu.top_safe = 0.0
+	_menu.night = night
+	_menu._upd_msg = msg
+	_menu.input_active = false
+	var names: Array[String] = []
+	for i in n_users:
+		names.append("Игрок%d" % i)
+	_menu.users = names
+	_menu.sel = 0
+	_menu._scroll = 0.0
+	_menu._bunny_t = 1.0
+	_menu.k = _menu.call("_fit_k", clampf(
+		minf(_menu.view_w / 1100.0, _menu.call("_menu_eff_h") / 650.0)
+			* Ui.dpr(), 0.7, 2.5), 0.7)
+	var tag := "%dx%d n=%d msg=%d night=%d" % [
+		sz.x, sz.y, n_users, 0 if msg == "" else 1, 1 if night else 0]
+	# Верхняя панель.
+	var parts := [
+		["обновления", Rect2(_menu.call("_upd_button_rect"))],
+		["тема", Rect2(_menu.call("_night_tap_rect"))],
+		["заголовок", Rect2(
+			Vector2(
+				float(_menu.call("_title_x"))
+					- _menu.call("_text_size", "Кто играет?", _menu.call("_title_fs")).x * 0.5,
+				float(_menu.call("_title_y"))
+					- _menu.mono.get_height(_menu.call("_title_fs"))
+			),
+			Vector2(
+				_menu.call("_text_size", "Кто играет?", _menu.call("_title_fs")).x,
+				_menu.mono.get_height(_menu.call("_title_fs"))
+			)
+		)],
+	]
+	for a in parts.size():
+		for b in range(a + 1, parts.size()):
+			var ra: Rect2 = parts[a][1]
+			var rb: Rect2 = parts[b][1]
+			if ra.size.x > 1.0 and rb.size.x > 1.0:
+				_check(
+					not ra.intersects(rb),
+					"%s: %s overlaps %s" % [tag, String(parts[a][0]), String(parts[b][0])]
+				)
+	# Панель не наезжает на список, поле и кнопки.
+	var bar_bottom: float = float(_menu.top_safe) + _menu.call("_bar_h")
+	var rows_top: float = _menu.call("_rows_top")
+	_check(rows_top >= bar_bottom - 1.0, "%s: the list starts under the bar" % tag)
+	var below := [
+		["поле", Rect2(_menu.call("_field_tap_rect"))],
+		["играть", Rect2(_menu.call("_play_tap_rect"))],
+		["без профиля", Rect2(_menu.call("_guest_tap_rect"))],
+	]
+	if n_users > 0:
+		below.append(["карточка", Rect2(_menu.call("_card_rect", 0))])
+		if bool(_menu.call("_cards")):
+			below.append(["чип", Rect2(_menu.call("_pro_tap_rect", 0))])
+	for b2 in below:
+		var rb3: Rect2 = b2[1]
+		if rb3.size.x > 1.0 and rb3.size.y > 1.0:
+			_check(rb3.position.y >= bar_bottom - 1.0, "%s: %s is under the bar" % [tag, String(b2[0])])
+		_check(
+			rb3.position.x >= -1.0 and rb3.position.y >= -1.0
+				and rb3.end.x <= _menu.view_w + 1.0
+				and rb3.end.y <= _menu.view_h + 1.0,
+			"%s: %s is on screen (%s in %dx%d)" % [tag, String(b2[0]), str(rb3), sz.x, sz.y]
+		)
+	# Кнопки действий не наезжают друг на друга.
+	var play := Rect2(_menu.call("_play_tap_rect"))
+	var guest := Rect2(_menu.call("_guest_tap_rect"))
+	if play.size.x > 1.0 and guest.size.x > 1.0:
+		_check(not play.intersects(guest), "%s: action buttons overlap" % tag)
+	# Своя клавиатура снизу — кнопки обязаны быть выше неё. Масштаб
+	# пересобираем, как это делает меню при подъёме клавиатуры.
+	_menu.input_active = true
+	_menu.k = _menu.call("_fit_k", clampf(
+		minf(_menu.view_w / 1100.0, _menu.call("_menu_eff_h") / 650.0)
+			* Ui.dpr(), 0.7, 2.5), 0.7)
+	var eff: float = _menu.call("_menu_eff_h")
+	# Прямоугольник пересчитываем ПОСЛЕ подъёма клавиатуры: раскладка
+	# прижата к эффективной высоте и без неё уехала бы под доску.
+	var play_kb := Rect2(_menu.call("_play_tap_rect"))
+	var guest_kb := Rect2(_menu.call("_guest_tap_rect"))
+	_menu.input_active = false
+	_check(
+		play_kb.end.y <= eff + 1.0 and guest_kb.end.y <= eff + 1.0,
+		"%s: the buttons stay above the own keyboard (%.0f > %.0f)" % [
+			tag, play_kb.end.y, eff]
+	)
+	_menu._upd_msg = ""
+
+
+## Геометрия до _ready (шрифта ещё нет): open() зовут и до входа в дерево
+## (deferred add_child в _open_menu), и тогда _reload/_fit_k меряют без mono.
+## Метод на null-шрифте ронял шаблон segfault'ом, хотя редактор прощал
+## (ловил 15.10.2026: бинарь падал до первого кадра, gdb показал рекурсию
+## в _title_fs). Сторож build-game.sh снимает тест при SCRIPT ERROR, так
+## что молчаливый проход — тоже проверка.
+func _part32_pre_ready_geometry() -> void:
+	var was_touch := Ui.force_touch
+	Ui.force_touch = true
+	var saved_users: Array = _menu.users.duplicate()
+	var saved_mono: Font = _menu.mono
+	_menu.visible = true
+	_menu.view_w = 1080.0
+	_menu.view_h = 1900.0
+	_menu.top_safe = 0.0
+	_menu.mono = null
+	var pre: Array[String] = ["Ю1", "Ю2", "Ю3"]
+	_menu.users = pre
+	_menu.sel = 0
+	_menu._scroll = 0.0
+	_menu._bunny_t = 1.0
+	# Всё, что меряет open()/reload()/fit до _ready — обязано отвечать
+	# числами, а не ошибками.
+	_menu._reload()
+	_menu.k = _menu.call("_fit_k", 2.5, 0.7)
+	_check(_menu.k >= 0.7 and _menu.k <= 2.5, "fit answers without a font")
+	_check(float(_menu.call("_title_fs")) >= 0, "title scale answers without a font")
+	_check(float(_menu.call("_bar_h")) > 0.0, "bar height answers without a font")
+	_check(
+		Rect2(_menu.call("_list_rect")).size.y > 0.0,
+		"list window answers without a font"
+	)
+	_menu._apply_night()
+	_check(true, "night paints without panels survive")
+	_menu.mono = saved_mono
+	_menu.users = saved_users.duplicate()
+	_menu._scroll = 0.0
+	_menu._bunny_t = 1.0
+	Ui.force_touch = was_touch
+
+
 func _report() -> void:
 	S.PATH = "user://modern_baby_type.cfg"
 	DirAccess.remove_absolute(
@@ -1491,25 +2118,25 @@ func _part28_cards() -> void:
 	var first := String(_menu.users[0])
 	var second := String(_menu.users[1])
 	_picked = ""
-	_menu.call("_input", _tap(c1.get_center()))
+	_menu_tap(c1.get_center())
 	_check(_picked == second, "tap on a card plays as that user")
 	_picked = ""
-	_menu.call("_input", _tap(Rect2(_menu.call("_pro_tap_rect", 0)).get_center()))
+	_menu_tap(Rect2(_menu.call("_pro_tap_rect", 0)).get_center())
 	_check(S.get_all_keys(first), "card chip turns all_keys on")
 	_check(_picked == "", "card chip does not play the profile")
 	_check(String(_menu.hint_header) == "pro",
 		"the chip explains its flag (cards have no header)")
-	_menu.call("_input", _tap(Rect2(_menu.call("_yo_tap_rect", 0)).get_center()))
+	_menu_tap(Rect2(_menu.call("_yo_tap_rect", 0)).get_center())
 	_check(not S.get_yo_strict(first), "card yo chip relaxes strictness")
 	_check(String(_menu.hint_header) == "yo", "the yo chip explains itself too")
-	_menu.call("_input", _tap(Rect2(_menu.call("_del_tap_rect", 1)).get_center()))
+	_menu_tap(Rect2(_menu.call("_del_tap_rect", 1)).get_center())
 	_check(String(_menu.confirm_name) == second,
 		"the card cross opens the delete confirmation")
-	_menu.call("_input", _tap(Rect2(_menu.call("_confirm_no_rect")).get_center()))
+	_menu_tap(Rect2(_menu.call("_confirm_no_rect")).get_center())
 	_check(S.user_exists(second), "cancelling the confirmation keeps the profile")
-	# Много игроков: карточка выше строки, масштаб ужимается — но блок
-	# (карточки + поле + кнопки) обязан остаться на экране. _fit_k —
-	# то, что _relayout дергает на телефоне после поднятия плотности.
+	# Много игроков: интерфейс остаётся крупным, список листается. Низ
+	# (поле + кнопки) прижат к экрану и обязан на нём помещаться при
+	# любом числе игроков — это то, что раньше ломалось ужимом k.
 	var many: Array[String] = []
 	for i in 12:
 		many.append("Ю%d" % i)
@@ -1521,12 +2148,19 @@ func _part28_cards() -> void:
 	_menu.k = _menu.call("_fit_k", 2.5, 0.7)
 	_check(bool(_menu.call("_cards")), "still cards with twelve players")
 	_check(
-		Rect2(_menu.call("_card_rect", 11)).end.y <= _menu.view_h,
-		"the twelfth card fits after fit"
+		float(_menu.call("_list_max_scroll")) > 0.0,
+		"twelve players make the list scrollable"
 	)
+	# Кнопки на экране и после прокрутки: список под ними не едет.
+	_menu._scroll = float(_menu.call("_list_max_scroll"))
 	_check(
 		Rect2(_menu.call("_play_tap_rect")).end.y <= _menu.view_h,
-		"action buttons fit after fit with cards"
+		"action buttons fit with cards"
+	)
+	_check(
+		Rect2(_menu.call("_card_rect", 11)).end.y
+			<= Rect2(_menu.call("_list_rect")).end.y + 1.0,
+		"the twelfth card comes into view when scrolled to the end"
 	)
 	# Короткий телефон (1080x1900): там запаса мало, и ужим должен
 	# дожать не только первые пиксели — шаг карточки зависит от k
@@ -1537,9 +2171,18 @@ func _part28_cards() -> void:
 		_menu.view_h = vh
 		_menu.k = _menu.call("_fit_k", 2.5, 0.7)
 		_menu.input_active = false
+		_menu._scroll = 0.0
+		# Видимая часть списка — между шапкой и полем ввода, и в неё
+		# влезает карточка целиком: карточка не режется полем.
+		var view_r := Rect2(_menu.call("_list_rect"))
 		_check(
-			Rect2(_menu.call("_card_rect", 11)).end.y <= vh,
-			"the twelfth card fits on a %.0f-tall phone" % vh
+			view_r.position.y >= float(_menu.call("_rows_top")) - 1.0
+				and view_r.end.y <= float(_menu.call("_field_line_y")),
+			"the list sits between the header and the field on a %.0f-tall phone" % vh
+		)
+		_check(
+			view_r.size.y >= float(_menu.call("_card_h")) - 1.0,
+			"at least one whole card fits on a %.0f-tall phone" % vh
 		)
 		_check(
 			Rect2(_menu.call("_play_tap_rect")).end.y <= vh,
@@ -1600,7 +2243,7 @@ func _part27_menu_chaos() -> void:
 			var w: float = 1280.0
 			var h: float = 900.0
 			var pos := Vector2(r * w, float(seed_v % 900) / 1000.0 * h)
-			_menu.call("_input", _tap(pos))
+			_menu_tap(pos)
 		else:
 			var k := String.chr(32 + (seed_v % 90))
 			_menu.call("_unhandled_key_input", _key_event(k))

@@ -240,6 +240,19 @@ func _backspace_turn() -> void:
 
 func _process(_dt: float) -> bool:
 	_frame += 1
+	var done := _tick()
+	# Координата ежа ПОСЛЕ этого кадра — база сравнения «шагнул ли ёж на
+	# кадре укола» (см. проверку выше). Записываем на ЛЮБОМ выходе, включая
+	# смену эпизода: старый код писал базу только в конце длинного пути и
+	# терял её на ранних return, а тогда сравнение шло с координатой
+	# ПРОШЛОГО эпизода. Ловила флаки «-20.74 px»: сценарий «ёж сзади»
+	# ставит ежа за концом строки, и первый же кадр клампит его назад
+	# (enemy_x = e_end) — это честное поведение игры, не шаг на укол.
+	_prev_ex = _main.enemy_x
+	return done
+
+
+func _tick() -> bool:
 
 	# --- Инвариант на КАЖДОМ кадре, независимо от сценария. -------------
 	# Курсор всегда стоит на букве (тот же инвариант, что в combo/marks):
@@ -268,6 +281,14 @@ func _process(_dt: float) -> bool:
 			if absf(_main.enemy_x - _prev_ex) > 0.01:
 				_failures.append("frame %d: hedgehog moved ON the prick frame (%.2f px)"
 					% [_frame, _main.enemy_x - _prev_ex])
+				printerr("ДИАГ укол: ep=", _episodes, " sc=", _scenario, " turn=", _turn,
+					" state=", _main.state, " причина=", _main._last_reason,
+					" ёж=", _main.enemy_line, ":", _main.enemy_x,
+					" курсор=", _main.cursor_line, ":", _main.cursor_pos,
+					" wait=", _main.need_enter, " cps=", _main.enemy_cps,
+					" grace=", _main.grace_t, " cw=", _main.char_w,
+					" prev=", _prev_ex, " rows=", _main.display_lines.size(),
+					" view=", _main.view_w, "x", _main.view_h)
 			_lost_ex = _main.enemy_x
 			_lost_hero = _main.hero_r
 		else:
@@ -278,6 +299,7 @@ func _process(_dt: float) -> bool:
 			elif _main.hero_r.distance_to(_lost_hero) > 0.01:
 				_failures.append("frame %d: prick tableau is not frozen" % _frame)
 		var same_row: bool = _main.enemy_line == _main.cursor_line
+		var scrolling: bool = absf(_main.scroll_y - _main.scroll_target) > 0.5
 		if _main.enemy_line < _main.cursor_line:
 			# Строка ежа позади: до зайца ежу целая строка миль, укола
 			# быть не может ни при каком расстоянии по оси.
@@ -291,7 +313,7 @@ func _process(_dt: float) -> bool:
 			_prick_cross += 1
 			_pricks += 1
 			_corner_checked += 1
-			var dy: float = _main.hero_r.y - _main._track_cy(_main.enemy_line)
+			var dy: float = 0.0 if scrolling else _main.hero_r.y - _main._track_cy(_main.enemy_line)
 			if absf(dy) > 0.5:
 				_failures.append("frame %d: hare not on the hedgehog's row after a corner prick (dy=%.1f px)"
 					% [_frame, dy])
@@ -363,7 +385,6 @@ func _process(_dt: float) -> bool:
 	_frames_played += 1
 	_scenario_frames[_scenario] += 1
 	_closest = maxf(_closest, _d())
-	_prev_ex = _main.enemy_x
 
 	if _failures.size() > 8 or _episodes >= _episode_budget or _frame > 60 * 60 * 12:
 		_report()

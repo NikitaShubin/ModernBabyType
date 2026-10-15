@@ -52,9 +52,13 @@ func _model(tag: String) -> String:
 	var marked: bool = _main.errors.has(_main._key(l, p))
 	# Какие строки текста сейчас видны: длинный уровень едет за курсором,
 	# и метки на ушедших строках рисовать НЕЛЬЗЯ — сверка это учитывает.
+	# Окно берём из самой игры (vis_first/vis_count), а не пересчитываем:
+	# у игры курсор с lookahead (строка под курсором видна заранее), своя
+	# формула здесь врала бы (ловил verify_vis 15.10.2026: метка на строке 3
+	# «за скроллом», хотя игра её честно показывает).
 	var vis: int = _main._vis_lines()
 	var rows: int = _main.display_lines.size()
-	var first: int = clampi(int(_main.cursor_line) - vis + 1, 0, maxi(0, rows - vis))
+	var first: int = _main.vis_first
 	var line := "МОДЕЛЬ %s: курсор=%d:%d ждёт=%s%s меток=%d [%s] заяц.x=%.0f клетка.x=%.0f ёж.x=%.0f %s ошибок=%d строки=%d..%d" % [
 		tag, l, p, want,
 		"" if _main._is_active(want) or marked or want == "" else "(серая)",

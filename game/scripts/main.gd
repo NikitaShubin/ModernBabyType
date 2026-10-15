@@ -45,6 +45,9 @@ const HEDGE_BALL_FRAC := 145.0 / 160.0
 const CONTACT_SLACK := 0.15
 const BASE_W := 1100.0
 const BASE_H := 650.0
+## Строк текста минимум на экране: меньше — теряется контекст
+## (видно только текущую строку). Переполнение уходит в скролл.
+const R_MIN_ROWS := 3
 const START_DELAY := 3.0
 
 const INK := Color("#1c1a16")
@@ -290,6 +293,13 @@ var hint_p: Panel
 var over_p: Panel
 ## Кегль модалки (считает _layout_text_lines): нужен для зон звёздочек.
 var _over_fs := 30
+## Крупные звёзды победы: свой лейбл поверх игровой области (автор
+## 15.10.2026: в модалке они лезли на текст). Кегль — от высоты карточки.
+var stars_label: Label
+var _star_fs := 30
+## Звёзды последнего финала (0..3): модалка показывает статистику, а сами
+## звёзды живут на поле — счёт нужен и раскладке (_layout_stars).
+var _last_stars := 0
 ## Подсказка звёздочки (1..3, 0 — нет): наведение и тап по звезде
 ## объясняют, за что она. Сбрасывается новым уровнем.
 var _star_tip := 0
@@ -297,6 +307,10 @@ var _star_tip := 0
 ## окно едет за курсором построчно. Логика (ось _lin) его не видит:
 ## _line_y зовут только отрисовки.
 var scroll_y := 0.0
+## Куда едет окно: scroll_y догоняет цель плавно каждый кадр (см.
+## _process), а не прыгает построчно — иначе текст дёргается под пальцем
+## (автор 15.10.2026: «более плавная прокрутка, причём заранее»).
+var scroll_target := 0.0
 ## Сколько букв в уровне всего: знаменатель полосы прогресса.
 ## Считается в _new_level, числитель — passed.size().
 var level_total := 0
@@ -331,6 +345,15 @@ func _ready() -> void:
 	# Модалка и табло — выше букв (буквы z=-10, панели z=-15, лейблы z=2).
 	overlay_label.z_index = 2
 	add_child(overlay_label)
+	# Звёзды — поверх карточки с текстом (z выше букв и панелей),
+	# по центру игровой области.
+	stars_label = Label.new()
+	stars_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	stars_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	stars_label.visible = false
+	stars_label.z_index = 3
+	stars_label.add_theme_color_override("font_color", Color("#e8a93d"))
+	add_child(stars_label)
 
 	# Оформление — отдельными узлами позади текста (z_index = -15):
 	# сами буквы рисует _draw_rows() первым делом в _draw(), а маркер,
@@ -521,6 +544,96 @@ func _fit_to_width(frag: Dictionary) -> Dictionary:
 ## при старте уровня, и пересборки при смене ширины экрана.
 func _max_chars() -> int:
 	return maxi(14, int((view_w - margin * 2.0) / maxf(1.0, char_w)) - 1)
+
+
+## Высота строки — точным делением комнаты на число строк: стоят ровно
+## по карточке, без пустой полосы снизу из-за дискретности (автор
+## 14.10.2026: округление вниз оставляло целую строку воздуха).
+## Считается ПОСЛЕ пересборки строк (см. _relayout): иначе делилась бы
+## комната по старому числу строк. База — две высоты глифа (зазор под
+## шар ежа); ужатие ниже 1.8 не даём (ёж впритык к чернилам — непонятно,
+## на чьей он строке), растяжку выше 2.4 — тоже (автор 14.10.2026:
+## растянутый интерлиньяж «слишком большой»).
+func _fit_line_h() -> void:
+	var glyph := float(mono.get_height(font_size))
+	var nat := glyph * 2.0
+	var room := maxf(nat, _text_free_h() - 40.0 * k)
+	var want := maxi(1, mini(int(round(room / nat)), maxi(display_lines.size(), 1)))
+	# Мера плотности — строка к высоте глифа (2.0 = натурально: зазор под
+	# шар ежа равен строке текста). Ниже 1.8 не даём (ёж впритык
+	# к чернилам), выше 2.4 — тоже: автор 14.10.2026 назвал растянутый
+	# интерлиньяж слишком большим; остаток уходит в поля карточки, а
+	# короткий блок центрируется по вертикали.
+	line_h = room / float(want)
+	var dens := line_h / maxf(1.0, glyph)
+	if dens > 2.4:
+		line_h = nat
+	elif dens < 1.8 and want > 1:
+		want -= 1
+		line_h = room / float(want)
+		if line_h / maxf(1.0, glyph) < 1.8:
+			line_h = glyph * 1.8
+
+
+## Кегль под свободное место (см. _text_free_h) и под САМ текст: текст
+## должен занять карточку целиком, без растянутого интерлиньяжа и без
+## пустой полосы снизу. Раньше кегль считался на R_MIN_ROWS строк, а
+## текст оказывался длиннее — и интерлиньяж растягивался втрое
+## (автор 14.10.2026: «слишком большой межстрочный интервал»).
+## Считаем от базового 36k: сколько строк текст занимает при нём и
+## во сколько раз он уже меньше комнаты. Растёт кегль — растут строки
+## (ёмкость строки обратно пропорциональна кеглю), поэтому масштаб берём
+## корнем: комната ~ кегль². Один шаг, без итераций и без раскачки.
+## Границы: не уже ~15 знаков в строке (иначе буквы толкуются), не
+## крупнее 72k и никогда не меньше прежних 36k.
+func _text_font(chars: int) -> int:
+	var lo := maxi(1, int(36.0 * k))
+	var hi := maxi(lo, int(72.0 * k))
+	var per_pt := 2.0 * float(mono.get_height(lo)) / float(lo)
+	var room := maxf(1.0, _text_free_h() - 40.0 * k)
+	var fs := lo
+	if chars > 0:
+		var per_line := (
+			(view_w - margin * 2.0) / maxf(1.0, _marginal_adv(lo)) - 1.0
+		)
+		var rows := maxf(1.0, ceil(float(chars) / maxf(8.0, per_line)))
+		var scale := clampf(
+			room / (rows * per_pt * float(lo)), 1.0, 4.0
+		)
+		fs = int(float(lo) * sqrt(scale))
+	return clampi(fs, lo, hi)
+
+
+
+## Знаков в текущем тексте: из уже собранных строк (поворот экрана
+## меняет кегль, но не число знаков — считать можно по любой раскладке).
+func _chars_now() -> int:
+	var n := 0
+	for l in display_lines:
+		n += String(l).length()
+	return n
+
+
+
+## Предельный advance в строке кеглем fs: целое(64) минус целое(1) на 63.
+## Одиночный замер округляет наружу — для шага не годится (см. char_w).
+func _marginal_adv(fs: int) -> float:
+	var probe: float = mono.get_string_size(
+		"н".repeat(64), HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs
+	).x
+	var one: float = mono.get_string_size("н", HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x
+	return maxf(1.0, (probe - one) / 63.0)
+
+
+## Свободная высота под карточку текста: весь экран минус клавиатура,
+## сверху шапка (бейдж, имя, меню), снизу полоса снизу целиком — прогресс
+## со счётчиком и место под подсказку. Карточка занимает всё остальное,
+## без запасов (автор 14.10.2026: запас и в горизонтальной, и в вертикальной).
+## Порядок снизу вверх (все от низа карточки, в k): прогресс со счётом
+## 14..26, подсказка 36..100, поле 120. Подсказку резервируем ВСЕГДА:
+## иначе текст дёргался бы на кадре, когда подсказка появляется.
+func _text_free_h() -> float:
+	return _eff_h() - 120.0 * k - (80.0 * k + top_safe)
 
 
 ## Ширина экрана может поменяться ПО ХОДУ уровня: на телефоне выезжает
@@ -729,6 +842,8 @@ func _set_play_ui(on: bool) -> void:
 	hud_p.visible = on
 	over_p.visible = on and (state == "won" or state == "lost")
 	overlay_label.visible = over_p.visible
+	# Звёзды — только победа и только с модалкой (см. _layout_stars).
+	stars_label.visible = over_p.visible and state == "won"
 	# Подсказка рисуется в _draw каждый кадр и сама решает, видна ли:
 	# здесь только гасим пилюлю, следующий кадр всё расставит.
 	hint_p.visible = false
@@ -776,7 +891,6 @@ func _relayout() -> void:
 	if view_h > view_w:
 		base_w = 560.0
 	k = clampf(minf(view_w / base_w, _eff_h() / BASE_H), 0.5, 2.5)
-	font_size = int(36.0 * k)
 	# Левое поле широкое: героям нужен воздух в начале строки,
 	# а ёж заходит слева из-за края — ему нельзя за край экрана.
 	# На узком экране поля жмутся до 8%: иначе съедают пол-экрана.
@@ -784,17 +898,17 @@ func _relayout() -> void:
 	if view_w < 700.0:
 		margin = view_w * 0.08
 	text_y = 80.0 * k + top_safe
+	# Крупный текст на свободное место (автор 14.10.2026: текст мелкий,
+	# а место пустует — и в горизонтальной, и в вертикальной). Формула
+	# — в _text_font, она же считает строки по текущему тексту.
+	font_size = _text_font(_chars_now())
 	# Шаг клетки — предельный advance в строке, а не одиночный замер:
 	# одиночный глиф шейпер округляет наружу (+1 px), и сумма одиночных
 	# расходится с целым на ~пиксель/знак с накоплением к концу строки
 	# (замерено: 720 против 687 на 60 знаках; жалоба автора 13.10.2026
 	# «накопление ошибки в сдвиге курсора»). Все координаты букв — от
 	# этого числа: маркер, заяц и отрисовка считают одно и то же.
-	var probe: float = mono.get_string_size(
-		"н".repeat(64), HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size
-	).x
-	var one: float = mono.get_string_size("н", HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size).x
-	char_w = maxf(1.0, (probe - one) / 63.0)
+	char_w = _marginal_adv(font_size)
 	if old_cw > 0.0 and char_w > 0.0:
 		# Метрики букв поменялись (поворот, системная клавиатура выехала
 		# или спряталась, узкое окно) — пересчитываем ОБОИХ героев в тех
@@ -809,9 +923,10 @@ func _relayout() -> void:
 	# Зазор высотой в строку текста: пустая полоса для качения ежа.
 	# Текст при этом никогда не сдвигается.
 	sep_h = mono.get_height(font_size)
-	line_h = mono.get_height(font_size) + sep_h
 	# Метрики букв поменялись — строки могут перестать влезать, а на
 	# ходу уровня их пересобирает _reflow_text (зайца не сбивает).
+	# Интерлиньяж — после неё, по новым строкам: иначе делилась бы
+	# комната по старому числу строк.
 	_reflow_text(pe_old, pe_valid)
 	_layout_text_lines()
 	# Табло-дебаг якорится к низу ЭФФЕКТИВНОЙ области: иначе
@@ -854,29 +969,46 @@ func _line_y(line_idx: int) -> float:
 func _vis_lines() -> int:
 	if line_h <= 0.0:
 		return 3
+	# Видно столько строк, сколько влезает в свободную высоту карточки
+	# (та же мера, что растит кегль, — см. _text_free_h): карточка
+	# занимает всё место выше клавиатуры без запасов.
+	var room := _text_free_h() - 40.0 * k
+	# Тот же подсчёт, что в _relayout (там line_h делит комнату нацело):
+	# +0.001 против пылинок float (2.9999996 обязан дать 3, а не 2).
+	var vis := int(room / maxf(1.0, line_h) + 0.001)
 	if kb_h > 0.0:
-		var hint_top := _eff_h() - 165.0 * k - 8.0 * k
-		var bar_space := (14.0 + 12.0 + 6.0 + 26.0) * k
-		var room := hint_top - text_y - 40.0 * k - bar_space
-		return maxi(1, mini(maxi(display_lines.size(), 1), int(room / line_h)))
-	return maxi(2, mini(maxi(display_lines.size(), 1), int((_eff_h() - 240.0 * k) / line_h)))
+		return maxi(1, mini(maxi(display_lines.size(), 1), vis))
+	return maxi(2, mini(maxi(display_lines.size(), 1), vis))
 
 
 ## Расставить построчные лэйблы. Окно карточки едет за курсором:
 ## курсор всегда в последней видимой строке, уехавшие прячем.
 func _layout_text_lines() -> void:
+	# Высота строки — здесь, по актуальным строкам и метрикам (а не в
+	# релэуте: там строк ещё нет или они старые).
+	_fit_line_h()
 	# Блок текста — по центру свободной зоны ЭФФЕКТИВНОЙ высоты: сверху
 	# пусто, снизу HUD и подсказка (или клавиатура). Левый край прежний.
 	# С открытой клавиатурой — якорь кверху, а не центр: места мало,
 	# центрированный блок съезжает вниз на прогресс и подсказку.
 	var block_h := float(maxi(display_lines.size(), 1)) * line_h
 	if kb_h > 0.0:
-		text_y = 80.0 * k + top_safe
+		# Короткий текст — по центру свободной высоты, а не с запасом
+		# снизу: иначе под карточкой из трёх строк пустота (автор
+		# 10.2026). Длинный упирается в верх и едет скроллом, как раньше.
+		text_y = 80.0 * k + top_safe + maxf(0.0, (_text_free_h() - block_h) * 0.5)
 	else:
 		text_y = maxf(40.0 * k, (_eff_h() - 200.0 * k - block_h) * 0.5) + top_safe
 	var vis := _vis_lines()
-	var first := clampi(cursor_line - vis + 1, 0, maxi(0, display_lines.size() - vis))
-	scroll_y = float(first) * line_h
+	# Курсор НЕ в последней видимой строке: под ним всегда видна
+	# следующая — человек, допечатывая строку, уже видит, что дальше
+	# (автор 15.10.2026). На крошечном окне (vis = 1) lookahead некуда
+	# деть — тогда курсор всё же последний.
+	var first := clampi(
+		mini(cursor_line, cursor_line - vis + 2),
+		0, maxi(0, display_lines.size() - vis)
+	)
+	scroll_target = float(first) * line_h
 	vis_first = first
 	vis_count = vis
 	# Модалка победы/поражения — под карточкой, а не поверх букв.
@@ -885,7 +1017,10 @@ func _layout_text_lines() -> void:
 	var ofs := int(minf(40.0 * k, (view_w - 64.0 * k) / 17.0))
 	_over_fs = ofs
 	overlay_label.position = Vector2((view_w - ow) * 0.5, text_y + float(vis) * line_h + 24.0 * k)
-	overlay_label.size = Vector2(ow, 150.0 * k)
+	# Одна строка статистики: звёзды живут на самом поле, а «Уровень
+	# пройден!» убран вовсе (автор 15.10.2026) — двухэтажная модалка
+	# больше не нужна, и под ней воздух до клавиатуры.
+	overlay_label.size = Vector2(ow, float(ofs) + 36.0 * k)
 	overlay_label.add_theme_font_size_override("font_size", ofs)
 	# Панель модалки — здесь же, каждый кадр, а не в релэяуте: иначе
 	# при скролле лейбл уезжает, а панель (и подсказка звёздочек,
@@ -916,6 +1051,25 @@ func _layout_card() -> void:
 	card_p.position = r.position
 	card_p.size = r.size
 	card_p.visible = true
+	_layout_stars()
+
+
+## Крупные звёзды победы — по центру карточки с текстом. Только победа:
+## на поражении там ёж с табло, им не мешаем.
+func _layout_stars() -> void:
+	# Без шрифта молчим (см. _draw): раскладку зовут и до _ready.
+	if mono == null or state != "won" or not card_p.visible:
+		stars_label.visible = false
+		return
+	_star_fs = maxi(30, mini(int(120.0 * k), int(card_p.size.y * 0.4)))
+	stars_label.add_theme_font_size_override("font_size", _star_fs)
+	var t := "★".repeat(_last_stars) + "☆".repeat(3 - _last_stars)
+	stars_label.text = t
+	var tw := mono.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, _star_fs).x
+	var th := float(mono.get_height(_star_fs))
+	stars_label.position = card_p.position + (card_p.size - Vector2(tw, th)) * 0.5
+	stars_label.size = Vector2(tw, th)
+	stars_label.visible = true
 
 
 ## Пилюля под табло: тёмный текст читается и на небе. Пилюля подсказки
@@ -964,6 +1118,17 @@ func _text_files() -> Array[String]:
 
 func _new_level() -> void:
 	var frag := _load_text()
+	# Кегль — под САМ этот текст (столько строк, сколько нужно, должны
+	# занять карточку): считать надо до переноса, потому что перенос
+	# зависит от кегля. Число знаков берём из кусков исходника.
+	var n_chars := 0
+	for piece in frag["texts"] as Array:
+		n_chars += String(piece).length()
+	font_size = _text_font(n_chars)
+	# Шаг клетки — от нового кегля, до переноса: char_w из _relayout
+	# посчитан для прежнего, и строки набились бы шире карточки
+	# (ловил logic_test: «row 16 is 638 px wide, card ends at 478»).
+	char_w = _marginal_adv(font_size)
 	var fit := _fit_to_width(frag)
 	var laid: Array[String] = []
 	for piece in fit["lines"] as Array:
@@ -1026,6 +1191,7 @@ func _new_level() -> void:
 	fw_parts.clear()
 	fw_cd = 0.0
 	scroll_y = 0.0
+	scroll_target = 0.0
 	_skip_inactive()
 	shake_t = 0.0
 	lunge_t = 0.0
@@ -1107,6 +1273,18 @@ func _hard_line(i: int) -> bool:
 ## ↵ на конце строки: переходим на следующую. Из партии и с доски, и с
 ## физической клавиатуры. Вводит ли текст переносы, никто не знает —
 ## перенос просто часть строки, поэтому в строке он и набирается.
+## Лишний ↵ не в попад: опечатка без метки — переноса здесь нет и клетки
+## под него тоже (автор 15.10.2026: «опечатка энтером не работает»).
+## Как буква в ожидании переноса: счётчик тикает, заяц шагает назад
+## откатом, а клавиша вспыхивает красным (см. вердикт в обоих вводах).
+func _wrong_enter() -> void:
+	_mark_press()
+	typed_bad += 1
+	shake_t = SHAKE_T
+	_knockback()
+	_refresh()
+
+
 func _enter_next_line() -> bool:
 	if not need_enter:
 		return false
@@ -1292,13 +1470,17 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		_backspace()
 		return
 	# ↵ с физической клавиатуры — тот же перенос строки, что и с доски
-	# (автор 10.2026: «ты не вернул использование энтера»).
+	# (автор 10.2026: «ты не вернул использование энтера»). Не в попад —
+	# обычная опечатка без метки (см. _wrong_enter), а не тишина.
 	if (
 		(ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER)
-		and need_enter
 		and state == "playing"
 	):
-		_enter_next_line()
+		_flash("ввод", "ok" if need_enter else "err")
+		if need_enter:
+			_enter_next_line()
+		else:
+			_wrong_enter()
 		return
 	if ke.unicode < 32:
 		return
@@ -1644,6 +1826,7 @@ func _finish(won: bool, reason := "") -> void:
 		# Выпада нет: ёж остаётся в точке контакта (укол — не удар).
 		enemy_cps = B.adapt_cps(false, enemy_cps, acc)
 	var stars := B.stars_for_result(won, acc, typed_bad)
+	_last_stars = stars if won else 0
 	var prof: Dictionary = S.load_profile(profile_name)
 	prof["total_games"] = int(prof.get("total_games", 0)) + 1
 	if won:
@@ -1663,8 +1846,7 @@ func _finish(won: bool, reason := "") -> void:
 	})
 	if won:
 		overlay_label.add_theme_color_override("font_color", GREEN if not night else Color("#8fd07f"))
-		overlay_label.text = "%s\n%s · %s" % [
-			"★".repeat(stars) + "☆".repeat(3 - stars),
+		overlay_label.text = "%s · %s" % [
 			_speed_word(int(round(cpm))), _err_word(typed_bad)
 		]
 		_fw_burst(true)
@@ -1917,6 +2099,16 @@ func _process(dt: float) -> void:
 	# тут же стёр бы обратно к курсору. Порядок кадра: детекция →
 	# переоценка позиций → отрисовка. На проигрыше не двигаем ничего:
 	# табло укола (заяц справа от ежа) должно держаться.
+	# Плавный скролл: окно догоняет цель быстрее зайца (12/с), чтобы
+	# герои не отрывались от букв, но медленнее мгновенного прыжка —
+	# текст едет, а не дёргается. Порог 0.5px: ближе — стоим ровно.
+	# Вне партии окно замирает вместе с табло: иначе после укола скролл
+	# уезжал бы из-под застывших героев (ловил chase_test: заяц «не на
+	# строке ежа» на втором кадре табло).
+	if state == "playing" and scroll_y != scroll_target:
+		scroll_y = lerpf(scroll_y, scroll_target, clampf(dt * 18.0, 0.0, 1.0))
+		if absf(scroll_y - scroll_target) < 0.5:
+			scroll_y = scroll_target
 	var hero_prev := hero_r
 	if state != "lost":
 		hero_r = hero_r.lerp(_hero_pos(), clampf(dt * 12.0, 0.0, 1.0))
@@ -1924,7 +2116,19 @@ func _process(dt: float) -> void:
 		if moved > 0.02:
 			hop_ph += moved / 16.0 * PI
 		else:
-			hop_ph = lerpf(hop_ph, roundf(hop_ph / PI) * PI, clampf(dt * 10.0, 0.0, 1.0))
+			# Дотягиваем до кратного π и СТАНОВИМСЯ ровно: асимптотический
+			# lerp без снэпа зависал на ht→1⁻, а там присед 0.45 — заяц
+			# останавливался сплюснутым (автор 15.10.2026). Та же болезнь,
+			# что у скролла (добег 0.5px).
+			var hop_to := roundf(hop_ph / PI) * PI
+			hop_ph = lerpf(hop_ph, hop_to, clampf(dt * 10.0, 0.0, 1.0))
+			if absf(hop_ph - hop_to) < 0.02:
+				hop_ph = hop_to
+		# Фаза живёт весь прогон и уходит в тысячи радиан — там шаг lerp
+		# округляется во float32 в ноль и дотягивание встаёт (ловил
+		# combo: ht завис на 1.0000 после полутора тысяч кадров хаоса).
+		# Дальше фазы всё равно никто не читает, кроме fmod(…, π).
+		hop_ph = fmod(hop_ph, TAU)
 	queue_redraw()
 	_refresh_hud()
 
@@ -1978,6 +2182,9 @@ func _refresh() -> void:
 	# _refresh и _layout_text_lines кадр показывает старые строки на
 	# новых местах (жалоба автора 10.2026 про «старое не стирается»).
 	_layout_text_lines()
+	# Карточка и звёзды — тоже здесь: иначе после _finish они показывают
+	# прошлый уровень (ловил тест: текст «★★★» при счёте на две).
+	_layout_card()
 	queue_redraw()
 
 
@@ -2037,14 +2244,13 @@ func _marks_debug() -> String:
 
 
 func _hint_parts() -> Array:
+	# Текстов финала нет: исход виден и так (табло со звёздами/ежом),
+	# а звёзды лезли на текст (автор 15.10.2026). Подсветку ↵ на доске
+	# держит _hint_keys — ей текст не нужен.
 	if state == "won":
-		# Только констатация: клавишу зовёт сама доска (там ↵ подсвечен).
-		return [{"s": "Уровень пройден!", "cap": false}]
+		return []
 	if state == "lost":
-		# После проигрыша буквы мертвы, дальше — только Enter. Без этой
-		# строки игрок жмёт буквы в пустоту и думает, что ввод сломался
-		# (жалоба автора 10.2026: «не реагировала, пока не нажал галочку»).
-		return [{"s": "Ёж догнал!", "cap": false}]
+		return []
 	if state != "playing":
 		return []
 	if _caps_warn and _exact():
@@ -2070,16 +2276,15 @@ func _hint_text() -> String:
 	return " ".join(out)
 
 
-## Центр i-й звёздочки (0..2): строка центрирована в лейбле,
-## шаг — advance глифа (моноширинный шрифт: ★ и ☆ одинаковы).
+## Центр i-й звёздочки (0..2): строка центрирована в своём лейбле
+## поверх карточки, шаг — advance глифа (моноширинный шрифт).
 func _star_center(i: int) -> Vector2:
 	var pitch := mono.get_string_size(
-		"★", HORIZONTAL_ALIGNMENT_LEFT, -1.0, _over_fs
+		"★", HORIZONTAL_ALIGNMENT_LEFT, -1.0, _star_fs
 	).x
-	var cx := overlay_label.position.x + overlay_label.size.x * 0.5
 	return Vector2(
-		cx + (float(i) - 1.0) * pitch,
-		overlay_label.position.y + overlay_label.size.y * 0.25
+		stars_label.position.x + stars_label.size.x * 0.5 + (float(i) - 1.0) * pitch,
+		stars_label.position.y + stars_label.size.y * 0.5
 	)
 
 
@@ -2088,17 +2293,17 @@ func _star_center(i: int) -> Vector2:
 ## плывут от кегля, а центры всегда на своих местах. Палец прощает
 ## полшага в стороны.
 func _star_at(pos: Vector2) -> int:
-	if state != "won" or not over_p.visible:
+	if state != "won" or not stars_label.visible:
 		return 0
-	var top := overlay_label.position.y
-	if pos.y < top or pos.y > top + overlay_label.size.y * 0.5:
+	var top := stars_label.position.y
+	if pos.y < top or pos.y > top + stars_label.size.y:
 		return 0
 	var pitch := mono.get_string_size(
-		"★", HORIZONTAL_ALIGNMENT_LEFT, -1.0, _over_fs
+		"★", HORIZONTAL_ALIGNMENT_LEFT, -1.0, _star_fs
 	).x
 	if pitch <= 0.0:
 		return 0
-	var cx := overlay_label.position.x + overlay_label.size.x * 0.5
+	var cx := stars_label.position.x + stars_label.size.x * 0.5
 	var f := (pos.x - cx) / pitch + 1.0
 	var i := int(floor(f + 0.5))
 	if i < 0 or i > 2:
@@ -2140,6 +2345,24 @@ func _draw_star_tip() -> void:
 ## Рисуем подсказку по центру низа: текст словами, кнопки — в рамках.
 ## Пилюля жмётся по содержимому: пустая плашка во всю ширину экрана
 ## под двумя буквами выглядела ошибкой (ловили на эмуляторе).
+## Верх панели подсказки: зарезервированная полоса под карточкой (см.
+## _text_free_h), но не ниже границы эффективной высоты. Отдельная
+## функция, а не строчка в _draw: в headless картинку никто не рисует,
+## а проверять эту геометрию надо числами (logic_test, _geo_fill).
+func _hint_top() -> float:
+	var panel_h := 48.0 * k + 16.0 * k
+	var y_top := card_p.position.y + card_p.size.y + 44.0 * k
+	y_top = minf(y_top, _eff_h() - panel_h - 8.0 * k)
+	var lowest := 8.0 * k + top_safe
+	if y_top < lowest:
+		# Текст заезжает под клавиатуру, но подсказка — нет: она уходит на
+		# дно доступной зоны целиком.
+		y_top = maxf(lowest, _eff_h() - panel_h - 8.0 * k)
+		if y_top + panel_h > _eff_h():
+			y_top = maxf(lowest, _eff_h() - panel_h)
+	return y_top
+
+
 func _draw_hint() -> void:
 	var parts := _hint_parts()
 	if parts.is_empty():
@@ -2160,25 +2383,13 @@ func _draw_hint() -> void:
 		widths.append(w)
 		total += w
 	total += gap * float(maxi(parts.size() - 1, 0))
-	# Центр строки — на месте бывшей подсказки-лейбла (низ минус 137.5k).
-	# Панель (cap_h + 16k) должна остаться ВЫШЕ границы _eff_h(): иначе
-	# при открытой клавиатуре её нижняя половина уезжает под неё и
-	# подсказка «закрывается» (жалоба автора 10.2026).
-	# Панель (cap_h + 16k) должна остаться ВЫШЕ границы _eff_h(): иначе
-	# при открытой клавиатуре её нижняя половина уезжает под неё и
-	# подсказка «закрывается» (жалоба автора 10.2026). При очень большой
+	# Панель — под прогрессом и счётчиком, в зарезервированной под неё
+	# полосе (см. _text_free_h: 78..142 от низа карточки). Ниже клавиатуры
+	# ей нельзя (жалоба автора 10.2026: «закрывается»). При очень большой
 	# клавиатуре (k/экран маленькие) _eff_h упирается в EFF_MIN_H — тогда
 	# подсказка обязана уехать на самый низ ДО границы, а не под неё.
 	var panel_h := cap_h + 16.0 * k
-	var y_top := _eff_h() - 137.5 * k - cap_h * 0.5
-	y_top = minf(y_top, _eff_h() - panel_h - 8.0 * k)
-	var lowest := 8.0 * k + top_safe
-	if y_top < lowest:
-		# Текст заезжает под клавиатуру, но подсказка — нет: она уходит на
-		# дно доступной зоны целиком.
-		y_top = maxf(lowest, _eff_h() - panel_h - 8.0 * k)
-		if y_top + panel_h > _eff_h():
-			y_top = maxf(lowest, _eff_h() - panel_h)
+	var y_top := _hint_top()
 	var x := (view_w - total) * 0.5
 	hint_p.position = Vector2(x - 14.0 * k, y_top - 8.0 * k)
 	hint_p.size = Vector2(total + 28.0 * k, cap_h + 16.0 * k)
@@ -2600,8 +2811,11 @@ func _own_press(pos: Vector2, live := false) -> bool:
 		# На финале — следующий уровень, в партии — перенос строки.
 		# Раньше в партии ввод молчал, и перенос был автоматическим
 		# (автор 10.2026: «ты не вернул использование энтера»).
+		# Не в попад — опечатка без метки, клавиша красным.
 		if state == "playing":
-			_enter_next_line()
+			_flash(act, "ok" if need_enter else "err")
+			if not _enter_next_line():
+				_wrong_enter()
 		else:
 			_new_level()
 			queue_redraw()
@@ -2754,15 +2968,18 @@ func _input(event: InputEvent) -> void:
 	if over_p.visible:
 		# Модалка победы/поражения: дальше — тап где угодно, кроме
 		# кнопок. ≡ ведёт в меню, бейдж — дебаг (только дебажная
-		# сборка). Тап по звезде только показывает расшифровку
-		# (следующий тап всё равно идёт дальше).
+		# сборка). Первый тап по звезде показывает расшифровку,
+		# повторный по той же идёт дальше.
 		if _players_rect.has_point(pos):
 			_open_menu()
 			get_viewport().set_input_as_handled()
 			return
 		if state == "won":
+			# Первый тап по звезде объясняет балл, повторный по той же —
+			# идёт дальше (иначе большая звезда по центру поля съедала
+			# бы главный тап «следующий уровень»).
 			var tip := _star_at(pos)
-			if tip > 0:
+			if tip > 0 and tip != _star_tip:
 				_star_tip = tip
 				queue_redraw()
 				get_viewport().set_input_as_handled()
@@ -2896,11 +3113,10 @@ func _draw_level_badge() -> void:
 	)
 
 
-## Полоса прогресса уровня под карточкой: съедено столько-то из стольких.
-## Числитель — пройденные клетки, знаменатель — все буквы уровня.
-## Отступ от краёв карточки и заметная толщина: раньше полоска шириной
-## во всю карточку и высотой 10*k читалась как случайный штрих, а не
-## как прогресс. Подпись — сколько букв съедено из скольких.
+## Полоса пройденного и счёт справа от неё. Счётчик стоит ТОЙ ЖЕ строкой:
+## подпись под полосой стоила целой строки высоты в запасе карточки
+## (автор 14.10.2026: текст мелкий, а место пустует). Полоса от этого
+## чуть короче — она и так читается по заполнению.
 func _draw_progress() -> void:
 	if level_total <= 0 or not card_p.visible:
 		return
@@ -2908,9 +3124,12 @@ func _draw_progress() -> void:
 	var frac := clampf(float(done) / float(level_total), 0.0, 1.0)
 	var inset := 20.0 * k
 	var th := 12.0 * k
+	var t := "%d / %d" % [done, level_total]
+	var fs := int(16.0 * k)
+	var tw := mono.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x
 	var r := Rect2(
 		card_p.position + Vector2(inset, card_p.size.y + 14.0 * k),
-		Vector2(card_p.size.x - inset * 2.0, th)
+		Vector2(card_p.size.x - inset * 2.0 - tw - 12.0 * k, th)
 	)
 	draw_style_box(bar_track_sb, r)
 	if frac > 0.0:
@@ -2918,20 +3137,18 @@ func _draw_progress() -> void:
 			bar_fill_sb,
 			Rect2(r.position, Vector2(maxf(r.size.x * frac, th), r.size.y))
 		)
-	var t := "%d / %d" % [done, level_total]
-	var fs := int(16.0 * k)
-	var tw := mono.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs)
-	# Подпись ПОД полосой, то есть прямо по небу: старые цвета давали
-	# днём 3:1 (мелкий серый на светлом) — берём общий рисованный текст.
-	# Под модалкой победы/поражения подпись прячем: иначе цифры
-	# налезают на звёзды. Сама полоса остаётся — контекст.
+	# Подпись рисуем по небу: старые цвета давали днём 3:1 (мелкий серый
+	# на светлом) — берём общий рисованный текст. Под модалкой победы
+	# или проигрыша подпись прячем: иначе цифры налезают на звёзды. Сама
+	# полоса остаётся — контекст.
 	if over_p.visible:
 		return
 	draw_string(
 		mono,
-		Vector2(r.position.x + r.size.x * 0.5 - tw.x * 0.5, r.position.y + th + 20.0 * k),
+		Vector2(r.end.x + 12.0 * k, r.position.y + th * 0.5 + fs * 0.36),
 		t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs, _ui_ink()
 	)
+
 
 
 ## Рамка маркера текущей буквы: ровно по глифу (та же ширина, что в
@@ -3032,23 +3249,35 @@ func _draw_hero() -> void:
 			# Ёж не хищник: дрожь на подступах еле заметна. На проигрыше
 			# (укололи) дрожи нет вовсе — только шок на лице.
 			c.x += sin(time * 55.0) * 0.8 * k
-	# Прыжок зайца: присед (гашение инерции) → парабола вверх-вниз →
-	# снова присед. Цикл быстрый, наверху не висит.
+	# Прыжок зайца как прыгучий мячик (автор 15.10.2026: гипертрофиро-
+	# ванная деформация): присед с антиципацией → вытягивание в толчке →
+	# присед на приземлении. Цикл быстрый, наверху не висит.
 	var ht := fmod(hop_ph, PI) / PI
 	var hop := 0.0
-	var crouch := 0.0
 	if ht < 0.3:
 		hop = sin(ht / 0.3 * PI * 0.5)
 	elif ht < 0.55:
 		hop = cos((ht - 0.3) / 0.25 * PI * 0.5)
-	else:
-		crouch = 1.0 - (ht - 0.55) / 0.45
+	# Вытягивание — на взлёте и в полёте, максимум в середине дуги.
+	var air := sin(PI * clampf(ht / 0.55, 0.0, 1.0)) if ht < 0.55 else 0.0
+	# Присед — удар о землю (быстро) и неполный подъём к концу цикла:
+	# следующий прыжок начинается уже заряженным (антиципация).
+	var crouch := 0.0
+	if ht >= 0.55 and ht < 0.7:
+		var u := (ht - 0.55) / 0.15
+		crouch = u * u * (3.0 - 2.0 * u)
+	elif ht >= 0.7:
+		var u := (ht - 0.7) / 0.3
+		crouch = 1.0 - 0.55 * (u * u * (3.0 - 2.0 * u))
 	c.y -= hop * 7.0 * k
 	# Дыхание, чтобы не был статуей.
 	var breathe := 1.0 + 0.02 * sin(time * 2.5)
 	var sq := Vector2((1.0 + 0.22 * punch) * breathe, (1.0 - 0.12 * punch) / breathe)
-	sq *= Vector2(1.0 + 0.07 * crouch, 1.0 - 0.06 * crouch)
-	sq *= Vector2(1.0 - 0.03 * hop, 1.0 + 0.04 * hop)
+	sq *= Vector2(1.0 + 0.24 * crouch, 1.0 - 0.20 * crouch)
+	sq *= Vector2(1.0 - 0.14 * air, 1.0 + 0.20 * air)
+	# Ноги стоят: деформация идёт от земли, а не из центра — иначе присед
+	# проваливал бы зайца под строку, а вытягивание отрывало бы от неё.
+	c.y += (1.0 - sq.y) * _unit_h() * k * 0.5
 	var s := _spr_scale(HERO_TEX, _unit_h()) * sq
 	draw_set_transform(c, 0.0, s)
 	draw_texture(HERO_TEX, -HERO_TEX.get_size() * 0.5, (Ui.NIGHT_TINT if night else Color.WHITE))
@@ -3058,7 +3287,7 @@ func _draw_hero() -> void:
 		# спрайту 139x160: центры (-15, 0) и (+28, 0) от его центра.
 		var e := _spr_scale(HERO_TEX, _unit_h())
 		for ex in [-15.0, 28.0]:
-			var p := c + Vector2(ex, 0.0) * e.x
+			var p := c + Vector2(ex * sq.x, 0.0) * e.x
 			draw_line(
 				p + Vector2(-13.0, 0.0) * e.x, p + Vector2(13.0, 0.0) * e.x,
 				Color("#3a3230"), 4.0 * e.x
@@ -3068,10 +3297,10 @@ func _draw_hero() -> void:
 		# Координаты глаз — те же рамки, что у век выше.
 		var e2 := _spr_scale(HERO_TEX, _unit_h())
 		for ex in [-15.0, 28.0]:
-			var p2 := c + Vector2(ex, 0.0) * e2.x
+			var p2 := c + Vector2(ex * sq.x, 0.0) * e2.x
 			draw_circle(p2, 15.0 * e2.x, Color.WHITE)
 			draw_circle(p2, 7.0 * e2.x, Color("#1c1a16"))
-		var m := c + Vector2(6.0, 34.0) * e2.x
+		var m := c + Vector2(6.0 * sq.x, 34.0 * sq.y) * e2.x
 		draw_set_transform(m, 0.0, Vector2(0.75, 1.1) * e2.x)
 		draw_circle(Vector2.ZERO, 10.0, Color("#5a2323"))
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)

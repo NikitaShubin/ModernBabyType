@@ -741,7 +741,7 @@ func _marker_cells() -> void:
 	root.size = Vector2i(1100, 650)
 	_main._relayout()
 	# 2) Центр маркера — ровно клетка, на нескольких позициях.
-	_main.display_lines = ["мама мыла раму"]
+	_main.display_lines = ["мама мыла раму"] as Array[String]
 	_main.line_drops = []
 	var hard: Array[bool] = [true]
 	_main.line_hard = hard
@@ -925,6 +925,99 @@ func _geo_level(tag: String) -> void:
 	print("ГЕО %s: margin=%.1f char_w=%.1f max=%d rows=%d kb_h=%.0f" % [
 		tag, _main.margin, _main.char_w, _main._max_chars(),
 		_main.display_lines.size(), _main.kb_h])
+	_geo_fill(tag)
+
+
+## Заполнение карточки (автор 14.10.2026: «текст точно мелкий, а место
+## пустует — и в горизонтальной, и в вертикальной»). Проверяем числами:
+##   — кегль никогда не меньше прежних 36k и не крупнее 72k;
+##   — интерлиньяж в границах 1.8..2.4 высоты глифа: ниже — ёж впритык
+##     к чернилам, выше — «слишком большой межстрочный интервал»;
+##   — видимые строки занимают свободную высоту без пустой полосы
+##     снизу (остаток меньше одной строки).
+func _geo_fill(tag: String) -> void:
+	var k: float = _main.k
+	var glyph: float = _main.mono.get_height(_main.font_size)
+	_check(
+		_main.font_size >= int(36.0 * k) and _main.font_size <= int(72.0 * k) + 1,
+		"%s: font %d out of [36k, 72k]" % [tag, _main.font_size]
+	)
+	var dens: float = _main.line_h / maxf(1.0, glyph)
+	_check(
+		dens >= 1.8 and dens <= 2.4,
+		"%s: line spacing %.2f glyphs is out of [1.8, 2.4]" % [tag, dens]
+	)
+	var free: float = _main._text_free_h() - 40.0 * k
+	var vis: int = maxi(1, _main._vis_lines())
+	var used: float = float(vis) * _main.line_h
+	_check(
+		used >= free - _main.line_h - 1.0,
+		"%s: %d rows take %.0f px of %.0f — a whole row of air below" % [
+			tag, vis, used, free]
+	)
+	# ГЛАВНОЕ правило: текст при ЕСТЕСТВЕННОМ шаге (строка = две высоты
+	# глифа) должен занимать почти всю карточку. Иначе кегль мал, а
+	# разницу съедает растянутый интерлиньяж — ровно то, на что жаловался
+	# автор 14.10.2026 («текст точно мелкий»). Меряем строками: сколько
+	# строк влезает в строку кеглем — столько и берём.
+	var per_line: float = (
+		(_main.view_w - _main.margin * 2.0) / maxf(1.0, _main.char_w) - 1.0
+	)
+	var rows: float = maxf(1.0, ceil(float(_main._chars_now()) / maxf(8.0, per_line)))
+	var nat_used: float = rows * glyph * 2.0
+	_check(
+		nat_used >= free * 0.7,
+		"%s: the text fills only %.0f px of %.0f at natural spacing" % [
+			tag, nat_used, free]
+	)
+	# Короткий уровень на САМОЙ МЕЛКОЙ строке: растягивать нечего и некуда
+	# (потолок интерлиньяжа 2.4 высоты глифа, автор 14.10.2026: «слишком
+	# большой межстрочный интервал»). Кегль ужимаем вдвое, чтобы потолок
+	# точно упирался, иначе проверка была бы вхолостую.
+	var was_lines: Array[String] = _main.display_lines.duplicate()
+	var was_drops: Array = _main.line_drops.duplicate()
+	var was_hard: Array[bool] = []
+	for hb in _main.line_hard:
+		was_hard.append(bool(hb))
+	var was_fs: int = _main.font_size
+	_main.display_lines = ["Короткий."] as Array[String]
+	_main.line_drops = [] as Array
+	_main.line_hard = [false] as Array[bool]
+	_main.font_size = maxi(10, int(float(was_fs) * 0.5))
+	_main.char_w = _main._marginal_adv(_main.font_size)
+	_main._layout_text_lines()
+	var short_glyph: float = _main.mono.get_height(_main.font_size)
+	var short_dens: float = _main.line_h / maxf(1.0, short_glyph)
+	print("КОРОТКИЙ %s: glyph=%.1f line_h=%.1f плотность=%.2f free=%.0f text_y=%.0f карточка=%.0f" % [
+		tag, short_glyph, _main.line_h, short_dens, free, _main.text_y,
+		_main.card_p.size.y])
+	_check(
+		short_dens <= 2.4,
+		"%s: a one-line level gets %.2f glyph spacing" % [tag, short_dens]
+	)
+	_check(
+		_main.text_y > _main.card_p.position.y,
+		"%s: a one-line level is not stuck to the card top" % tag
+	)
+	_main.display_lines = was_lines
+	_main.line_drops = was_drops
+	_main.line_hard = was_hard
+	_main.font_size = was_fs
+	_main.char_w = _main._marginal_adv(was_fs)
+	_main._layout_text_lines()
+	# Подсказка — в своей полосе под полосой прогресса и выше края.
+	# Проверяем всегда (не только когда панель видима): геометрия живёт в
+	# _hint_top, headless её иначе не увидеть.
+	var hint_y: float = _main._hint_top()
+	var hint_h: float = 64.0 * k
+	_check(
+		hint_y >= _main.card_p.position.y + _main.card_p.size.y + 26.0 * k - 1.0,
+		"%s: the hint overlaps the progress bar (%.0f)" % [tag, hint_y]
+	)
+	_check(
+		hint_y + hint_h <= _main._eff_h() + 1.0,
+		"%s: the hint goes below the effective area (%.0f)" % [tag, hint_y + hint_h]
+	)
 	var card_right: float = float(_main.view_w - _main.margin)
 	for l in _main.display_lines.size():
 		var line: String = _main.display_lines[l]
@@ -1697,6 +1790,9 @@ func _run_part2() -> void:
 			_main._row_visible(i) == (i >= 6 - vis),
 			"visibility follows the window"
 		)
+	# Скролл едет плавно (анимация в _process), поэтому после прямой
+	# раскладки дотягиваем его до цели — как если бы кадры прошли.
+	_main.scroll_y = _main.scroll_target
 	_check(
 		_main.scroll_y == float(6 - vis) * _main.line_h,
 		"scroll offset is exact"
@@ -1704,6 +1800,20 @@ func _run_part2() -> void:
 	_check(
 		_main.card_p.size.y < 6.0 * _main.line_h + 40.0 * _main.k,
 		"card is a window, not the whole text"
+	)
+	# Заранее видно следующую строку: курсор в середине текста, а строка
+	# под ним — уже в окне (автор 15.10.2026). Раньше курсор всегда стоял
+	# в последней видимой строке и следующая открывалась только по факту.
+	_main.cursor_line = 3
+	_main.cursor_pos = 0
+	_main._layout_text_lines()
+	_check(
+		_main._row_visible(4),
+		"the next line is visible before the cursor gets there"
+	)
+	_check(
+		_main._row_visible(3),
+		"the cursor line itself stays visible"
 	)
 
 	# --- Тач и мышь в игре: кнопка игроков открывает меню, а дальше
@@ -1736,7 +1846,19 @@ func _run_part2() -> void:
 		sme.position = _main._star_center(si)
 		_main.call("_input", sme)
 		_check(_main._star_tip == si + 1, "star %d has its own hint" % (si + 1))
-	_main.call("_input", _tap(Rect2(_main.card_p.position, _main.card_p.size).get_center()))
+	# Повторный тап по той же звезде — идёт дальше (иначе большая звезда
+	# по центру поля съедала бы главный тап «следующий уровень»).
+	_main.call("_input", _tap(_main._star_center(2)))
+	_check(_main.state == "playing", "a repeated star tap moves on")
+	# Снова победа — дальше тест ждёт модалку под карточкой.
+	_main._finish(true)
+	_check(_main.state == "won", "setup: won for the work-area tap")
+	# Тап по углу карточки (не по звезде — та показывает расшифровку).
+	var corner := Rect2(
+		_main.card_p.position + Vector2(20.0 * _main.k, _main.card_p.size.y - 40.0 * _main.k),
+		Vector2(40.0, 20.0)
+	).get_center()
+	_main.call("_input", _tap(corner))
 	_check(_main.state == "playing", "tap on the work area starts a new level")
 	_check(
 		_main.cursor_line == 0 and _main.cursor_pos == 0,
@@ -1772,8 +1894,8 @@ func _run_part2() -> void:
 	_main.typed_ok = 94
 	_main.typed_bad = 6
 	_main._finish(true)
-	var stars_line: String = _main.overlay_label.text.split("\n")[0]
-	_check(stars_line == "★★☆", "missing star is hollow")
+
+	_check(_main.stars_label.text == "★★☆", "missing star is hollow")
 	# Дальше по тесту идёт ввод букв — вернуть партию.
 	_main._new_level()
 	# Модалку листают только видимые символы и Enter; служебные нет.
@@ -1909,8 +2031,12 @@ func _run_part2() -> void:
 	var yo1: Array[String] = ["ёж"]
 	_main.display_lines = yo1
 	_main.line_drops = []
+	_main.line_hard = [false] as Array[bool]
+	_main.line_glue = [false] as Array[bool]
 	_main.cursor_line = 0
 	_main.cursor_pos = 0
+	_main.need_enter = false
+	_main.passed.clear()
 	_main.errors.clear()
 	_main._type_char("е")
 	_check(
@@ -1927,8 +2053,12 @@ func _run_part2() -> void:
 	var yo2: Array[String] = ["еж"]
 	_main.display_lines = yo2
 	_main.line_drops = []
+	_main.line_hard = [false] as Array[bool]
+	_main.line_glue = [false] as Array[bool]
 	_main.cursor_line = 0
 	_main.cursor_pos = 0
+	_main.need_enter = false
+	_main.passed.clear()
 	_main.errors.clear()
 	_main._type_char("ё")
 	_check(
@@ -1945,10 +2075,23 @@ func _run_part2() -> void:
 	var yo4: Array[String] = ["ёж"]
 	_main.display_lines = yo4
 	_main.line_drops = []
+	_main.line_hard = [false] as Array[bool]
+	_main.line_glue = [false] as Array[bool]
 	_main.cursor_line = 0
 	_main.cursor_pos = 0
+	_main.need_enter = false
+	_main.passed.clear()
 	_main.errors.clear()
 	_main._type_char("е")
+	# Флаки-охота 15.10.2026: дважды падало только в полных прогонах
+	# (соло 14+ зелёных) — при повторе этот принт покажет состояние.
+	if _main.errors.is_empty():
+		printerr("YO-FAIL state=", _main.state, " need_enter=", _main.need_enter,
+			" cur=", _main._current(), " yo=", _main.profile_yo,
+			" exact=", _main._exact(), " active=", _main.active,
+			" pos=", _main.cursor_line, ":", _main.cursor_pos,
+			" hard=", _main.line_hard, " glue=", _main.line_glue,
+			" passed=", _main.passed.size())
 	_check(
 		not _main.errors.is_empty(),
 		"strict yo rejects е for ё"

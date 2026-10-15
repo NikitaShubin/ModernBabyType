@@ -69,6 +69,11 @@ run_godot() {
 		extra_env+=(-e "ANDROID_HOME=/work/tools/emulator/sdk")
 		extra_env+=(-e "ANDROID_SDK_ROOT=/work/tools/emulator/sdk")
 	fi
+	# Экран — виртуальный :99 ВСЕГДА, даже если в окружении агента стоит
+	# DISPLAY=:0: :0 — экран автора, и окно теста на нём мигает (ловил
+	# 15.10.2026: кадры визуального прогона пришли 3120x2080 — это размер
+	# :0, полноэкранное окно на нём не ужимается вызовом window_set_size).
+	# Свой экран задаётся явно через MBT_DISPLAY.
 	# Домашний каталог и XDG можно переопределить на тест
 	# (MBT_HOME): параллельные тесты не должны делить user://-профили
 	# (гость, сохранения уровней) — иначе чтения/записи гоняются.
@@ -85,7 +90,7 @@ run_godot() {
 		-e WINEPREFIX="$mbt_home/.wine"
 		-e XDG_CONFIG_HOME="$mbt_cfg"
 		-e XDG_DATA_HOME="$mbt_data"
-		-e DISPLAY="${DISPLAY:-:99}"
+		-e DISPLAY="${MBT_DISPLAY:-:99}"
 		-e MBT_KEYSTORE="${MBT_KEYSTORE:-}"
 		-e MBT_KEY_ALIAS="${MBT_KEY_ALIAS:-}"
 		-e MBT_KEY_PASS="${MBT_KEY_PASS:-}"
