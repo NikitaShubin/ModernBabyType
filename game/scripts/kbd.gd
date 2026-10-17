@@ -100,11 +100,17 @@ const US_SHIFT := {
 ## 16.10.2026). Набор подписей фиксирован, кэш не растёт. Никто
 ## результат не меняет — все только читают.
 static var _legends_cache: Dictionary = {}
+## Счётчики для perf_test: промахи кэшей. Их должно быть по чуть-чуть
+## на кадр, а не по шестьдесят (ревизия 16.10.2026): доска зовётся и на
+## рисовании, и на тапе, но чистый результат считается один раз.
+static var legends_misses := 0
+static var buttons_misses := 0
 
 
 static func legends(s: String) -> Array:
 	if _legends_cache.has(s):
 		return _legends_cache[s]
+	legends_misses += 1
 	var out: Array = []
 	if OVERLOAD.has(s):
 		out = Array(OVERLOAD[s])
@@ -570,6 +576,7 @@ static func buttons(area: Rect2, shift: bool, enter := false) -> Array:
 		and _btn_enter == enter
 	):
 		return _btn_cache
+	buttons_misses += 1
 	_btn_cache = _buttons_now(area, shift, enter)
 	_btn_key_ok = true
 	_btn_pos = area.position

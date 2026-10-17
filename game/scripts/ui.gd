@@ -11,6 +11,11 @@ extends RefCounted
 ## шрифта каждый раз (ревизия 16.10.2026). Ключи ограничены тем, что
 ## реально рисуют: подписи доски, имена игроков, строки подсказок.
 static var _tsize: Dictionary = {}
+## Счётчики для perf_test: промахи кэша замера и создания панелей. Панели
+## на кадре не создаются (ревизия 16.10.2026), замер после первого кадра
+## не промахивается — обе цифры растут только на переразметке.
+static var text_size_misses := 0
+static var panel_sb_calls := 0
 
 
 static func text_size(font: Font, txt: String, fs: int) -> Vector2:
@@ -22,6 +27,7 @@ static func text_size(font: Font, txt: String, fs: int) -> Vector2:
 	var by_fs: Variant = by_text.get(txt)
 	if by_fs is Dictionary and (by_fs as Dictionary).has(fs):
 		return by_fs[fs]
+	text_size_misses += 1
 	var sz := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs)
 	if not by_fs is Dictionary:
 		by_fs = {}
@@ -34,6 +40,7 @@ static func text_size(font: Font, txt: String, fs: int) -> Vector2:
 ## Скруглённая панель: тень — только у больших карточек, радиусы
 ## в пикселях (без пересоздания стилей при каждом ресайзе).
 static func panel_sb(bg: Color, radius: float, border := Color(0, 0, 0, 0), bw := 0.0, shadow := false) -> StyleBoxFlat:
+	panel_sb_calls += 1
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = bg
 	sb.set_corner_radius_all(int(radius))
