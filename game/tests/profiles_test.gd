@@ -74,6 +74,7 @@ func _process(_dt: float) -> bool:
 	_part30_bunny_strip()
 	_part31_menu_no_overlap()
 	_part32_pre_ready_geometry()
+	_part33_tap_and_bunny()
 	_part27_menu_chaos()
 	_report()
 	return true
@@ -717,8 +718,7 @@ func _part13_touch() -> void:
 	var second := String(_menu.users[1])
 	_picked = ""
 	_menu_tap(_menu.call("_row_tap_rect", 1).get_center())
-	_check(int(_menu.sel) == 1, "a single tap on a row only selects it")
-	_check(_picked == "", "a single tap does not start the game")
+	_check(_picked == second, "a single tap plays as that user")
 	_menu_double_tap(_menu.call("_row_tap_rect", 1).get_center())
 	_check(_picked == second, "a double tap plays as that user")
 	_menu_tap(_menu.call("_new_tap_rect").get_center())
@@ -1520,14 +1520,15 @@ func _part29_card_scroll() -> void:
 	_menu.call("_input", _motion(last.get_center(), last.get_center() - Vector2(0.0, 60.0)))
 	_menu.call("_input", _release(last.get_center() - Vector2(0.0, 60.0)))
 	_check(_picked == "", "a drag over a card does not play that profile")
-	# Короткий тап (без жеста) выбирает — как раньше.
+	# Короткий тап по карточке играет сразу (автор 17.10.2026): пресс
+	# сам по себе молчит — тап доигрывает на отпускании.
 	_menu._scroll = max_scroll
 	var tap_at := Rect2(_menu.call("_card_rect", 11)).get_center()
 	_picked = ""
 	_menu.call("_input", _tap(tap_at))
 	_check(_picked == "", "a press alone does not play yet (waits for release)")
 	_menu.call("_input", _release(tap_at))
-	_check(_picked == "", "a short tap does not play that profile")
+	_check(_picked != "", "a short tap plays as that profile")
 	_check(int(_menu.sel) == 11, "a short tap selects that profile")
 	# Вниз до упора — тоже зажим, в ноль не уходит.
 	_menu._scroll = max_scroll
@@ -2071,6 +2072,92 @@ func _part32_pre_ready_geometry() -> void:
 	Ui.force_touch = was_touch
 
 
+## Тап-игра, ряды кнопок и зайчик (автор 17.10.2026): «клик по имени —
+## зайчик трясётся, игра не начинается» и «кнопки стали крупными,
+## а текст в них мелкий». Держит: прямой тап по игроку ИГРАЕТ (дабл-клик
+## и Enter — так же, проверено в _part13 и _part28); на телефоне ряды
+## внизу — ДВА, каждый в полную ширину; кегль подписи — от высоты
+## кнопки (45%), ниже 24k падать не может; заяц не перезапускает прыжок
+## на ту же строку (прыжок-по-месту был дрожью, а не прыжком).
+func _part33_tap_and_bunny() -> void:
+	var was_touch := Ui.force_touch
+	Ui.force_touch = true
+	var saved_users: Array = _menu.users.duplicate()
+	for u in S.user_list():
+		S.delete_user(u)
+	S.create_user("Оля")
+	S.create_user("Паша")
+	_menu.open(S.GUEST)
+	root.size = Vector2i(540, 1140)
+	# Телефонный портрет: палец, карточки, два ряда кнопок.
+	var nr := Rect2(_menu.call("_new_tap_rect"))
+	var gr := Rect2(_menu.call("_guest_tap_rect"))
+	var h: float = _menu.call("_btn_h")
+	var bm: float = _menu.call("_edge")
+	_check(_menu.call("_btn_rows") == 2, "two button rows on a phone")
+	_check(nr.size.y >= 64.0 and gr.size.y >= 64.0, "button rows fit a finger")
+	_check(
+		absf(nr.position.x - bm) < 0.5 and nr.size.x >= _menu.view_w - bm * 2.0 - 1.0,
+		"new player row spans the full width (%.0f vs %.0f)" % [nr.size.x, _menu.view_w - bm * 2.0]
+	)
+	_check(gr.size.x >= _menu.view_w - bm * 2.0 - 1.0, "guest row spans the full width")
+	_check(
+		absf(gr.position.y - (nr.end.y + _menu.call("_btn_gap"))) < 0.5,
+		"guest row stands right under the new player row"
+	)
+	_check(gr.end.y <= _menu.view_h - bm + 1.0, "button block fits on screen")
+	# Окно списка заканчивается над блоком кнопок, не поверх него.
+	_check(
+		Rect2(_menu.call("_list_rect")).end.y <= nr.position.y,
+		"the list window sits above the button rows"
+	)
+	# Кегль от высоты кнопки: пол 24k, подпись влезает в свой ряд.
+	for pair in [["+ Новый игрок", nr], ["Без профиля", gr]]:
+		var fs: int = _menu.call("_button_fs", pair[1], pair[0])
+		var r: Rect2 = pair[1]
+		var kfloor: int = int(24.0 * _menu.k)
+		_check(fs >= kfloor - 1, "%s label kegl keeps the 24k floor (%d < %d)" % [
+			pair[0], fs, kfloor])
+		_check(
+			fs >= int(floor(r.size.y * 0.45)) - 1,
+			"%s label kegl tracks the button height (%d on %.0f tall)" % [
+				pair[0], fs, r.size.y]
+		)
+		var w: Vector2 = _menu.call("_text_size_fs", pair[0], fs)
+		_check(
+			w.x <= r.size.x - 16.0 * _menu.k,
+			"%s label fits its row (%.0f px wide)" % [pair[0], w.x]
+		)
+	# Прямой тап по карточке играет этим игроком — сразу, без дабл-клика.
+	var second := String(_menu.users[1])
+	_picked = ""
+	_menu_tap(Rect2(_menu.call("_row_tap_rect", 1)).get_center())
+	_check(_picked == second, "a tap on a row plays as that user")
+	_check(int(_menu.sel) == 1, "the tapped row is selected as well")
+	# Заяц: прыжок «на ту же строку» не перезапускается — раньше каждый
+	# повторный клик по одному игроку дёргал его (жалоба «трясётся»).
+	_menu.call("_nav", 0)  # стрелка в ту же строку: цели совпадают
+	_check(float(_menu._bunny_t) >= 1.0, "same-row hop does not restart the bunny")
+	# А на другую строку прыжок жив: стрелка вниз прыгает заново.
+	_menu.call("_nav", 1)
+	_check(float(_menu._bunny_t) < 1.0, "a real hop restarts the flight")
+	_menu._process(1.5)  # прыжок доиграл
+	_menu._bunny_t = 1.0
+	# Соло-список: стрелка оборачивается на ту же строку — это тоже
+	# прыжок «по месту», и он обязан остаться без прыжка.
+	S.delete_user(second)
+	_menu._reload()
+	_menu.call("_nav", 1)
+	_check(float(_menu._bunny_t) >= 1.0, "solo wrap does not restart the bunny")
+	for u in S.user_list():
+		S.delete_user(u)
+	_menu.users = saved_users.duplicate()
+	_menu._reload()
+	root.size = Vector2i(64, 64)
+	_menu._relayout()
+	Ui.force_touch = was_touch
+
+
 func _report() -> void:
 	S.PATH = "user://modern_baby_type.cfg"
 	DirAccess.remove_absolute(
@@ -2265,7 +2352,7 @@ func _part28_cards() -> void:
 	var second := String(_menu.users[1])
 	_picked = ""
 	_menu_tap(c1.get_center())
-	_check(_picked == "", "a tap on a card does not play yet")
+	_check(_picked == second, "a tap on a card plays as that user")
 	_menu_double_tap(c1.get_center())
 	_check(_picked == second, "a double tap on a card plays as that user")
 	_picked = ""
