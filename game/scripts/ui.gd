@@ -147,104 +147,140 @@ static func eff_h(view_h: float, kb_h: float) -> float:
 ## Теперь роль одна — значение одно на день и на ночь, и оно проверено
 ## на контраст (theme_test).
 ##
-## Правила выбора:
-##   * бумага тёплая днём (#fffdf6 и рядом), холодная ночью (#232c44);
-##   * чернила — единственный цвет текста, dim — для второстепенного;
-##   * акцент один (синий) и означает одно: «включено» (клавиша-ввод,
-##     флаг профиля). Выделение строки — жёлтое и другое (это выбор,
-##     а не включение) — иначе «выделение внутри выделения»;
-##   * ok/danger — только про результат (верный ввод, опечатка, крестик);
-##   * фокус — чернила по теме: единственная пара, которая контрастит и
-##     с пустой рамкой, и с акцентной заливкой, и с жёлтой строкой.
+## ВЫВОД ПАЛИТРЫ ИЗ ФОНОВ (автор 17.10.2026: «цвета остального интерфейса
+## надо выбирать под них»). Фоны meadow.gd заданы автором и хороши, значит
+## остальное выводится из них, а не выбирается на глаз. Считаем в OKLCH —
+## воспринимаемая светлота L, насыщенность C, hue H (цвета в HSL/смеси
+## RGB сравнивать нельзя: там одинаково «яркие» цвета разной светлоты).
+## Опоры — сами фоны, их OKLCH:
+##   небо день  #8fd0ee → L .82 C .29 H 187   горизонт #f7f3e8 → H  35
+##   солнце     #ffd94d → H  47                холм     #cfe6b8 → H 133
+##   небо ночь  #2a3a5e → H 209
+## Отсюда hue-якоря, по одному на семью (theme_test держит разброс ≤12°):
+##   тёплый 40 (бумага, чернила, жёлтое) · синий 200 (акцент) ·
+##   зелёный 150 (холм) · красный 5 (семантический, в фонах его нет) ·
+##   ночные поверхности 210 (ночное небо).
+##
+## Четыре правила, по которым дальше меняются роли:
+##   1. СВЕТЛОТА — по контрасту, а не по вкусу: у всех состояний заливка
+##      стоит на одном L в обеих темах (0.78 «верно», 0.72 «ошибка»).
+##      Раньше «верно» днём было светло-зелёным, а ночью тёмно-зелёным —
+##      один смысл и два разных цвета (правило «цвет значит одно»).
+##   2. НАСЫЩЕННОСТЬ у hue своя, и это не каприз: в sRGB красный живёт
+##      при C≈0.45-0.85, синий при C≈0.12. Сравнять абсолютно — значит
+##      сделать красный коричневым (проверено сеткой: L.72 H5 C.28 — это
+##      пыльная роза). Сравнивают относительную насыщенность C/Cmax(L,H),
+##      долю доступной гаммы: у состояний она 0.4-1.2, у нейтралей ≤0.35.
+##   3. НОЧЬ = те же hue и та же полярность, сдвинута только светлота:
+##      бумага холодная (небо ночи), чернила тёплые (светлое на холодном
+##      фоне — единственная тёплая пара, которую не меняем).
+##   4. КОНТРАСТ по WCAG (текст 4.5, рамка/заливка 3) — и не на бумаге
+##      роли, а на НАСТОЯЩЕМ фоне: карточка полупрозрачная и лежит
+##      поверх неба, поэтому theme_test кладёт её на оба края градиента
+##      (#8fd0ee и #f7f3e8 днём, #0d1526 и #2a3a5e ночью).
+##
+## Смысловые роли: акцент один (синий) и означает одно — «включено»
+## (клавиша-ввод, флаг профиля). Выделение строки — жёлтое и другое
+## (это выбор, а не включение). ok/danger — только про результат.
 const CARD_DAY := Color(1.0, 0.992, 0.965, 0.65)
 const CARD_NIGHT := Color(0.137, 0.173, 0.267, 0.65)
 
-## Поверхности.
+## Поверхности. Бумага дня — ровно горизонт неба (#f7f3e8, H35).
 const PAPER_DAY := Color("#f7f3e8")
-const PAPER_NIGHT := Color("#141a2c")
+const PAPER_NIGHT := Color("#0f1520")
 ## Полупрозрачная строка списка (сквозь неё видно небо).
 const ROW_IDLE_DAY := Color(1, 1, 1, 0.45)
 const ROW_IDLE_NIGHT := Color(0.10, 0.12, 0.20, 0.60)
 ## Пилюля-подсказка.
 const PILL_DAY := Color(1, 1, 1, 0.72)
 const PILL_NIGHT := Color(0.10, 0.12, 0.20, 0.80)
-const SURFACE_DAY := Color("#fffdf6")
-const SURFACE_NIGHT := Color("#232c44")
+const SURFACE_DAY := Color("#f8f9f8")  # L.98 C.03 H36
+const SURFACE_NIGHT := Color("#272f3e")  # L.30 C.06 H209
 ## Вторая поверхность: клавиша доски, выключенный чип, ключ подсказки.
-const SURFACE_ALT_DAY := Color("#ffffff")
-const SURFACE_ALT_NIGHT := Color("#2f3a5c")
+const SURFACE_ALT_DAY := Color("#f8fdff")  # L.99 C.01 H40
+const SURFACE_ALT_NIGHT := Color("#3c4557")  # L.38 C.06 H211
 ## Рамки: обычная и тихая (рамка списка, пилюля-пояснение).
-const LINE_DAY := Color("#4a4438")
-const LINE_NIGHT := Color("#8b93a8")
-const LINE_SOFT_DAY := Color("#e0d5bd")
-const LINE_SOFT_NIGHT := Color("#3a4a6b")
-## Текст.
-const INK_DAY := Color("#1c1a16")
-const INK_NIGHT := Color("#f2ede0")
-const UI_TEXT_DAY := Color("#4a4438")
-const UI_TEXT_NIGHT := Color("#e8e4d8")
-const DIM_DAY := Color("#6f6a5e")
-const DIM_NIGHT := Color("#9aa3b8")
+const LINE_DAY := Color("#4f4c42")  # L.42 C.04 H41
+const LINE_NIGHT := Color("#a3acbb")  # L.74 C.03 H207
+const LINE_SOFT_DAY := Color("#d6d3c6")  # L.87 C.05 H41
+const LINE_SOFT_NIGHT := Color("#4c576d")  # L.45 C.07 H211
+## Текст. Шаг светлоты вместо шага насыщенности: чёрный, тёмно-серый
+## и серый различаются светлотой, а не тем, что один «теплее» другого.
+const INK_DAY := Color("#23211b")  # L.25 C.03 H40
+const INK_NIGHT := Color("#ededea")  # L.95 C.03 H36 — тёплые на холодном
+const UI_TEXT_DAY := Color("#4f4c42")  # L.42 C.04 H41
+const UI_TEXT_NIGHT := Color("#ddddd9")  # L.90 C.03 H38
+const DIM_DAY := Color("#68665f")  # L.52 C.03 H40 — и на худшем небе 4.8
+const DIM_NIGHT := Color("#a3acbb")  # L.74 C.03 H207
 ## Серая буква уровня (серая клетка = проходится сама).
-const GREY_CHAR_DAY := Color("#787366")
-const GREY_CHAR_NIGHT := Color("#7f8bab")
-## Выбор строки (жёлтый, обе темы — он и есть «выбран»).
-const SELECT_DAY := Color("#f0d98a")
-const SELECT_NIGHT := Color("#f0d98a")
-## Акцент: «включено». День — тот же голубой, что у включённой клавиши
-## в игре, ночь — светлее, чтобы читался на тёмном.
-const ACCENT_DAY := Color("#a9c6ec")
-const ACCENT_NIGHT := Color("#8ab4e0")
+const GREY_CHAR_DAY := Color("#6c6961")  # L.53 C.04 H40
+const GREY_CHAR_NIGHT := Color("#9ba4b5")  # L.72 C.03 H212
+## Выбор строки (жёлтый, обе темы — он и есть «выбран»). Hue 46 — солнце.
+const SELECT_DAY := Color("#f0d98a")  # L.90 C.18 H46
+const SELECT_NIGHT := Color("#e2cc7f")  # L.86 C.17 H46 — ночью тише
+## Текст на выбранной строке: строка светлая в обеих темах, значит
+## чернила тёмные в обеих (иначе ночью 1.37:1).
+const SELECT_TEXT_DAY := Color("#2a261d")
+const SELECT_TEXT_NIGHT := Color("#2a261d")
+## Акцент: «включено». Hue 200 — небо (187), чуть сильнее: на самом небе
+## акцент не должен сливаться с фоном.
+const ACCENT_DAY := Color("#abc5e5")  # L.81 C.12 H200
+const ACCENT_NIGHT := Color("#a2bbda")  # L.78 C.12 H200
 ## Текст НА акценте: акцент светлый в обеих темах, поэтому и чернила
-## здесь тёмные (8.6:1 днём, 6.9:1 ночью). Светлый текст на голубом
+## здесь тёмные (8.5:1 днём, 8.1:1 ночью). Светлый текст на голубом
 ## давал 1.85:1 — нечитаемо.
-const ACCENT_INK := Color("#2a2620")
+const ACCENT_INK := Color("#2a261d")
+const ACCENT_INK_NIGHT := Color("#1d222c")  # ночь — холоднее фона
 ## Рамка включённого чипа — тёмная в обеих темах: акцент светлый
 ## всегда, а ночная серая рамка на нём давала 1.42:1.
-const ACCENT_EDGE_DAY := Color("#2a2620")
-const ACCENT_EDGE_NIGHT := Color("#2a2620")
+const ACCENT_EDGE_DAY := Color("#2a261d")
+const ACCENT_EDGE_NIGHT := Color("#1d222c")
 ## Ободок фокуса: два значения, потому что обводит он РАЗНОЕ. На
 ## светлом (пустая рамка, включённый чип, жёлтая строка) — тёмный;
 ## на тёмном (ночная клавиша) — светлый. Один цвет на все неё даёт
 ## либо 1.2, либо 1.1 (ловил на числах: 17.10.2026).
-const FOCUS_DARK := Color("#2a2620")
-const FOCUS_LIGHT := Color("#f2ede0")
-## Верный ввод.
-const OK_DAY := Color("#8fd66a")
-const OK_NIGHT := Color("#3f6b3a")
-const OK_EDGE_DAY := Color("#3f6b2c")
-const OK_EDGE_NIGHT := Color("#9ad08c")
-## Текст «верно» (итог в модалке) — тот же зелёный, но читаемый на
-## тёмной подложке модалки.
-const OK_TEXT_DAY := Color("#1e7a34")
-const OK_TEXT_NIGHT := Color("#8fd07f")
-## Ошибка/опасное действие.
-const DANGER_DAY := Color("#ff8a80")
-const DANGER_NIGHT := Color("#7a2f28")
-const DANGER_EDGE_DAY := Color("#8e2f26")
-const DANGER_EDGE_NIGHT := Color("#ff9a90")
-const DANGER_TEXT_DAY := Color("#b02323")
-const DANGER_TEXT_NIGHT := Color("#ff9a90")
+const FOCUS_DARK := Color("#2a261d")
+const FOCUS_LIGHT := Color("#ededea")
+## Верный ввод. Заливка на одном L с «ошибкой» в обеих темах (правило 1),
+## hue 150 — холм.
+const OK_DAY := Color("#8bbf76")  # L.78 C.24 H150
+const OK_NIGHT := Color("#90bf7f")  # L.78 C.22 H150
+const OK_EDGE_DAY := Color("#3c5a2e")  # L.45 C.16 H150
+const OK_EDGE_NIGHT := Color("#365129")  # L.42 C.15 H150
+## Текст «верно» (итог в модалке) — тот же hue, светлота по контрасту.
+const OK_TEXT_DAY := Color("#4e6e42")  # L.52 C.16 H150
+const OK_TEXT_NIGHT := Color("#9bbc93")  # L.78 C.15 H150
+## Ошибка/опасное действие. Hue 5 — семантический: в фонах красного нет,
+## и он не должен выглядеть как часть пейзажа.
+const DANGER_DAY := Color("#ee917b")  # L.72 C.48 H5
+const DANGER_NIGHT := Color("#e9927f")  # L.72 C.45 H5
+const DANGER_EDGE_DAY := Color("#682e1e")  # L.35 C.35 H5
+const DANGER_EDGE_NIGHT := Color("#652f20")  # L.35 C.33 H5
+const DANGER_TEXT_DAY := Color("#863d29")  # L.42 C.42 H5
+const DANGER_TEXT_NIGHT := Color("#ebb1a8")  # L.80 C.30 H5
+## Красные метки опечаток (в тексте, BBCode) — тот же hue ошибки.
+const ERR_DAY := Color("#a95742")  # L.52 C.45 H5
+const ERR_NIGHT := Color("#d48878")  # L.68 C.40 H5
 ## Нажатая клавиша (нейтральная вспышка) и подсветка подсказки.
-const PRESS_DAY := Color("#ffd98a")
-const PRESS_NIGHT := Color("#6b5a2a")
-const HINT_KEY_DAY := Color("#ffd75e")
-const HINT_KEY_NIGHT := Color("#8a6d1f")
+const PRESS_DAY := Color("#fada67")  # L.91 C.23 H47 — солнце
+const PRESS_NIGHT := Color("#9a8127")  # L.62 C.18 H46
+const HINT_KEY_DAY := Color("#fdd74c")  # L.90 C.25 H47
+const HINT_KEY_NIGHT := Color("#b19100")  # L.68 C.22 H47
 ## Прогресс и бейдж.
-const PROGRESS_DAY := Color("#51783f")
-const PROGRESS_NIGHT := Color("#7fb069")
-const TRACK_DAY := Color("#e6dcc4")
-const TRACK_NIGHT := Color("#3a4a6b")
-const BADGE_DAY := Color("#7fb069")
-const BADGE_EDGE_DAY := Color("#405936")
-const BADGE_EDGE_NIGHT := Color("#9ad08c")
-const BADGE_NIGHT := Color("#33513c")
-## Курсор/маркер клетки: мягкое жёлтое пятно под буквой.
-const CURSOR_DAY := Color(1.0, 0.82, 0.25, 0.5)
-const CURSOR_NIGHT := Color(1.0, 0.82, 0.25, 0.38)
+const PROGRESS_DAY := Color("#5f7f53")  # L.58 C.16 H150
+const PROGRESS_NIGHT := Color("#87aa7e")  # L.72 C.16 H150
+const TRACK_DAY := Color("#d9d6c9")  # L.88 C.05 H41
+const TRACK_NIGHT := Color("#454f61")  # L.42 C.06 H209
+const BADGE_DAY := Color("#81ab71")  # L.72 C.20 H150
+const BADGE_EDGE_DAY := Color("#3a542f")  # L.43 C.14 H150
+const BADGE_EDGE_NIGHT := Color("#b5d2b3")  # L.85 C.12 H150
+const BADGE_NIGHT := Color("#455840")  # L.45 C.10 H150
+## Курсор/маркер клетки: мягкое пятно цвета выбора под буквой.
+const CURSOR_DAY := Color(0.941, 0.851, 0.541, 0.55)
+const CURSOR_NIGHT := Color(0.886, 0.800, 0.498, 0.42)
 ## Звёзды за уровень и фейерверк.
-const STAR_DAY := Color("#9a6615")
-const STAR_NIGHT := Color("#e8a93d")
+const STAR_DAY := Color("#7c6714")  # L.53 C.16 H47 — это текст (Label)
+const STAR_NIGHT := Color("#d2c07d")  # L.82 C.15 H48
 
 ## Значение роли по теме. Ночью берём второе, иначе первое: тема
 ## хранится в узлах, а роли — здесь.
@@ -252,13 +288,18 @@ static func pick(night: bool, day: Color, n: Color) -> Color:
 	return n if night else day
 
 
-## Красные метки опечаток: день и ночь (и hex для BBCode).
-const ERR_DAY := Color("#c02727")
-const ERR_NIGHT := Color("#ff7a6b")
-const ERR_DAY_HEX := "#c02727"
+## Те же роли строкой — для BBCode (игра размечает им текст ошибок и
+## подсказку). Держим рядом с ролью: раньше hex и Color жили в разных
+## местах и разошлись (#c02727 против #b02323 на одном экране).
+static func hex_of(c: Color) -> String:
+	return "#" + c.to_html(false)
+
+
+const ERR_DAY_HEX := "#a95742"
+const ERR_NIGHT_HEX := "#d48878"
 
 ## Вспышка клетки: ответ на нажатие, которое ничего не изменило (откат
-## в серую клетку, проглоченный дубль). Видно, что игра услышала.
-const HINT_DAY_HEX := "#2f7fd0"
-const HINT_NIGHT_HEX := "#7fc0ff"
-const ERR_NIGHT_HEX := "#ff7a6b"
+## в серую клетку, проглоченный дубль). Видно, что игра услышала. Тот
+## же hue акцента — подсказка не новое состояние, а отклик.
+const HINT_DAY_HEX := "#5c7697"
+const HINT_NIGHT_HEX := "#97b2d3"

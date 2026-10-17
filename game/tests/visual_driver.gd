@@ -11,6 +11,7 @@ extends SceneTree
 
 const SAVE_DIR := "/tmp/opencode/"
 const Kbd := preload("res://scripts/kbd.gd")
+const SAVE := preload("res://scripts/save.gd")
 
 var _main: Node = null
 var _frame := 0
@@ -258,6 +259,7 @@ func _a_kb_en() -> void:
 func _a_night_meteor() -> void:
 	_win(Vector2i(820, 1180))
 	_main._force_touch = true
+	SAVE.set_night_mode(SAVE.NIGHT_ON)  # см. _a_night: режим, а не поле
 	_main.night = true
 	_main.call("_apply_night")
 	for c in _main.get_children():
@@ -402,13 +404,20 @@ func _a_to_line_start() -> void:
 		_main._type_char(cur)
 
 
+## Ночь и день. Ставим РЕЖИМ, а не только поле: _apply_night начинается с
+## _night_resolve, который пересчитывает night из сохранённого режима —
+## драйвер писал `_main.night = true` и тут же терял его (ловил на кадрах
+## 33.10.2026: небо ночное, а панели дневные — ночные цвета интерфейса не
+## показывал ни один кадр).
 func _a_night() -> void:
+	SAVE.set_night_mode(SAVE.NIGHT_ON)
 	_main.night = true
 	_main._apply_night()
 	_main._refresh()
 
 
 func _a_day() -> void:
+	SAVE.set_night_mode(SAVE.NIGHT_DAY)
 	_main.night = false
 	_main._apply_night()
 	_main._refresh()

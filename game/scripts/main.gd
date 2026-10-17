@@ -52,8 +52,6 @@ const START_DELAY := 3.0
 
 const INK := Ui.INK_DAY
 const UI_TEXT := Ui.UI_TEXT_DAY
-const GREEN := Ui.OK_TEXT_DAY
-const DARK_RED := Ui.DANGER_TEXT_DAY
 
 var display_lines: Array[String] = []
 ## Сколько пробелов выкинуто на разрывах ПЕРЕД каждой строкой (параллельно
@@ -77,6 +75,13 @@ var difficulty := 0
 var wins_in_row := 0
 var ema_cpm := 0.0
 var ema_acc := 1.0
+## Разогрев: ёж не выезжает, пока игрок не ввёл хоть что-то сам.
+## Раньше гонка начиналась по часам, и на уровне, где первая строка
+## целиком из серых букв, заяц сразу оказывался на второй строке, а
+## ёж через START_DELAY начинал катиться — человек ещё ничего не
+## набрал (автор 17.10.2026). Ошибка тоже считается вводом: нажатие
+## услышано, значит человек уже в игре.
+var warm_done := false
 var enemy_cps := 2.0
 
 var enemy_x := 0.0
@@ -1195,6 +1200,7 @@ func _new_level() -> void:
 	need_enter = false
 	typed_ok = 0
 	typed_bad = 0
+	warm_done = false
 	elapsed = 0.0
 	_poke_idle()
 	last_press_t = -1.0
@@ -1316,6 +1322,7 @@ func _wrong_enter() -> void:
 func _enter_next_line() -> bool:
 	if not need_enter:
 		return false
+	warm_done = true  # и перенос по ↵ — тоже ввод человека
 	need_enter = false
 	cursor_line += 1
 	cursor_pos = 0
@@ -1610,12 +1617,14 @@ func _type_char(ch: String) -> void:
 		# работает сам откат: перенос отменяется, букву надо набирать
 		# заново.
 		_mark_press()
+		warm_done = true  # буква в ожидании ↵ — тоже ввод человека
 		typed_bad += 1
 		shake_t = SHAKE_T
 		_knockback()
 		_refresh()
 		return
 	_mark_press()
+	warm_done = true  # первый ввод сделан: ёж может выезжать
 	last_hand = Kbd.hand_of(ch)
 	var expected := _current()
 	if expected == "":
@@ -2050,7 +2059,11 @@ func _process(dt: float) -> void:
 			grace_t -= dt
 		# Ёж выкатывается на след, когда герой уходит на вторую строку,
 		# и дальше катится строго по пройденному пути — без прыжков.
-		if not hedge_active and cursor_line >= 1:
+		# Разогрев: сперва ввод человека, потом гонка (автор 17.10.2026).
+		# Разогрев держит ВЫЕЗД, а не физику: раз ёж выехал, он едет
+		# без остановок — иначе «ёж стоит на месте» становится ещё одним
+		# состоянием, которое надо проверять отдельно.
+		if not hedge_active and warm_done and cursor_line >= 1:
 			hedge_active = true
 			enemy_line = 0
 			enemy_x = margin
@@ -2243,7 +2256,12 @@ func _cell_color(l: int, p: int, ch: String, kk: String) -> String:
 	# дырами), поэтому обе подобраны по контрасту.
 	var col := _hex(Ui.GREY_CHAR_DAY, Ui.GREY_CHAR_NIGHT)
 	if passed.has(kk):
-		col = _hex(Ui.GREY_CHAR_DAY.lightened(0.16), Ui.GREY_CHAR_DAY)
+		# Съеденная буква — тише соседних. Ночью тише значит «ближе к
+		# INK, но не в него»: серую ночную букву светлеем (иначе она
+		# слилась бы с тёмной карточкой). Раньше здесь стоял ДНЕВНОЙ
+		# серый в обеих темах — ночью набранный текст был 2.2:1 к
+		# карточке, то есть нечитаем (ловил на снимке экрана 17.10.2026).
+		col = _hex(Ui.GREY_CHAR_DAY.lightened(0.16), Ui.GREY_CHAR_NIGHT.lightened(0.22))
 	elif _is_active(ch):
 		col = _hex(Ui.INK_DAY, Ui.INK_NIGHT)
 	return col

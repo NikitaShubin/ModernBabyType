@@ -55,6 +55,9 @@ func _process(_dt: float) -> bool:
 		_main.grace_t = 0.0
 		_main.cursor_line = 0
 		_main.cursor_pos = 8
+		# Гонка началась: разогрев пройден (17.10.2026 — ёж выезжает
+		# только после первого ввода человека, сам сценарий его ждёт).
+		_main.warm_done = true
 		_main.hedge_active = true
 		_main.enemy_line = 0
 		_main.enemy_x = _main._cursor_cx() - _main.char_w * 0.5 - 10.0
@@ -64,6 +67,7 @@ func _process(_dt: float) -> bool:
 		# Новый уровень, герой сразу на строке 1 → ёж выходит на строку 0.
 		_main._new_level()
 		_main.grace_t = 0.0
+		_main.warm_done = true  # гонка пошла (разогрев, 17.10.2026)
 		_main.cursor_line = 1
 		_main.cursor_pos = 0
 	elif _frame == 8:
@@ -84,6 +88,7 @@ func _process(_dt: float) -> bool:
 		# картинка героя обязана догонять логику.
 		_main._new_level()
 		_main.grace_t = 0.0
+		_main.warm_done = true  # гонка пошла (разогрев, 17.10.2026)
 		_main.cursor_line = 1
 		_main.cursor_pos = 3
 		_d0 = _main.hero_r.distance_to(_main._hero_pos())
@@ -102,6 +107,7 @@ func _process(_dt: float) -> bool:
 		# Ёж впереди: по правилу это уже конец — игра прерывается сразу.
 		_main._new_level()
 		_main.grace_t = 0.0
+		_main.warm_done = true  # гонка пошла (разогрев, 17.10.2026)
 		_main.cursor_line = 1
 		_main.cursor_pos = 5
 		_main.hedge_active = true
@@ -118,6 +124,7 @@ func _process(_dt: float) -> bool:
 		# его положение не надо»).
 		_main._new_level()
 		_main.grace_t = 0.0
+		_main.warm_done = true  # гонка пошла (разогрев, 17.10.2026)
 		_main.enemy_cps = 0.0
 		_main.cursor_line = 1
 		_main.cursor_pos = 15
@@ -146,6 +153,7 @@ func _process(_dt: float) -> bool:
 		# (жалоба 10.2026: «останавливается сильно до, а игре уже конец»).
 		_main._new_level()
 		_main.grace_t = 0.0
+		_main.warm_done = true  # гонка пошла (разогрев, 17.10.2026)
 		_main.enemy_cps = 0.0
 		_main.cursor_line = 1
 		_main.cursor_pos = 3
@@ -163,6 +171,7 @@ func _process(_dt: float) -> bool:
 		# что раньше ловился как «вперёд».
 		_main._new_level()
 		_main.grace_t = 0.0
+		_main.warm_done = true  # гонка пошла (разогрев, 17.10.2026)
 		_main.cursor_line = 1
 		_main.cursor_pos = 0
 		_main.hedge_active = true
@@ -177,6 +186,7 @@ func _process(_dt: float) -> bool:
 		# укалывает на входе в строку.
 		_main._new_level()
 		_main.grace_t = 0.0
+		_main.warm_done = true  # гонка пошла (разогрев, 17.10.2026)
 		_main.enemy_cps = 0.0
 		_main.cursor_line = 1
 		_main.cursor_pos = 0
@@ -203,6 +213,7 @@ func _process(_dt: float) -> bool:
 		# строки. Это обязано стать уколом.
 		_main._new_level()
 		_main.grace_t = 0.0
+		_main.warm_done = true  # гонка пошла (разогрев, 17.10.2026)
 		_main.enemy_cps = 0.0
 		_main.cursor_line = 1
 		_main.cursor_pos = _main.display_lines[1].length() - 1
@@ -231,6 +242,7 @@ func _process(_dt: float) -> bool:
 		# зайца по оси). Расстояние не важно — важна строка.
 		_main._new_level()
 		_main.grace_t = 0.0
+		_main.warm_done = true  # гонка пошла (разогрев, 17.10.2026)
 		_main.enemy_cps = 0.0
 		_main.cursor_line = 0
 		_main.cursor_pos = _main.display_lines[0].length() - 1
@@ -254,6 +266,7 @@ func _process(_dt: float) -> bool:
 		# останется щель в пару ежей — исходная жалоба автора.
 		_main._new_level()
 		_main.grace_t = 0.0
+		_main.warm_done = true  # гонка пошла (разогрев, 17.10.2026)
 		_main.enemy_cps = 0.0
 		_main.cursor_line = 1
 		_main.cursor_pos = 15
@@ -274,6 +287,7 @@ func _process(_dt: float) -> bool:
 		# ежа (он всегда идёт) — по правилу это укол.
 		_main._new_level()
 		_main.grace_t = 0.0
+		_main.warm_done = true  # гонка пошла (разогрев, 17.10.2026)
 		_main.cursor_line = 1
 		_main.cursor_pos = 6
 		_main.hedge_active = true
@@ -284,6 +298,7 @@ func _process(_dt: float) -> bool:
 		# А вот ёж далеко сзади на своей строке — честно мимо.
 		_main._new_level()
 		_main.grace_t = 0.0
+		_main.warm_done = true  # гонка пошла (разогрев, 17.10.2026)
 		_main.cursor_line = 1
 		_main.cursor_pos = 15
 		_main.hedge_active = true

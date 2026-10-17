@@ -43,7 +43,10 @@ static func _app_version() -> String:
 ## _apply_night, и именно поэтому новый цвет не нужно искать в двух
 ## файлах сразу.
 const PAPER := Ui.PAPER_DAY
-const INK := Ui.INK_DAY
+## Чернила ВЫБРАННОЙ строки. Строка светлая в обеих темах (жёлтая), и
+## текст на ней тёмный в обеих — ночью светлые чернила давали 1.37:1.
+## Обычный текст списка берёт _ink() по теме.
+const INK := Ui.SELECT_TEXT_DAY
 const UI_TEXT := Ui.UI_TEXT_DAY
 const DIM := Ui.DIM_DAY
 const HERO_TEX: Texture2D = preload("res://assets/hero.png")
@@ -2793,7 +2796,7 @@ func _upd_no_rect() -> Rect2:
 func _ink() -> Color:
 	if night:
 		return Ui.INK_NIGHT
-	return INK
+	return Ui.INK_DAY
 
 
 func _uitext() -> Color:
@@ -2828,6 +2831,9 @@ func _apply_night() -> void:
 	# новый цвет правится в одном месте, а не в двух файлах сразу.
 	if night:
 		row_idle_sb.bg_color = Ui.ROW_IDLE_NIGHT
+		# Выбранная строка ночью — тот же тёплый жёлтый, но тише: на
+		# тёмном небе дневной SELECT (C.18, L.90) стоит пятном.
+		row_sb.bg_color = Ui.SELECT_NIGHT
 		box_sb.bg_color = Ui.SURFACE_ALT_NIGHT
 		box_sb.border_color = Ui.LINE_NIGHT
 		selbox_sb.bg_color = Ui.ACCENT_NIGHT
@@ -2850,6 +2856,7 @@ func _apply_night() -> void:
 		kb_press_err_sb.border_color = Ui.DANGER_EDGE_NIGHT
 	else:
 		row_idle_sb.bg_color = Ui.ROW_IDLE_DAY
+		row_sb.bg_color = Ui.SELECT_DAY
 		box_sb.bg_color = Ui.SURFACE_ALT_DAY
 		box_sb.border_color = Ui.LINE_DAY
 		selbox_sb.bg_color = Ui.ACCENT_DAY

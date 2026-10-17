@@ -21,6 +21,7 @@ const DT := 1.0 / 60.0
 const S := preload("res://scripts/save.gd")
 const Kbd := preload("res://scripts/kbd.gd")
 const B := preload("res://scripts/balance.gd")
+const U := preload("res://scripts/ui.gd")
 ## Пять заведомо неверных букв для пачки от IME. Разные — иначе это
 ## машинный дубль клавиши, который фильтр DUP_MS глотает по замыслу.
 const IME_WRONG := ["ы", "ж", "ц", "щ", "э"]
@@ -888,6 +889,16 @@ func _case_exact_case() -> void:
 
 
 ## 10. Ночная тема: та же связность, цвета живые.
+## Контраст по WCAG — тем же счётчиком, что theme_test: буквы в тексте
+## это текст, и «просто посветлее» не проходит.
+func _cr(a: Color, b: Color) -> float:
+	var f := func(v: float) -> float:
+		return v / 12.92 if v <= 0.04045 else pow((v + 0.055) / 1.055, 2.4)
+	var la: float = 0.2126 * f.call(a.r) + 0.7152 * f.call(a.g) + 0.0722 * f.call(a.b)
+	var lb: float = 0.2126 * f.call(b.r) + 0.7152 * f.call(b.g) + 0.0722 * f.call(b.b)
+	return (maxf(la, lb) + 0.05) / (minf(la, lb) + 0.05)
+
+
 func _case_night() -> void:
 	_fresh(1, 0)
 	_main.night = true
@@ -911,6 +922,39 @@ func _case_night() -> void:
 						== _main._cell_color(int(probe[0]), int(probe[1]), String(probe[2]), _main._key(int(probe[0]), int(probe[1]))),
 					"%s: the wanted letter is not highlighted in the night theme" % tag
 				)
+	# И главное про ночь: набранный текст должен ЧИТАТЬСЯ. Раньше
+	# съеденная буква брала серую роль дня в обеих темах (2.2:1 к ночной
+	# карточке) — ловил на снимке экрана 17.10.2026.
+	var passed_col := Color()
+	var have := false
+	for l2 in _main.display_lines.size():
+		var ln := String(_main.display_lines[l2])
+		for p2 in ln.length():
+			var kk2: String = _main._key(l2, p2)
+			if _main.passed.has(kk2):
+				passed_col = Color(_main._cell_color(l2, p2, ln.substr(p2, 1), kk2))
+				have = true
+				break
+		if have:
+			break
+	_check(have, "%s: nothing was typed, nothing to check" % tag)
+	if have:
+		var card := Color(0.10, 0.12, 0.20, 0.65)
+		var under := Color("#0d1526")
+		var flat := Color(
+			card.r * card.a + under.r * (1.0 - card.a),
+			card.g * card.a + under.g * (1.0 - card.a),
+			card.b * card.a + under.b * (1.0 - card.a),
+			1.0
+		)
+		_check(
+			_cr(passed_col, flat) >= 4.5,
+			"%s: typed text is unreadable at night (%.2f:1)" % [tag, _cr(passed_col, flat)]
+		)
+		_check(
+			passed_col != U.GREY_CHAR_DAY,
+			"%s: typed text keeps the day grey at night" % tag
+		)
 	_main.night = false
 
 
@@ -1089,6 +1133,87 @@ func _touch_echo(pos: Vector2) -> InputEventMouseButton:
 	mb.pressed = true
 	mb.position = pos
 	return mb
+
+
+## Разогрев: уровень, где первая строка целиком из серых букв. Раньше
+## заяц сразу оказывался на второй строке, а ёж через START_DELAY уже
+## катился — человек ещё не набрал ни одной буквы (автор 17.10.2026).
+## Теперь гонка начинается с ПЕРВОГО ввода, и опечатка считается вводом.
+func _case_warm_up() -> void:
+	_fresh(0, 0)
+	var tag := "warm up"
+	# Свой текст: первая строка — заведомо серые буквы (берём те, чего
+	# НЕТ в active на этой сложности), вторая — активная.
+	var grey := ""
+	for ch in "бгджзцчшщ":
+		if not _main.active.has(ch):
+			grey += ch
+			if grey.length() >= 4:
+				break
+	_check(grey.length() >= 4, "%s: no grey letters to build the line" % tag)
+	# Вторая строка — из активных букв и подлиннее: после разогрева
+	# уровень не должен закончиться, иначе гонку не увидеть.
+	var pool := ""
+	for ch in "абвгдежзиклмнопрстуфхцчшщэюя":
+		if _main.active.has(ch):
+			pool += ch
+	_check(pool != "", "%s: no active letters at all" % tag)
+	var live := ""
+	while live.length() < 8:
+		live += pool
+	_set_level_text([grey, live], [false, false])
+	_main._skip_inactive()  # как в _new_level: серое проходится само
+	_check(not _main.warm_done, "%s: warm-up is on before any input" % tag)
+	_check(
+		int(_main.cursor_line) == 1,
+		"%s: the game did not start on the line with active letters (%d)"
+		% [tag, _main.cursor_line]
+	)
+	_check(not _main.hedge_active, "%s: the hedge rolled out before the first input" % tag)
+	# Полминуты игрового времени — ёж так и не тронулся.
+	_main.grace_t = 0.0
+	var h0: float = _main.enemy_x
+	for _i in 300:
+		_main._process(DT)
+	_tick(tag)
+	_check(
+		is_equal_approx(_main.enemy_x, h0) and not _main.hedge_active,
+		"%s: the hedge moved before the first input (%.1f → %.1f)"
+		% [tag, h0, _main.enemy_x]
+	)
+	_check(String(_main.state) == "playing", "%s: the level ended itself" % tag)
+	# Первый ввод — и гонка начинается: ёж выезжает и катится.
+	_main._type_char("а")
+	_tick(tag)
+	_check(_main.warm_done, "%s: the first letter did not warm up the hedge" % tag)
+	_main.grace_t = 0.0
+	for _i in 10:
+		_main._process(DT)
+	_tick(tag)
+	_check(_main.hedge_active, "%s: the hedge stayed away after the first input" % tag)
+	_check(
+		_main.enemy_x > h0,
+		"%s: the hedge did not start rolling after the first input (%.1f)"
+		% [_main.enemy_x]
+	)
+	# Опечатка тоже ввод: ёж выезжает и на ней.
+	_fresh(0, 0)
+	var grey2 := ""
+	for ch in "бгджзцчшщ":
+		if not _main.active.has(ch):
+			grey2 += ch
+			if grey2.length() >= 4:
+				break
+	_set_level_text([grey2, live], [false, false])
+	_main._skip_inactive()
+	_main.grace_t = 0.0
+	_main._type_char("ж")  # не та буква — но человек уже в игре
+	_tick(tag)
+	_check(_main.warm_done, "%s: a typo did not count as input" % tag)
+	_check(int(_main.typed_bad) >= 1, "%s: the typo was not counted" % tag)
+	# Курсор после отката стоит на серой клетке в конце серой строки —
+	# это отдельное правило отката (его держит marks_test). Проверяем
+	# тут только разогрев: он состоялся, опечатка засчитана.
 
 
 ## Мультитач на доске: шифт первым пальцем, буква вторым. Godot
@@ -3220,6 +3345,7 @@ func _fill_cases() -> void:
 	_cases_list.append(["_case_loss_with_marks", Callable(self, "_case_loss_with_marks"), 0])
 	_cases_list.append(["_case_touch_keyboard", Callable(self, "_case_touch_keyboard"), 0])
 	_cases_list.append(["_case_touch_multitouch", Callable(self, "_case_touch_multitouch"), 0])
+	_cases_list.append(["_case_warm_up", Callable(self, "_case_warm_up"), 0])
 	_cases_list.append(["_case_kbd_shift_layer", Callable(self, "_case_kbd_shift_layer"), 0])
 	_cases_list.append(["_case_long_press", Callable(self, "_case_long_press"), 0])
 	_cases_list.append(["_case_auto_punctuation", Callable(self, "_case_auto_punctuation"), 0])
