@@ -458,7 +458,7 @@ run_tests() {
 	local pids=() failed=0
 	local s pid
 	# Мелочь — целиком, каждая своим процессом.
-	for s in logic_test.gd update_test.gd profiles_test.gd menu_scroll_test.gd perf_test.gd; do
+	for s in logic_test.gd update_test.gd profiles_test.gd menu_scroll_test.gd perf_test.gd theme_test.gd; do
 		run_test "$s" 600 &
 		pids+=($!)
 	done

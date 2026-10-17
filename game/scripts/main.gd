@@ -50,10 +50,10 @@ const BASE_H := 650.0
 const R_MIN_ROWS := 3
 const START_DELAY := 3.0
 
-const INK := Color("#1c1a16")
-const UI_TEXT := Color("#4a4438")
-const GREEN := Color("#1e7a34")
-const DARK_RED := Color("#b02323")
+const INK := Ui.INK_DAY
+const UI_TEXT := Ui.UI_TEXT_DAY
+const GREEN := Ui.OK_TEXT_DAY
+const DARK_RED := Ui.DANGER_TEXT_DAY
 
 var display_lines: Array[String] = []
 ## Сколько пробелов выкинуто на разрывах ПЕРЕД каждой строкой (параллельно
@@ -265,6 +265,19 @@ var top_safe := 0.0
 ## на модалке победы, Enter гасит вместе с ней.
 var fw_parts: Array = []
 var fw_cd := 0.0
+## Цвета МИРОВ, а не интерфейса: морда зайца (веки, зрачки, рот) и
+## крошки из съеденной буквы. Они не отвечают ни за одно состояние и
+## живут на спрайтах, поэтому в словарь ролей не идут.
+const HERO_FACE_LINE := Color("#3a3230")
+const HERO_EYE := Color("#1c1a16")
+const HERO_MOUTH := Color("#5a2323")
+const CRUMB := Color("#8a5a2b")
+## Контур буквы ночью: без него светлый глиф тонул на белом спрайте
+## героя (видел на эмуляторе).
+const GLYPH_OUTLINE := Color("#141a2c")
+
+## Салют на экране победы: четыре праздничных цвета. Это НЕ роли
+## интерфейса (смысла «включено/ошибка» здесь нет), поэтому свой список.
 const FW_COLORS := [Color("#ffd94d"), Color("#7fb069"), Color("#6bb8e8"), Color("#ef8fb0")]
 ## Кнопка тач-интерфейса: прямоугольник из _draw для хит-теста в _input.
 var _players_rect := Rect2()
@@ -352,29 +365,29 @@ func _ready() -> void:
 	stars_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	stars_label.visible = false
 	stars_label.z_index = 3
-	stars_label.add_theme_color_override("font_color", Color("#e8a93d"))
+	stars_label.add_theme_color_override("font_color", Ui.STAR_DAY)
 	add_child(stars_label)
 
 	# Оформление — отдельными узлами позади текста (z_index = -15):
 	# сами буквы рисует _draw_rows() первым делом в _draw(), а маркер,
 	# герои и панели — после, поверх букв. Геометрию панелей считает
 	# _layout_card().
-	card_sb = Ui.panel_sb(Ui.CARD_DAY, 20.0, Color("#e0d5bd"), 2.0, true)
-	pill_sb = Ui.panel_sb(Color(1, 1, 1, 0.72), 14.0, Color("#e0d5bd"), 1.5, false)
+	card_sb = Ui.panel_sb(Ui.CARD_DAY, 20.0, Ui.LINE_SOFT_DAY, 2.0, true)
+	pill_sb = Ui.panel_sb(Ui.PILL_DAY, 14.0, Ui.LINE_SOFT_DAY, 1.5, false)
 	over_sb = Ui.panel_sb(Color(0, 0, 0, 0), 22.0)
-	cursor_sb = Ui.panel_sb(Color(1.0, 0.82, 0.25, 0.5), 8.0)
-	badge_sb = Ui.panel_sb(Color("#7fb069"), 12.0, Color("#6a955a"), 2.0, false)
-	cap_sb = Ui.panel_sb(Color("#fffdf6"), 10.0, Color("#4a4438"), 2.0, false)
-	bar_track_sb = Ui.panel_sb(Color("#e6dcc4"), 5.0)
-	bar_fill_sb = Ui.panel_sb(Color("#7fb069"), 5.0)
-	kb_key_sb = Ui.panel_sb(Color("#fffdf6"), 10.0, Color("#4a4438"), 2.0, false)
-	kb_on_sb = Ui.panel_sb(Color("#a9c6ec"), 10.0, Color("#4a4438"), 2.0, false)
+	cursor_sb = Ui.panel_sb(Ui.CURSOR_DAY, 8.0)
+	badge_sb = Ui.panel_sb(Ui.BADGE_DAY, 12.0, Ui.BADGE_EDGE_DAY, 2.0, false)
+	cap_sb = Ui.panel_sb(Ui.SURFACE_DAY, 10.0, Ui.LINE_DAY, 2.0, false)
+	bar_track_sb = Ui.panel_sb(Ui.TRACK_DAY, 5.0)
+	bar_fill_sb = Ui.panel_sb(Ui.PROGRESS_DAY, 5.0)
+	kb_key_sb = Ui.panel_sb(Ui.SURFACE_DAY, 10.0, Ui.LINE_DAY, 2.0, false)
+	kb_on_sb = Ui.panel_sb(Ui.ACCENT_DAY, 10.0, Ui.ACCENT_EDGE_DAY, 2.0, false)
 	# Нажатая клавиша — заметная заливка: попал или промахнулся.
-	kb_press_sb = Ui.panel_sb(Color("#ffd98a"), 10.0, Color("#4a4438"), 2.5, false)
+	kb_press_sb = Ui.panel_sb(Ui.PRESS_DAY, 10.0, Ui.LINE_DAY, 2.5, false)
 	# Верный ввод — зелёным, опечатка — красным (автор 10.2026).
-	kb_press_ok_sb = Ui.panel_sb(Color("#8fd66a"), 10.0, Color("#3f6b2c"), 2.5, false)
-	kb_press_err_sb = Ui.panel_sb(Color("#ff8a80"), 10.0, Color("#8e2f26"), 2.5, false)
-	kb_hi_sb = Ui.panel_sb(Color("#ffd75e"), 10.0, Color("#4a4438"), 2.0, false)
+	kb_press_ok_sb = Ui.panel_sb(Ui.OK_DAY, 10.0, Ui.OK_EDGE_DAY, 2.5, false)
+	kb_press_err_sb = Ui.panel_sb(Ui.DANGER_DAY, 10.0, Ui.DANGER_EDGE_DAY, 2.5, false)
+	kb_hi_sb = Ui.panel_sb(Ui.HINT_KEY_DAY, 10.0, Ui.LINE_DAY, 2.0, false)
 	card_p = _panel_node(card_sb)
 	hud_p = _panel_node(pill_sb)
 	hint_p = _panel_node(pill_sb)
@@ -418,51 +431,57 @@ func _apply_night() -> void:
 	_night_resolve()
 	if night:
 		card_sb.bg_color = Ui.CARD_NIGHT
-		card_sb.border_color = Color("#3a4a6b")
+		card_sb.border_color = Ui.LINE_SOFT_NIGHT
 		card_sb.shadow_color = Color(0, 0, 0, 0.35)
-		pill_sb.bg_color = Color(0.10, 0.12, 0.20, 0.80)
-		pill_sb.border_color = Color("#3a4a6b")
-		bar_track_sb.bg_color = Color("#3a4a6b")
-		hud_label.add_theme_color_override("font_color", Color("#e8e4d8"))
-		cap_sb.bg_color = Color("#232c44")
-		cap_sb.border_color = Color("#8b93a8")
-		kb_key_sb.bg_color = Color("#232c44")
-		kb_key_sb.border_color = Color("#8b93a8")
-		kb_hi_sb.bg_color = Color("#8a6d1f")
-		kb_hi_sb.border_color = Color("#ffd75e")
-		kb_on_sb.bg_color = Color("#8ab4e0")
-		kb_on_sb.border_color = Color("#8b93a8")
-		kb_press_sb.bg_color = Color("#6b5a2a")
-		kb_press_sb.border_color = Color("#8b93a8")
-		kb_press_ok_sb.bg_color = Color("#3f6b3a")
-		kb_press_ok_sb.border_color = Color("#9ad08c")
-		kb_press_err_sb.bg_color = Color("#7a2f28")
-		kb_press_err_sb.border_color = Color("#ff9a90")
+		pill_sb.bg_color = Ui.PILL_NIGHT
+		pill_sb.border_color = Ui.LINE_SOFT_NIGHT
+		bar_track_sb.bg_color = Ui.TRACK_NIGHT
+		bar_fill_sb.bg_color = Ui.PROGRESS_NIGHT
+		hud_label.add_theme_color_override("font_color", Ui.UI_TEXT_NIGHT)
+		cap_sb.bg_color = Ui.SURFACE_ALT_NIGHT
+		cap_sb.border_color = Ui.LINE_NIGHT
+		badge_sb.bg_color = Ui.BADGE_NIGHT
+		badge_sb.border_color = Ui.BADGE_EDGE_NIGHT
+		kb_key_sb.bg_color = Ui.SURFACE_ALT_NIGHT
+		kb_key_sb.border_color = Ui.LINE_NIGHT
+		kb_hi_sb.bg_color = Ui.HINT_KEY_NIGHT
+		kb_hi_sb.border_color = Ui.HINT_KEY_DAY
+		kb_on_sb.bg_color = Ui.ACCENT_NIGHT
+		kb_on_sb.border_color = Ui.ACCENT_EDGE_NIGHT
+		kb_press_sb.bg_color = Ui.PRESS_NIGHT
+		kb_press_sb.border_color = Ui.LINE_NIGHT
+		kb_press_ok_sb.bg_color = Ui.OK_NIGHT
+		kb_press_ok_sb.border_color = Ui.OK_EDGE_NIGHT
+		kb_press_err_sb.bg_color = Ui.DANGER_NIGHT
+		kb_press_err_sb.border_color = Ui.DANGER_EDGE_NIGHT
 		# Ночью буквы светлые, а заяц и ёж — белые спрайты: контур
 		# рисует _draw_rows (без него буква на спрайте терялась —
 		# видел на эмуляторе).
 	else:
 		card_sb.bg_color = Ui.CARD_DAY
-		card_sb.border_color = Color("#e0d5bd")
+		card_sb.border_color = Ui.LINE_SOFT_DAY
 		card_sb.shadow_color = Color(0.25, 0.20, 0.12, 0.18)
-		pill_sb.bg_color = Color(1, 1, 1, 0.72)
-		pill_sb.border_color = Color("#e0d5bd")
-		bar_track_sb.bg_color = Color("#e6dcc4")
-		hud_label.add_theme_color_override("font_color", UI_TEXT)
-		cap_sb.bg_color = Color("#fffdf6")
-		cap_sb.border_color = Color("#4a4438")
-		kb_key_sb.bg_color = Color("#fffdf6")
-		kb_key_sb.border_color = Color("#4a4438")
-		kb_hi_sb.bg_color = Color("#ffd75e")
-		kb_hi_sb.border_color = Color("#4a4438")
-		kb_on_sb.bg_color = Color("#a9c6ec")
-		kb_press_sb.bg_color = Color("#ffd98a")
-		kb_press_sb.border_color = Color("#4a4438")
-		kb_press_ok_sb.bg_color = Color("#8fd66a")
-		kb_press_ok_sb.border_color = Color("#3f6b2c")
-		kb_press_err_sb.bg_color = Color("#ff8a80")
-		kb_press_err_sb.border_color = Color("#8e2f26")
-		kb_on_sb.border_color = Color("#4a4438")
+		pill_sb.bg_color = Ui.PILL_DAY
+		pill_sb.border_color = Ui.LINE_SOFT_DAY
+		bar_track_sb.bg_color = Ui.TRACK_DAY
+		bar_fill_sb.bg_color = Ui.PROGRESS_DAY
+		hud_label.add_theme_color_override("font_color", Ui.UI_TEXT_DAY)
+		cap_sb.bg_color = Ui.SURFACE_DAY
+		cap_sb.border_color = Ui.LINE_DAY
+		badge_sb.bg_color = Ui.BADGE_DAY
+		badge_sb.border_color = Ui.BADGE_EDGE_DAY
+		kb_key_sb.bg_color = Ui.SURFACE_DAY
+		kb_key_sb.border_color = Ui.LINE_DAY
+		kb_hi_sb.bg_color = Ui.HINT_KEY_DAY
+		kb_hi_sb.border_color = Ui.LINE_DAY
+		kb_on_sb.bg_color = Ui.ACCENT_DAY
+		kb_press_sb.bg_color = Ui.PRESS_DAY
+		kb_press_sb.border_color = Ui.LINE_DAY
+		kb_press_ok_sb.bg_color = Ui.OK_DAY
+		kb_press_ok_sb.border_color = Ui.OK_EDGE_DAY
+		kb_press_err_sb.bg_color = Ui.DANGER_DAY
+		kb_press_err_sb.border_color = Ui.DANGER_EDGE_DAY
+		kb_on_sb.border_color = Ui.ACCENT_EDGE_DAY
 		# Днём буквы тёмные на светлой карточке — контур не нужен.
 	if meadow != null:
 		meadow.night = night
@@ -1854,13 +1873,17 @@ func _finish(won: bool, reason := "") -> void:
 		"total_wins": prof.get("total_wins", 0),
 	})
 	if won:
-		overlay_label.add_theme_color_override("font_color", GREEN if not night else Color("#8fd07f"))
+		overlay_label.add_theme_color_override(
+			"font_color", Ui.OK_TEXT_DAY if not night else Ui.OK_TEXT_NIGHT
+		)
 		overlay_label.text = "%s · %s" % [
 			_speed_word(int(round(cpm))), _err_word(typed_bad)
 		]
 		_fw_burst(true)
 	else:
-		overlay_label.add_theme_color_override("font_color", DARK_RED if not night else Color("#ff7a6b"))
+		overlay_label.add_theme_color_override(
+			"font_color", Ui.DANGER_TEXT_DAY if not night else Ui.DANGER_TEXT_NIGHT
+		)
 		overlay_label.text = "%s · %s" % [
 			_speed_word(int(round(cpm))), _err_word(typed_bad)
 		]
@@ -2214,15 +2237,22 @@ func _cell_color(l: int, p: int, ch: String, kk: String) -> String:
 		# Вспышка: видно, что нажатие принято (буква не изменилась).
 		return Ui.HINT_DAY_HEX if not night else Ui.HINT_NIGHT_HEX
 	if l == cursor_line and p == cursor_pos:
-		return "#1c1a16" if not night else "#f2ede0"
-	var col := "#6f6a5e" if not night else "#7a86a0"
+		return _hex(Ui.INK_DAY, Ui.INK_NIGHT)
+	# Серая буква (ещё не открыта) — приглушённая; съеденная проходит
+	# мимо, и раньше ночной вариант давал 1.9:1 к карточке (строка шла
+	# дырами), поэтому обе подобраны по контрасту.
+	var col := _hex(Ui.GREY_CHAR_DAY, Ui.GREY_CHAR_NIGHT)
 	if passed.has(kk):
-		# Съеденное серым, но ночное #4a5468 давало 1.9:1 к карточке —
-		# буквы пропадали, строка шла дырами.
-		col = "#b3a996" if not night else "#6f7b99"
+		col = _hex(Ui.GREY_CHAR_DAY.lightened(0.16), Ui.GREY_CHAR_DAY)
 	elif _is_active(ch):
-		col = "#1c1a16" if not night else "#f2ede0"
+		col = _hex(Ui.INK_DAY, Ui.INK_NIGHT)
 	return col
+
+
+## Hex строкой — по теме (клетки рисуются текстовым узлом, там нужен
+## hex, а не Color).
+func _hex(day: Color, n: Color) -> String:
+	return n.to_html(false) if night else day.to_html(false)
 
 
 ## Подсказка следующей клавиши частями: обычный текст (cap=false)
@@ -2739,8 +2769,8 @@ var _press_sb_fade_err: StyleBoxFlat
 
 func _press_sb() -> StyleBox:
 	if _press_sb_fade_ok == null:
-		_press_sb_fade_ok = Ui.panel_sb(Color(1, 1, 1, 0), 10.0, Color("#4a4438"), 2.5, false)
-		_press_sb_fade_err = Ui.panel_sb(Color(1, 1, 1, 0), 10.0, Color("#4a4438"), 2.5, false)
+		_press_sb_fade_ok = Ui.panel_sb(Color(1, 1, 1, 0), 10.0, Ui.LINE_DAY, 2.5, false)
+		_press_sb_fade_err = Ui.panel_sb(Color(1, 1, 1, 0), 10.0, Ui.LINE_DAY, 2.5, false)
 	var src: StyleBoxFlat = kb_press_ok_sb if kb_press_ok else kb_press_err_sb
 	var dst: StyleBoxFlat = _press_sb_fade_ok if kb_press_ok else _press_sb_fade_err
 	var k: float = clampf(kb_press_t / KB_FLASH_T, 0.0, 1.0)
@@ -2889,12 +2919,12 @@ func _own_press(pos: Vector2, live := false) -> bool:
 ## текст за ним не следил — ночью «Дальше», чёрточки ≡ и
 ## подпись прогресса тонули в тёмном.
 func _ui_ink() -> Color:
-	return Color("#e8e4d8") if night else INK
+	return Ui.UI_TEXT_NIGHT if night else INK
 
 
 ## Приглушённые чернила для неактивных подписей клавиш.
 func _ui_dim() -> Color:
-	return Color("#8b93a8") if night else Color("#4a4438").lightened(0.45)
+	return Ui.LINE_NIGHT if night else Ui.UI_TEXT_DAY.lightened(0.45)
 
 
 ## Десктоп — там, где нет системной клавиатуры (нет и клавиши F2
@@ -2951,6 +2981,64 @@ func _draw_touch_buttons() -> void:
 ## превращается в клик (emulate_mouse_from_touch), а двойная обработка
 ## касания+клика давала бы двойные срабатывания (галочка вкл-выкл
 ## за один палец). На десктопе касаний нет — ничего не меняется.
+## Пальцы на доске. Godot превращает касание в мышь только для ПЕРВОГО
+## пальца (input_devices/pointing/emulate_mouse_from_touch), поэтому
+## «зажать шифт и нажать букву» не работало: шифт зажимался, а второй
+## палец не приходил вовсе (жалоба автора 17.10.2026: «шифт зажимается
+## и на букву реакции уже нет»). Держим пальцы сами: палец → клавиша,
+## и мышиное эхо того же касания пропускаем, иначе буква набиралась бы
+## дважды.
+var _touch_keys: Dictionary = {}
+var _touch_pos := Vector2.ZERO
+var _echo_pending := 0
+
+
+## Мышиное событие, порождённое касанием, приходит следом, в ту же
+## точку. Одно касание даёт максимум одно такое эхо — считаем их
+## парами, а НЕ по часам: на телефоне между событиями может пройти и
+## сотня миллисекунд (загруженный процесс), и по часам настоящий тап
+## проскочил бы в обработку дважды. Эхо всегда приходит ДО отпускания
+## пальца, поэтому счётчик гаснет там же.
+const _TOUCH_ECHO_PX := 32.0
+
+
+func _touch_down_at(pos: Vector2, finger: int) -> void:
+	_touch_pos = pos
+	_echo_pending += 1
+
+
+func _is_touch_echo(pos: Vector2) -> bool:
+	if _echo_pending <= 0:
+		return false
+	if pos.distance_to(_touch_pos) > _TOUCH_ECHO_PX:
+		return false
+	_echo_pending -= 1
+	return true
+
+
+## Палец отпущен: гасим ровно то, что он держал. Шифт держится, пока
+## палец на нём (автор 10.10.2026: не защёлкивается), буква — пока не
+## отпущена (иначе автоповтор не остановится).
+func _touch_up(finger: int) -> void:
+	# Мышиное эхо касания всегда приходит ДО отпускания — счётчик
+	# погашенных эх обнуляем здесь (см. _is_touch_echo).
+	_echo_pending = 0
+	var act := String(_touch_keys.get(finger, ""))
+	_touch_keys.erase(finger)
+	if act == "":
+		return
+	if kb_held != act:
+		return
+	kb_held = ""
+	kb_repeat_t = 0.0
+	if act == "шифт":
+		_set_kb_shift(false)
+	if kb_press == act:
+		kb_press = ""
+		kb_press_t = 0.0
+	queue_redraw()
+
+
 func _input(event: InputEvent) -> void:
 	if menu_open:
 		return
@@ -2975,8 +3063,21 @@ func _input(event: InputEvent) -> void:
 		return
 	var has_pos := false
 	var pos := Vector2.ZERO
-	if event is InputEventMouseButton:
+	var finger := -1
+	if event is InputEventScreenTouch:
+		var tb := event as InputEventScreenTouch
+		_touch_down_at(tb.position, tb.index)
+		if tb.pressed:
+			finger = tb.index
+			pos = tb.position
+			has_pos = true
+		else:
+			_touch_up(tb.index)
+			return
+	elif event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
+		if _is_touch_echo(mb.position):
+			return
 		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
 			pos = mb.position
 			has_pos = true
@@ -3021,7 +3122,14 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	# Своя клавиатура: клавиши раньше карточки (области не пересекаются).
+	# Клавишу запоминаем ДО нажатия: после ввода уровень мог уехать и
+	# повторный Kbd.hit отдал бы уже другую клавишу.
+	var tkey := ""
+	if finger >= 0:
+		tkey = Kbd.hit(_own_rect(), kb_shift, _kb_enter_shown(), pos)
 	if _own_press(pos, true):
+		if finger >= 0 and tkey != "":
+			_touch_keys[finger] = tkey
 		return
 	# Карточка: тап по ней ничего не делает, но событие съедаем, чтобы
 	# жест не утаскивал текст.
@@ -3218,7 +3326,7 @@ func _draw_rows() -> void:
 			var col := _shown_color(i, p)
 			var glyph := _shown_char(i, p)
 			if night:
-				draw_string_outline(mono, at, glyph, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size, ow, Color("#141a2c"))
+				draw_string_outline(mono, at, glyph, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size, ow, GLYPH_OUTLINE)
 			draw_string(mono, at, glyph, HORIZONTAL_ALIGNMENT_LEFT, -1.0, font_size, col)
 
 
@@ -3319,7 +3427,7 @@ func _draw_hero() -> void:
 			var p := c + Vector2(ex * sq.x, 0.0) * e.x
 			draw_line(
 				p + Vector2(-13.0, 0.0) * e.x, p + Vector2(13.0, 0.0) * e.x,
-				Color("#3a3230"), 4.0 * e.x
+				HERO_FACE_LINE, 4.0 * e.x
 			)
 	if state == "lost":
 		# Укололи: глаза навыкате (белки + зрачки), рот раскрыт.
@@ -3328,10 +3436,10 @@ func _draw_hero() -> void:
 		for ex in [-15.0, 28.0]:
 			var p2 := c + Vector2(ex * sq.x, 0.0) * e2.x
 			draw_circle(p2, 15.0 * e2.x, Color.WHITE)
-			draw_circle(p2, 7.0 * e2.x, Color("#1c1a16"))
+			draw_circle(p2, 7.0 * e2.x, HERO_EYE)
 		var m := c + Vector2(6.0 * sq.x, 34.0 * sq.y) * e2.x
 		draw_set_transform(m, 0.0, Vector2(0.75, 1.1) * e2.x)
-		draw_circle(Vector2.ZERO, 10.0, Color("#5a2323"))
+		draw_circle(Vector2.ZERO, 10.0, HERO_MOUTH)
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	if chomp_t > 0.0:
 		for i in 4:
@@ -3340,7 +3448,7 @@ func _draw_hero() -> void:
 			# съедена — из неё и брызги, иначе пятна липнут на морде.
 			var from := Vector2(_cursor_cx(), _track_cy(cursor_line))
 			var crumb := from + Vector2(cos(a), sin(a)) * 8.0 * k
-			draw_circle(crumb, 2.0 * k, Color("#8a5a2b"))
+			draw_circle(crumb, 2.0 * k, CRUMB)
 
 
 ## Пыль из-под лап: серые кружки тают за 0.45 c.

@@ -1070,6 +1070,107 @@ func _kbd_buttons() -> Dictionary:
 	return out
 
 
+## Касание: палец N. Так же, как приходит с телефона — с индексом,
+## поэтому два пальца различимы.
+func _touch(finger: int, pos: Vector2, pressed: bool) -> InputEventScreenTouch:
+	var tb := InputEventScreenTouch.new()
+	tb.index = finger
+	tb.position = pos
+	tb.pressed = pressed
+	return tb
+
+
+## Мышиное эхо касания: Godot превращает в мышь только ПЕРВЫЙ палец,
+## и это эхо приходит следом. Игнорировать его обязаны — иначе буква
+## наберётся дважды.
+func _touch_echo(pos: Vector2) -> InputEventMouseButton:
+	var mb := InputEventMouseButton.new()
+	mb.button_index = MOUSE_BUTTON_LEFT
+	mb.pressed = true
+	mb.position = pos
+	return mb
+
+
+## Мультитач на доске: шифт первым пальцем, буква вторым. Godot
+## превращает касание в мышь только для ПЕРВОГО пальца, поэтому раньше
+## второй палец не доходил вовсе: шифт зажимался, а буква не набиралась
+## (жалоба автора 17.10.2026: «шифт зажимается и на букву реакции уже
+## нет»). Плюс мышиное эхо того же касания — его обязаны пропустить,
+## иначе палец набирает букву дважды.
+##
+## Набираем ТУ букву, которую игра ждёт (иначе метка опечатки законно
+## появляется, и проверка «ошибок нет» ничего не значит).
+func _case_touch_multitouch() -> void:
+	_fresh(1, 0)
+	_kbd_on()
+	var tag := "touch multi"
+	# Свой текст: буква ЗАГЛАВНАЯ, и всегда одна и та же — иначе от
+	# случайного уровня зависел бы и сам факт проверки (при spaces или
+	# ожидании ↵ сценарий выходил, ничего не сделав — видел на пробах).
+	_set_level_text(["Ы"])
+	_main.active = {"ы": true, " ": true}
+	var btns := _kbd_buttons()
+	_check(btns.has("Shift"), "%s: no shift key" % tag)
+	if not btns.has("Shift"):
+		return
+	var want := String(_main._current())
+	var base := want.to_lower()
+	if not btns.has(base):
+		_check(false, "%s: the board has no key «%s»" % [tag, base])
+		return
+	var shift_used: bool = want != base
+	# Палец 0 — на шифт (только когда буква заглавная). Мышиное эхо
+	# приходит следом, в том же кадре, и обязано быть пропущено: иначе
+	# шифт тут же погаснет и буква придёт строчной.
+	if shift_used:
+		_main.call("_input", _touch(0, btns["Shift"], true))
+		_main.call("_input", _touch_echo(btns["Shift"]))
+		_tick(tag)
+		_check(bool(_main.kb_shift), "%s: finger 0 did not arm the shift" % tag)
+	# Палец 1 — на букву, шифт при этом зажат. Эхо второго пальца мы
+	# присылаем сами: в жизни Godot его не отдаёт (первый палец — и так
+	# первый), а проверить надо, что лишнего ввода не будет.
+	var typed_before: int = _main.typed_ok
+	_main.call("_input", _touch(1, btns[base], true))
+	_main.call("_input", _touch_echo(btns[base]))
+	_tick(tag)
+	_check(
+		int(_main.typed_ok) == typed_before + 1,
+		"%s: shift + second finger did not type the letter (typed_ok %d → %d)"
+		% [tag, typed_before, _main.typed_ok]
+	)
+	_check(_main.errors.is_empty(), "%s: the two-finger letter left a typo mark" % tag)
+	_check(
+		int(_main.typed_ok) == typed_before + 1,
+		"%s: the letter was typed twice by the mouse echo (typed_ok=%d)" % [_main.typed_ok]
+	)
+	# Шифт одноразовый: после знака гаснет сам (как на настоящей
+	# клавиатуре, см. _own_press). Пальцы отпускаем — и доска не должна
+	# ничего оставить висеть.
+	_main.call("_input", _touch(1, btns[base], false))
+	if shift_used:
+		_main.call("_input", _touch(0, btns["Shift"], false))
+	_tick(tag)
+	_check(String(_main.kb_held) == "", "%s: a key stayed held after the fingers left" % tag)
+	_check(not bool(_main.kb_shift), "%s: the shift stayed armed after the fingers left" % tag)
+	# И одиночный палец печатает, как и раньше: мультитач не сломал тап.
+	btns = _kbd_buttons()
+	var next_char := String(_main._current())
+	if next_char != "" and next_char != " " and not bool(_main.need_enter):
+		var key2 := next_char.to_lower()
+		if btns.has(key2) and not (next_char != key2 and bool(_main.kb_shift)):
+			var typed2: int = _main.typed_ok
+			_main.call("_input", _touch(0, btns[key2], true))
+			_main.call("_input", _touch_echo(btns[key2]))
+			_main.call("_input", _touch(0, btns[key2], false))
+			_tick(tag)
+			_check(
+				int(_main.typed_ok) == typed2 + 1,
+				"%s: a single finger stopped typing (typed_ok %d → %d)"
+				% [tag, typed2, _main.typed_ok]
+			)
+
+
 func _case_touch_keyboard() -> void:
 	_fresh(1, 0)
 	_kbd_on()
@@ -3118,6 +3219,7 @@ func _fill_cases() -> void:
 	_cases_list.append(["_case_last_cell", Callable(self, "_case_last_cell"), 0])
 	_cases_list.append(["_case_loss_with_marks", Callable(self, "_case_loss_with_marks"), 0])
 	_cases_list.append(["_case_touch_keyboard", Callable(self, "_case_touch_keyboard"), 0])
+	_cases_list.append(["_case_touch_multitouch", Callable(self, "_case_touch_multitouch"), 0])
 	_cases_list.append(["_case_kbd_shift_layer", Callable(self, "_case_kbd_shift_layer"), 0])
 	_cases_list.append(["_case_long_press", Callable(self, "_case_long_press"), 0])
 	_cases_list.append(["_case_auto_punctuation", Callable(self, "_case_auto_punctuation"), 0])

@@ -38,10 +38,14 @@ static func _app_version() -> String:
 	return "v" + String(ProjectSettings.get_setting("application/config/version", "0.0.0"))
 
 
-const PAPER := Color("#f7f3e8")
-const INK := Color("#1c1a16")
-const UI_TEXT := Color("#4a4438")
-const DIM := Color("#8d8778")
+## Дневные значения ролей — из общего словаря (см. ui.gd: все цвета
+## интерфейса живут там, здесь только сокращения). Ночные ставятся в
+## _apply_night, и именно поэтому новый цвет не нужно искать в двух
+## файлах сразу.
+const PAPER := Ui.PAPER_DAY
+const INK := Ui.INK_DAY
+const UI_TEXT := Ui.UI_TEXT_DAY
+const DIM := Ui.DIM_DAY
 const HERO_TEX: Texture2D = preload("res://assets/hero.png")
 
 var users: Array[String] = []
@@ -240,8 +244,8 @@ var _press_sb_fade_err: StyleBoxFlat
 
 func _press_sb() -> StyleBox:
 	if _press_sb_fade_ok == null:
-		_press_sb_fade_ok = Ui.panel_sb(Color(1, 1, 1, 0), 10.0, INK, 2.5, false)
-		_press_sb_fade_err = Ui.panel_sb(Color(1, 1, 1, 0), 10.0, INK, 2.5, false)
+		_press_sb_fade_ok = Ui.panel_sb(Color(1, 1, 1, 0), 10.0, Ui.LINE_DAY, 2.5, false)
+		_press_sb_fade_err = Ui.panel_sb(Color(1, 1, 1, 0), 10.0, Ui.LINE_DAY, 2.5, false)
 	var src: StyleBoxFlat = kb_press_ok_sb if kb_press_ok else kb_press_err_sb
 	var dst: StyleBoxFlat = _press_sb_fade_ok if kb_press_ok else _press_sb_fade_err
 	var k: float = clampf(kb_press_t / KB_PRESS_T, 0.0, 1.0)
@@ -338,30 +342,30 @@ func _ready() -> void:
 		var fallback := SystemFont.new()
 		fallback.font_names = PackedStringArray(["monospace"])
 		mono = fallback
-	row_sb = Ui.panel_sb(Color("#f0d98a"), 12.0)
-	row_idle_sb = Ui.panel_sb(Color(1, 1, 1, 0.45), 12.0)
-	box_sb = Ui.panel_sb(Color("#ffffff"), 10.0, INK, 2.0, false)
-	kb_key_sb = Ui.panel_sb(Color("#ffffff"), 10.0, INK, 2.0, false)
+	row_sb = Ui.panel_sb(Ui.SELECT_DAY, 12.0)
+	row_idle_sb = Ui.panel_sb(Ui.ROW_IDLE_DAY, 12.0)
+	box_sb = Ui.panel_sb(Ui.SURFACE_ALT_DAY, 10.0, Ui.LINE_DAY, 2.0, false)
+	kb_key_sb = Ui.panel_sb(Ui.SURFACE_ALT_DAY, 10.0, Ui.LINE_DAY, 2.0, false)
 	# Нажатая клавиша — заметная заливка: попал или промахнулся.
-	kb_press_sb = Ui.panel_sb(Color("#ffd98a"), 10.0, INK, 2.5, false)
-	kb_press_ok_sb = Ui.panel_sb(Color("#8fd66a"), 10.0, INK, 2.5, false)
-	kb_press_err_sb = Ui.panel_sb(Color("#ff8a80"), 10.0, INK, 2.5, false)
-	selbox_sb = Ui.panel_sb(Color("#a9c6ec"), 10.0, INK, 2.0, false)
-	hint_sb = Ui.panel_sb(Color(1, 1, 1, 0.72), 14.0, Color("#e0d5bd"), 1.5, false)
+	kb_press_sb = Ui.panel_sb(Ui.PRESS_DAY, 10.0, Ui.LINE_DAY, 2.5, false)
+	kb_press_ok_sb = Ui.panel_sb(Ui.OK_DAY, 10.0, Ui.OK_EDGE_DAY, 2.5, false)
+	kb_press_err_sb = Ui.panel_sb(Ui.DANGER_DAY, 10.0, Ui.DANGER_EDGE_DAY, 2.5, false)
+	selbox_sb = Ui.panel_sb(Ui.ACCENT_DAY, 10.0, Ui.ACCENT_EDGE_DAY, 2.0, false)
+	hint_sb = Ui.panel_sb(Ui.PILL_DAY, 14.0, Ui.LINE_SOFT_DAY, 1.5, false)
 	# Чип флага «включено»: своя зелёная заливка. Раньше включённый флаг
 	# красился жёлтым row_sb — тем же, что фон выделенной строки, и на
 	# выбранной карточке он тонул в выделении («выделение внутри
 	# выделения», жалоба автора 16.10.2026), а ночью этот жёлтый стоял
 	# пятном на тёмном фоне. Зелёный не совпадает ни с жёлтым
 	# выделением, ни с пустой рамкой выключенного флага.
-	chip_on_sb = Ui.panel_sb(Color("#c7e0ac"), 10.0, INK, 2.0, false)
+	chip_on_sb = Ui.panel_sb(Ui.ACCENT_DAY, 10.0, Ui.ACCENT_EDGE_DAY, 2.0, false)
 	# Выделение колонки с клавиатуры — только ободок, заливку не трогает:
 	# иначе фокус снова прятал состояние флага.
-	chip_focus_sb = Ui.panel_sb(Color(0, 0, 0, 0), 10.0, Color("#4a88c8"), 3.0, false)
+	chip_focus_sb = Ui.panel_sb(Color(0, 0, 0, 0), 10.0, Ui.FOCUS_DARK, 3.0, false)
 	# Рамка списка — та же тихая обводка, что у пилюли-подсказки
 	# (автор 16.10.2026: рамка должна быть скруглённой и неконтрастной,
 	# в стиле остального интерфейса). Заливки нет, только контур.
-	list_frame_sb = Ui.panel_sb(Color(0, 0, 0, 0), 12.0, Color("#e0d5bd"), 1.5, false)
+	list_frame_sb = Ui.panel_sb(Color(0, 0, 0, 0), 12.0, Ui.LINE_SOFT_DAY, 1.5, false)
 	_meadow = Meadow.new()
 	add_child(_meadow)
 	nmode = S.get_night_mode()
@@ -838,17 +842,117 @@ func _eaten() -> void:
 
 ## Тач и мышь: строки, поле, кнопки. Скрытое меню тычков не видит —
 ## тот же урок, что с клавишами.
+## Пальцы на доске меню (правка имени). Тот же случай, что в игре:
+## касание превращается в мышь только для первого пальца, поэтому
+## «зажать шифт, нажать букву» не работало (см. _is_touch_echo).
+var _touch_keys: Dictionary = {}
+var _touch_pos := Vector2.ZERO
+var _echo_pending := 0
+
+const _TOUCH_ECHO_PX := 32.0
+
+
+## Мышиное событие, порождённое касанием, приходит следом, в ту же
+## точку. Одно касание даёт максимум одно такое эхо — считаем их
+## парами, а НЕ по часам (см. одноимённое в игре).
+func _touch_down_at(pos: Vector2, _finger: int) -> void:
+	_touch_pos = pos
+	_echo_pending += 1
+
+
+func _is_touch_echo(pos: Vector2) -> bool:
+	if _echo_pending <= 0 or pos.distance_to(_touch_pos) > _TOUCH_ECHO_PX:
+		return false
+	_echo_pending -= 1
+	return true
+
+
+## Отпускание указателя: и мыши, и пальца. finger — индекс пальца или
+## -1 для мыши. Правила одни (см. старую ветку отпускания мыши): снять
+## удержание, доиграть отложенный тап или бросок.
+func _pointer_up(finger: int) -> void:
+	if finger >= 0:
+		_touch_up(finger)
+	else:
+		# Удерживаемый шифт гаснет (как на настоящей клавиатуре,
+		# автор 10.2026).
+		_release_held()
+	var deferred := _press_deferred
+	var was_drag := _dragged
+	var was_long := _press_fired
+	_press_deferred = false
+	_dragged = false
+	_press_down = false
+	_press_fired = false
+	if deferred and not was_drag and not was_long:
+		_tap(_press_pos)
+	elif was_drag and absf(_fling_v) > 240.0:
+		# Бросок: список катится по инерции и плавно встаёт.
+		# Палец вверх (v<0) — едем вниз по списку.
+		_scroll_target = _scroll_clamp(_scroll - _fling_v * 0.12)
+	_fling_v = 0.0
+	if deferred or was_drag or was_long:
+		get_viewport().set_input_as_handled()
+
+
+## Палец отпущен — гасим ровно то, что держал этот палец.
+func _touch_up(finger: int) -> void:
+	_echo_pending = 0
+	var act := String(_touch_keys.get(finger, ""))
+	_touch_keys.erase(finger)
+	if act == "" or kb_held != act:
+		return
+	kb_held = ""
+	if act == "шифт":
+		_set_kb_shift(false)
+	if kb_press == act:
+		kb_press = ""
+		kb_press_t = 0.0
+	queue_redraw()
+
+
 func _input(event: InputEvent) -> void:
 	if not visible:
 		return
 	# Координаты тычка могут быть и отрицательными (узкое окно, край
 	# экрана), поэтому признак «тычка не было» — отдельный флаг,
-	# а не сентинел в координатах. Слушаем только мышь: палец на
-	# Android сам превращается в клик, а двойная обработка касания
-	# и клика давала бы двойные срабатывания (галочка вкл-выкл
-	# за один палец). На десктопе касаний нет — ничего не меняется.
+	# а не сентинел в координатах.
+	# Касания слушаем САМИ, а не только мышь: Godot превращает в мышь
+	# лишь первый палец, и «зажать шифт, нажать букву» вторым пальцем
+	# не приходил вовсе (жалоба автора 17.10.2026). Мышиное эхо того
+	# же касания отсекается (_is_touch_echo), поэтому двойного ввода
+	# нет; на десктопе касаний не бывает вовсе.
+	if event is InputEventScreenTouch:
+		var tb := event as InputEventScreenTouch
+		_touch_down_at(tb.position, tb.index)
+		if tb.pressed:
+			# Тот же путь, что у клика: палец один — работает и он.
+			_hover_t = 0.0
+			_scroll_target = _scroll
+			if input_active:
+				var tkey := Kbd.hit(_own_rect(), kb_shift, true, tb.position)
+				if _own_press(tb.position):
+					if tkey != "":
+						_touch_keys[tb.index] = tkey
+					return
+			_press_deferred = _list_rect().has_point(tb.position)
+			_press_down = _press_deferred
+			_press_t = 0.0
+			_press_fired = false
+			_press_pos = tb.position
+			_drag_from = tb.position
+			_drag_scroll0 = _scroll
+			_dragged = false
+			_fling_v = 0.0
+			if not _press_deferred:
+				_tap(tb.position)
+			return
+		_pointer_up(tb.index)
+		return
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
+		if _is_touch_echo(mb.position):
+			return
 		# Правая кнопка — переименовать строку под курсором (автор
 		# 15.10.2026; долгое удержание пальцем — то же самое, см. _process).
 		if mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed:
@@ -894,25 +998,7 @@ func _input(event: InputEvent) -> void:
 				_tap(mb.position)
 			return
 		elif mb.button_index == MOUSE_BUTTON_LEFT and not mb.pressed:
-			# Палец отпущен — удерживаемый шифт гаснет (как на настоящей
-			# клавиатуре, автор 10.2026).
-			_release_held()
-			var deferred := _press_deferred
-			var was_drag := _dragged
-			var was_long := _press_fired
-			_press_deferred = false
-			_dragged = false
-			_press_down = false
-			_press_fired = false
-			if deferred and not was_drag and not was_long:
-				_tap(_press_pos)
-			elif was_drag and absf(_fling_v) > 240.0:
-				# Бросок: список катится по инерции и плавно встаёт.
-				# Палец вверх (v<0) — едем вниз по списку.
-				_scroll_target = _scroll_clamp(_scroll - _fling_v * 0.12)
-			_fling_v = 0.0
-			if deferred or was_drag or was_long:
-				get_viewport().set_input_as_handled()
+			_pointer_up(-1)
 			return
 		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP:
 			# Колесо задаёт ЦЕЛЬ, список догоняет плавно в _process.
@@ -2706,19 +2792,19 @@ func _upd_no_rect() -> Rect2:
 ## Краски текста под режим: днём константы, ночью светлые.
 func _ink() -> Color:
 	if night:
-		return Color("#f2ede0")
+		return Ui.INK_NIGHT
 	return INK
 
 
 func _uitext() -> Color:
 	if night:
-		return Color("#cfd6e4")
+		return Ui.INK_NIGHT.darkened(0.12)
 	return UI_TEXT
 
 
 func _dim() -> Color:
 	if night:
-		return Color("#8b93a8")
+		return Ui.LINE_NIGHT
 	return DIM
 
 
@@ -2737,38 +2823,51 @@ func _apply_night() -> void:
 	# редактор прощает (ловил segfault 15.10.2026). _ready сам красит.
 	if row_idle_sb == null:
 		return
+	# Все цвета — из словаря ролей (ui.gd). Здесь только «что за панель
+	# и какая у неё роль»; значение дня/ночи знает словарь, поэтому
+	# новый цвет правится в одном месте, а не в двух файлах сразу.
 	if night:
-		row_idle_sb.bg_color = Color(0.10, 0.12, 0.20, 0.60)
-		box_sb.bg_color = Color("#232c44")
-		box_sb.border_color = Color("#8b93a8")
-		selbox_sb.bg_color = Color("#8ab4e0")
-		selbox_sb.border_color = Color("#8b93a8")
-		hint_sb.bg_color = Color(0.10, 0.12, 0.20, 0.80)
-		hint_sb.border_color = Color("#3a4a6b")
-		chip_on_sb.bg_color = Color("#33513c")
-		chip_on_sb.border_color = Color("#7fae86")
-		chip_focus_sb.border_color = Color("#9ec8ff")
-		list_frame_sb.border_color = Color("#3a4a6b")
-		kb_key_sb.bg_color = Color("#232c44")
-		kb_key_sb.border_color = Color("#8b93a8")
-		kb_press_sb.bg_color = Color("#6b5a2a")
-		kb_press_sb.border_color = Color("#8b93a8")
+		row_idle_sb.bg_color = Ui.ROW_IDLE_NIGHT
+		box_sb.bg_color = Ui.SURFACE_ALT_NIGHT
+		box_sb.border_color = Ui.LINE_NIGHT
+		selbox_sb.bg_color = Ui.ACCENT_NIGHT
+		selbox_sb.border_color = Ui.ACCENT_EDGE_NIGHT
+		hint_sb.bg_color = Ui.PILL_NIGHT
+		hint_sb.border_color = Ui.LINE_SOFT_NIGHT
+		chip_on_sb.bg_color = Ui.ACCENT_NIGHT
+		chip_on_sb.border_color = Ui.ACCENT_EDGE_NIGHT
+		# Ободок фокуса — по подложке: на тёмной ночной рамке нужен
+		# СВЕТЛЫЙ, на светлом чипе и жёлтой строке — тёмный (см. _card_chip).
+		chip_focus_sb.border_color = Ui.FOCUS_LIGHT
+		list_frame_sb.border_color = Ui.LINE_SOFT_NIGHT
+		kb_key_sb.bg_color = Ui.SURFACE_ALT_NIGHT
+		kb_key_sb.border_color = Ui.LINE_NIGHT
+		kb_press_sb.bg_color = Ui.PRESS_NIGHT
+		kb_press_sb.border_color = Ui.LINE_NIGHT
+		kb_press_ok_sb.bg_color = Ui.OK_NIGHT
+		kb_press_ok_sb.border_color = Ui.OK_EDGE_NIGHT
+		kb_press_err_sb.bg_color = Ui.DANGER_NIGHT
+		kb_press_err_sb.border_color = Ui.DANGER_EDGE_NIGHT
 	else:
-		row_idle_sb.bg_color = Color(1, 1, 1, 0.45)
-		box_sb.bg_color = Color("#ffffff")
-		box_sb.border_color = INK
-		selbox_sb.bg_color = Color("#a9c6ec")
-		selbox_sb.border_color = INK
-		hint_sb.bg_color = Color(1, 1, 1, 0.72)
-		hint_sb.border_color = Color("#e0d5bd")
-		chip_on_sb.bg_color = Color("#c7e0ac")
-		chip_on_sb.border_color = INK
-		chip_focus_sb.border_color = Color("#4a88c8")
-		list_frame_sb.border_color = Color("#e0d5bd")
-		kb_key_sb.bg_color = Color("#ffffff")
-		kb_key_sb.border_color = INK
-		kb_press_sb.bg_color = Color("#ffd98a")
-		kb_press_sb.border_color = INK
+		row_idle_sb.bg_color = Ui.ROW_IDLE_DAY
+		box_sb.bg_color = Ui.SURFACE_ALT_DAY
+		box_sb.border_color = Ui.LINE_DAY
+		selbox_sb.bg_color = Ui.ACCENT_DAY
+		selbox_sb.border_color = Ui.ACCENT_EDGE_DAY
+		hint_sb.bg_color = Ui.PILL_DAY
+		hint_sb.border_color = Ui.LINE_SOFT_DAY
+		chip_on_sb.bg_color = Ui.ACCENT_DAY
+		chip_on_sb.border_color = Ui.ACCENT_EDGE_DAY
+		chip_focus_sb.border_color = Ui.FOCUS_DARK
+		list_frame_sb.border_color = Ui.LINE_SOFT_DAY
+		kb_key_sb.bg_color = Ui.SURFACE_ALT_DAY
+		kb_key_sb.border_color = Ui.LINE_DAY
+		kb_press_sb.bg_color = Ui.PRESS_DAY
+		kb_press_sb.border_color = Ui.LINE_DAY
+		kb_press_ok_sb.bg_color = Ui.OK_DAY
+		kb_press_ok_sb.border_color = Ui.OK_EDGE_DAY
+		kb_press_err_sb.bg_color = Ui.DANGER_DAY
+		kb_press_err_sb.border_color = Ui.DANGER_EDGE_DAY
 	if _meadow != null:
 		_meadow.night = night
 		_meadow._apply_sky()
@@ -2794,8 +2893,15 @@ func _btn_h() -> float:
 
 
 func _btn_h_at(kk: float) -> float:
-	# Ряд кнопок внизу — те же 72×масштаб и тот же пол 64px под палец, что
-	# у чипов в карточке: автор просил «примерно то же, что с Про и Ё».
+	# В ПОРТРЕТЕ ряд внизу — ровно та же высота, что у чипов «Про/Ё/✕»
+	# в карточке: одна и та же величина, а не две похожие формулы.
+	# Раньше ряд считалcя от k, а чипы — от ширины экрана (_card_k), и
+	# на широком окне с плотностью 1 (то есть на портретном окне
+	# десктопа) выходило 70px против 130 (автор 17.10.2026: «кнопки
+	# новый игрок и без профиля по-прежнему маленькие, хотя я просил
+	# сделать их такими же толстыми, как и Про и Ё в вертикальном режиме»).
+	if _cards():
+		return _card_btn_at(_card_k())
 	if _finger():
 		return clampf(72.0 * kk, _TAP_MIN, 132.0)
 	return 52.0 * kk
@@ -2876,8 +2982,8 @@ func _confirm_card_rect() -> Rect2:
 ## Опасное действие (крестик удаления): красный в обеих темах.
 func _danger() -> Color:
 	if night:
-		return Color("#ff7a6b")
-	return Color("#b02323")
+		return Ui.DANGER_TEXT_NIGHT
+	return Ui.DANGER_TEXT_DAY
 
 
 ## Включён ли взрослый режим: у выбранного — его флаг, на пустом
@@ -2948,7 +3054,7 @@ func _draw() -> void:
 	# были, вокруг них лишь карточки.
 	var veil := PAPER
 	if night:
-		veil = Color("#141a2c")
+		veil = Ui.PAPER_NIGHT
 	veil.a = 0.94
 	draw_rect(Rect2(Vector2.ZERO, Vector2(view_w, view_h)), veil)
 	var cx := view_w * 0.5
@@ -3100,7 +3206,7 @@ func _draw_table() -> void:
 		# от строки: бокс белый днём и тёмный ночью, а цвет строки
 		# (tcol) на выбранной строке тёмный всегда — ночью галочка
 		# тонула в тёмном боксе, стоило навести выделение.
-		var chk_col := Color("#f2ede0") if night else INK
+		var chk_col := Ui.INK_NIGHT if night else INK
 		# Выбранная стрелками галка залита своим боксом (selbox_sb),
 		# заголовок колонки подсвечен выше. Рамки было не видно
 		# в длинном списке.
@@ -3190,7 +3296,7 @@ func _draw_table_head() -> void:
 func _draw_top_mask(view: Rect2) -> void:
 	if view.position.y <= 0.0:
 		return
-	var paper := Color("#141a2c") if night else PAPER
+	var paper := Ui.PAPER_NIGHT if night else PAPER
 	draw_rect(
 		Rect2(Vector2.ZERO, Vector2(view_w, view.position.y)),
 		paper
@@ -3269,7 +3375,7 @@ func _draw_scrollbar() -> void:
 	var w := maxf(5.0 * k, 4.0)
 	var x := view.end.x - w - 3.0 * k
 	var track_col := Color(0.2, 0.18, 0.14, 0.18) if not night else Color(1, 1, 1, 0.10)
-	var thumb_col := Color(0.2, 0.18, 0.14, 0.65) if not night else Color("#9aa3b8")
+	var thumb_col := Color(0.2, 0.18, 0.14, 0.65) if not night else Ui.DIM_NIGHT
 	draw_rect(Rect2(x, view.position.y, w, view.size.y), track_col)
 	var th := maxf(24.0 * k, view.size.y * view.size.y / (view.size.y + max_sc))
 	var ty := view.position.y + (view.size.y - th) * (_scroll / max_sc)
@@ -3291,7 +3397,7 @@ func _draw_list_frame(view: Rect2) -> void:
 ## нужно: прокрутка ограничена так, что первая строка не поднимается
 ## выше окна.
 func _draw_list_mask(view: Rect2) -> void:
-	var paper := Color("#141a2c") if night else PAPER
+	var paper := Ui.PAPER_NIGHT if night else PAPER
 	draw_rect(
 		Rect2(
 			Vector2(0.0, view.end.y), Vector2(view_w, _buttons_y() - view.end.y)
@@ -3327,11 +3433,17 @@ func _card_chip(i: int, which: String, label: String) -> void:
 	var sz := _text_size_fs(txt, fs)
 	draw_style_box(chip_on_sb if on else box_sb, r)
 	if lit:
+		# Ободок — ПО ПОДЛОЖКЕ: на тёмной ночной рамке нужен светлый,
+		# на светлом чипе и жёлтой строке — тёмный. Один цвет на оба
+		# случая даёт 1.1:1 (см. theme_test).
+		chip_focus_sb.border_color = (
+			Ui.FOCUS_LIGHT if (night and not on) else Ui.FOCUS_DARK
+		)
 		draw_style_box(chip_focus_sb, r)
 	_text_fs(
 		txt,
 		Vector2(r.get_center().x - sz.x * 0.5, r.get_center().y + sz.y * 0.3),
-		fs, INK if on else _uitext()
+		fs, Ui.ACCENT_INK if on else _uitext()
 	)
 
 
