@@ -1209,6 +1209,11 @@ func _case_grey_first_line() -> void:
 	_kbd_on()
 	_fresh(0, 0)
 	var tag := "grey first"
+	# Ввод ↵ разблокирован — центральный ряд открыт. Флаги закрепляем
+	# руками: они протекают между сценариями (ломает профиль, debug), а
+	# правило «↵ ждёт» должно проверяться на СВОЁМ состоянии.
+	_main.all_keys_override = 1
+	_main.profile_all_keys = false
 	# Вторая строка — из букв, которые игра считает открытыми: иначе
 	# серая строка потянет и её, и уровень кончится, не дав напечатать.
 	var pool: Array[String] = []
@@ -1236,6 +1241,28 @@ func _case_grey_first_line() -> void:
 	_tick(tag)
 	_check(int(_main.typed_ok) == ok0 + 1, "%s: the letter under the cursor was not accepted" % tag)
 	_check(_main.errors.is_empty(), "%s: the first letter left a mark" % tag)
+
+	# --- Обратная сторона того же правила (автор 16.10.2026): центральный
+	# ряд ЗАКРЫТ — на доске ввода нет, и перенос исходника проходит серым
+	# автопропуском. Новичок с «а, о, пробел» не должен упираться в ↵.
+	_main.all_keys_override = 0
+	_set_level_text(["в", "аа"], [true, false])
+	_main.active = {"а": true, "о": true, " ": true}
+	_main._skip_inactive()
+	_tick(tag)
+	_check(not bool(_main.need_enter), "%s: a locked board asked for ↵" % tag)
+	_check(
+		int(_main.cursor_line) == 1 and int(_main.cursor_pos) == 0,
+		"%s: the locked grey break did not pass by itself (%d:%d)"
+		% [tag, _main.cursor_line, _main.cursor_pos]
+	)
+	_check(
+		not bool(_main._kb_enter_shown()),
+		"%s: ↵ is on the board while the home row is locked" % tag
+	)
+	_check(_main.errors.is_empty(), "%s: the locked grey break left a mark" % tag)
+	# Возврат в обычный режим — следующим сценариям флаг не должен достаться.
+	_main.all_keys_override = 1
 
 
 func _find_soft_letter(letters := ["е", "ь"]) -> bool:
@@ -1897,6 +1924,10 @@ func _set_level_text(lines: Array, hard := []) -> void:
 	_main.errors.clear()
 	_main.passed.clear()
 	_main.typed_cells.clear()
+	# Центральный ряд — часть уровня: без него ввод ↵ судил бы по буквам
+	# ПРЕДЫДУЩЕГО текста (ловил 16.10.2026: сценарий «серая первая строка»
+	# ждал ↵ по чужому уровню и получал серый автопропуск).
+	_main._refresh_home_chars()
 	_main._refresh()
 
 
@@ -2017,6 +2048,11 @@ func _ime_frames_run(seed_v: int) -> void:
 func _case_idle_hint() -> void:
 	_fresh(1, 1)
 	var tag := "idle hint"
+	# Сценарий про подсветку, а не про темп погони: замораживаем ежа,
+	# иначе выживание зависит от случайного уровня (ловил в полном
+	# прогоне: ёж догонял между меткой и проверкой, подсказка звала ↵).
+	_main.grace_t = 9999.0
+	_main.enemy_cps = B.BASE_CPS
 	_check(_advance_to(0.3), "%s: could not advance (coverage)" % tag)
 	# Рано — пусто.
 	# Темп задаём сами: средний период 0.6 с → задержка 1.2 с.

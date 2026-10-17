@@ -32,6 +32,12 @@ const FONT_SMALL := 20
 ## карточка и так выше строки, место есть (было 30/20 — мелко).
 const FONT_CARD_NAME := 34
 const FONT_CARD_STATS := 22
+## Установленная версия — подпись кнопки обновлений (автор 15.10.2026:
+## вместо слова «Обновления» показываем версию).
+static func _app_version() -> String:
+	return "v" + String(ProjectSettings.get_setting("application/config/version", "0.0.0"))
+
+
 const PAPER := Color("#f7f3e8")
 const INK := Color("#1c1a16")
 const UI_TEXT := Color("#4a4438")
@@ -40,10 +46,58 @@ const HERO_TEX: Texture2D = preload("res://assets/hero.png")
 
 var users: Array[String] = []
 var sel := 0
+## Кэш колонок таблицы на кадр данных (см. _table_cols). Пустой массив —
+## «посчитать заново».
+var _cols_cache: Array[float] = []
+## Ключ кэша колонок: вид, масштаб, число игроков (см. _table_cols).
+var _cw := -1.0
+var _ck := -1.0
+var _cn := -1
+## Кэш окна списка: сами значения и ключ, по которому они верны
+## (вид, масштаб, число игроков, правка, пилюля подсказки — см. _list_rect).
+var _lr_ok := false
+var _lr_val := Rect2()
+var _lr_w := -1.0
+var _lr_h := -1.0
+var _lr_k := -1.0
+var _lr_n := -1
+var _lr_ed := -2
+var _lr_hint := ""
+var _lr_safe := -1.0
+var _lr_act := false
+## Строчное редактирование (автор 15.10.2026): номер строки (N = строка
+## ввода имени, видна только пока идёт создание), editing_new отличает
+## создание от переименования — у них разные Enter/Esc. Ввод идёт в
+## input_text, input_active означает «редактируем».
+var editing := -1
+var editing_new := false
+## Долгое нажатие на СТРОКЕ списка: палец стоит дольше порога —
+## переименование. Это не «долгое нажатие для набора» (его нет и
+## быть не должно: у «ё» и «ъ» свои клавиши, build-game.sh сторожит),
+## поэтому константа названа ROW_*, а не LONG_PRESS_*.
+var _press_down := false
+var _press_t := 0.0
+var _press_fired := false
+const ROW_PRESS_T := 0.6
 # Прокрутка списка игроков (портрет): карточки не влезают все — список
 # листается, а не ужимается до нечитаемого (жалоба автора 10.2026:
 # «в портрете всё мелкое»). В альбомной таблица по-прежнему вся.
 var _scroll := 0.0
+## Цель прокрутки: колесо и флинг задают её, а _scroll догоняет плавно
+## (автор 16.10.2026: «прокрутка жестами и колёсиком делается не плавно»).
+## Палец в drag ведёт оба сразу — резинки под пальцем нет.
+var _scroll_target := 0.0
+## Скорость догона цели (1/с, экспонента с добегом): та же, что у текста
+## в игре (18/с), — герои и список едут в одном темпе.
+const MENU_SCROLL_CHASE := 18.0
+## Добег: ближе — встаём ровно, иначе вечное микродрожание. Держим доли
+## логического пикселя: при 0.5 край строки вставал под маску видимой
+## полоской на плотных экранах.
+const MENU_SCROLL_SNAP := 0.05
+## Скорость пальца на отпускании (для флинга) — по последним движениям.
+var _fling_v := 0.0
+var _fling_last_y := 0.0
+var _fling_last_t := 0
 ## Зайчик живёт в своей полосе слева от списка и прыгает на строку
 ## выделения (автор 15.10.2026: «не уменьшать кролика, отвести под него
 ## столбик и пусть прыгает от строки к строке»). Прежде он стоял у
@@ -106,6 +160,17 @@ var resume_user := ""
 ## Удаление на подтверждении: имя профиля, ждущего «Да». Пусто — модалки
 ## нет, меню живёт как обычно. Пока висит — весь остальной ввод глушим.
 var confirm_name := ""
+## Фокус кнопок модалки (0 — «Да», 1 — «Нет»): стрелки/Tab водят, Enter
+## жмёт сфокусированную. По умолчанию «Да» — Enter удаляет, как раньше
+## (жалоба автора 16.10.2026: было вообще не видно, где выделение).
+var confirm_sel := 0
+## Ховер-подсказки заголовков таблицы (автор 16.10.2026): стандартный
+## тултип у курсора после короткой задержки. Тап-подсказка внизу при этом
+## остаётся — на сенсоре ховера нет.
+var _hover_pos := Vector2.ZERO
+var _hover_t := 0.0
+var _hover_scroll := 0.0
+const HOVER_TIP_T := 0.5
 var view_w := BASE_W
 var view_h := BASE_H
 var k := 1.0
@@ -166,14 +231,27 @@ func _draw_own_kb() -> void:
 ## Заливка вспышки с плавным затуханием: alpha падает вместе с таймером,
 ## последние кадры почти прозрачны, а в ноль подсветка гаснет совсем
 ## (автор 10.2026: «затухание не мгновенным»).
+## Панели ДВА и создаются раз за жизнь: раньше здесь каждый кадр
+## рождался новый StyleBoxFlat (ревизия 16.10.2026) — мусор в куче и
+## лишняя работа на каждый кадр с видимой доской.
+var _press_sb_fade_ok: StyleBoxFlat
+var _press_sb_fade_err: StyleBoxFlat
+
+
 func _press_sb() -> StyleBox:
+	if _press_sb_fade_ok == null:
+		_press_sb_fade_ok = Ui.panel_sb(Color(1, 1, 1, 0), 10.0, INK, 2.5, false)
+		_press_sb_fade_err = Ui.panel_sb(Color(1, 1, 1, 0), 10.0, INK, 2.5, false)
 	var src: StyleBoxFlat = kb_press_ok_sb if kb_press_ok else kb_press_err_sb
+	var dst: StyleBoxFlat = _press_sb_fade_ok if kb_press_ok else _press_sb_fade_err
 	var k: float = clampf(kb_press_t / KB_PRESS_T, 0.0, 1.0)
 	var c := src.bg_color
 	c.a *= k
 	var b := src.border_color
 	b.a *= k
-	return Ui.panel_sb(c, 10.0, b, 2.5, false)
+	dst.bg_color = c
+	dst.border_color = b
+	return dst
 
 
 func _flash(key: String, ok := true) -> void:
@@ -219,7 +297,10 @@ func _own_press(pos: Vector2) -> bool:
 	elif act == "шифт":
 		_set_kb_shift(true)
 	elif act == "ввод":
-		_enter()
+		if editing >= 0:
+			_commit_edit()
+		else:
+			_enter()
 	elif act == "пробел":
 		pass  # в имени пробелов не бывает
 	else:
@@ -240,6 +321,7 @@ func _own_press(pos: Vector2) -> bool:
 ## Бокс выбранной стрелками галки: залит цветом вместо рамки.
 var selbox_sb: StyleBoxFlat
 var hint_sb: StyleBoxFlat
+var list_frame_sb: StyleBoxFlat
 ## Ночь (S.resolve_night: ручной выбор или система). Краски берутся
 ## из хелперов _ink/_uitext/_dim, панели мутируют в _apply_night.
 var night := false
@@ -262,6 +344,10 @@ func _ready() -> void:
 	kb_press_err_sb = Ui.panel_sb(Color("#ff8a80"), 10.0, INK, 2.5, false)
 	selbox_sb = Ui.panel_sb(Color("#a9c6ec"), 10.0, INK, 2.0, false)
 	hint_sb = Ui.panel_sb(Color(1, 1, 1, 0.72), 14.0, Color("#e0d5bd"), 1.5, false)
+	# Рамка списка — та же тихая обводка, что у пилюли-подсказки
+	# (автор 16.10.2026: рамка должна быть скруглённой и неконтрастной,
+	# в стиле остального интерфейса). Заливки нет, только контур.
+	list_frame_sb = Ui.panel_sb(Color(0, 0, 0, 0), 12.0, Color("#e0d5bd"), 1.5, false)
 	_meadow = Meadow.new()
 	add_child(_meadow)
 	nmode = S.get_night_mode()
@@ -277,6 +363,7 @@ func _relayout() -> void:
 		return
 	view_w = s.x
 	view_h = s.y
+	_cols_cache = []  # вид изменился — колонки прежние (см. _table_cols)
 	top_safe = Ui.top_inset(view_h)
 	# Масштаб — от эффективной высоты (минус клавиатура), как в игре:
 	# иначе в альбомной с клавиатурой блок меню не влезает над ней.
@@ -288,9 +375,19 @@ func _relayout() -> void:
 	# в портрете мелкий (жалоба автора 10.2026). Десктоп не меняется.
 	var kmin := 0.5 if Ui.is_desktop() else 0.7
 	var want := minf(view_w / BASE_W, _menu_eff_h() / BASE_H) * Ui.dpr()
-	k = _fit_k(clampf(want, kmin, 2.5), kmin)
+	# Пока правится имя, масштаб заморожен: выезжающая клавиатура иначе
+	# ужимала бы ВЕСЬ список (автор 16.10.2026). Строка ввода подтягивается
+	# в видимую часть, остальное — того же размера, низ уходит под маску.
+	if editing < 0:
+		k = _fit_k(clampf(want, kmin, 2.5), kmin)
 	# Поворот экрана меняет окно списка — прокрутка поджимается под него.
 	_scroll = _scroll_clamp(_scroll)
+	_scroll_target = _scroll_clamp(_scroll_target)
+	# Окно ужалось (поворот, клавиатура) — выбранное могло уйти из вида:
+	# вернуть целиком в окно (автор 16.10.2026). Цель правит _start_edit
+	# следом, если правится имя (там важнее строка ввода, а не sel).
+	if not users.is_empty() and editing < 0:
+		_scroll_to_sel()
 	queue_redraw()
 
 
@@ -315,12 +412,11 @@ func _fit_k(k0: float, kmin: float) -> float:
 ## (дальше листятся, см. _list_max_scroll), в таблице — все строки, они
 ## не листятся и обязаны влезть.
 func _list_need_at(kk: float) -> float:
+	# Окно списка фиксировано: одна карточка / одна строка. Лишние игроки
+	# уходят в прокрутку, а не ужимают шрифты и строки (автор 15.10.2026).
 	if _cards():
 		return _card_nat_at(kk)
-	var step: float = ROW_H * kk
-	if not Ui.is_desktop():
-		step = maxf(step, 64.0)
-	return float(maxi(users.size(), 1)) * step
+	return _table_step_at(kk)
 
 
 ## Высота верхней панели при масштабе kk — тот же запас, что и на экране.
@@ -330,14 +426,10 @@ func _bar_h_at(kk: float) -> float:
 	return h + maxf(9.0 * kk, 6.0) * 2.0
 
 
-## Высота низа меню (галки пустого списка + поле + кнопки + отступ) при
-## масштабе kk — _at-вариант, чтобы _fit_k ничего не выставлял в поля.
+## Высота низа меню (зазор + кнопки + отступ) при масштабе kk —
+## _at-вариант, чтобы _fit_k ничего не выставлял в поля.
 func _check_block_at(kk: float) -> float:
-	var h := _tap_h_at(48.0 * kk) + 14.0 * kk + _tap_h_at(54.0 * kk) * 0.5 \
-		+ 46.0 * kk + _btn_h_at(kk) + _pad_at(14.0 * kk)
-	if users.is_empty():
-		h += _tap_h_at(48.0 * kk) + 26.0 * kk
-	return h
+	return 20.0 * kk + _btn_h_at(kk) + _pad_at(14.0 * kk)
 
 
 ## Открыть меню поверх игры. Видимость и процесс — только здесь:
@@ -349,6 +441,15 @@ func open(resume: String) -> void:
 	process_mode = Node.PROCESS_MODE_INHERIT
 	_apply_night()
 	_reload()
+	# Выделение — на игроке, под которым только что была игра (автор
+	# 16.10.2026): за партию порядок «недавних» мог его сдвинуть, а sel
+	# остался на старом месте. Нет в списке (гость) — стоим где стояли.
+	var at := users.find(resume_user)
+	if at >= 0:
+		var was_target := _bunny_target_y()
+		sel = at
+		_scroll_to_sel()
+		_bunny_jump(was_target)
 	queue_redraw()
 
 
@@ -362,6 +463,7 @@ func close() -> void:
 ## Перечитать список с диска и встать на разумную позицию.
 func _reload() -> void:
 	users = S.user_list()
+	_cols_cache = []  # список пересобран — колонки прежние
 	if sel >= users.size():
 		sel = maxi(0, users.size() - 1)
 	# Режим ночи — из настроек (кнопка могла его сменить, файл — тоже).
@@ -380,6 +482,13 @@ func _reload() -> void:
 		input_active = true
 		input_text = ""
 	_scroll = _scroll_clamp(_scroll)
+	_scroll_target = _scroll_clamp(_scroll_target)
+	# Список пересобран — ховер под новым содержимым гасим.
+	_hover_t = 0.0
+	# Выбранная строка обязана быть целиком в окне (автор 16.10.2026):
+	# содержимое сдвинулось, а она — нет.
+	if not users.is_empty():
+		_scroll_to_sel()
 	# Список пересобран — зайчик встаёт на строку выделения без прыжка
 	# и без отпружинивания.
 	_bunny_t = 1.0
@@ -430,7 +539,12 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if ke.keycode == KEY_SHIFT and not ke.pressed:
 		_set_kb_shift(false)
 		return
-	if not ke.pressed or ke.echo:
+	# Удержание стрелок листает список (автор 16.10.2026): автоповтор (echo)
+	# пропускаем только для навигации. Буквы, пробел и Enter по эху не
+	# повторяем — иначе удержание печатало бы пачками и дёргало флаги.
+	var nav_key := ke.keycode in [KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT,
+		KEY_PAGEUP, KEY_PAGEDOWN, KEY_HOME, KEY_END]
+	if not ke.pressed or (ke.echo and not nav_key):
 		return
 	# Скрытое меню клавиш не видит: иначе оно перехватывает ввод раньше
 	# игры (оно добавлено позже и получает _unhandled_key_input первым).
@@ -440,17 +554,31 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if not visible:
 		return
 	# Модалка подтверждения — только свои клавиши, остальное мимо:
-	# Enter/Д — «Да», Esc/N — «Нет». Д — та же физическая клавиша,
-	# что L (раскладка не важна, смотрим keycode), N — KEY_N.
+	# стрелки/Tab водят фокус (видно заливкой), Enter жмёт сфокусированную,
+	# Д — сразу «Да», Esc/N — «Нет». Д — та же физическая клавиша, что L
+	# (раскладка не важна, смотрим keycode), N — KEY_N.
 	if confirm_name != "":
+		# В модалке повторов нет: зажатая стрелка не должна мельтешить
+		# фокусом туда-сюда.
+		if ke.echo:
+			_eaten()
+			return
 		if (
 			ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER
 			or ke.unicode == 10 or ke.unicode == 13
-			or ke.keycode == KEY_L
 		):
+			# Enter — по фокусу, а не всегда «Да».
+			if confirm_sel == 0:
+				_confirm_delete()
+			else:
+				_cancel_confirm()
+		elif ke.keycode == KEY_L:
 			_confirm_delete()
 		elif ke.keycode == KEY_ESCAPE or ke.keycode == KEY_N:
 			_cancel_confirm()
+		elif ke.keycode in [KEY_LEFT, KEY_RIGHT, KEY_TAB]:
+			confirm_sel = 1 - confirm_sel
+			queue_redraw()
 		_eaten()
 		return
 	# Модалка обновления: Enter — «Скачать», Esc или N — «Не сейчас».
@@ -459,6 +587,9 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	# Esc уходил из ИГРЫ (жалоба автора: на десктопе и на эмуляторе с
 	# внешней клавиатурой отказ от обновления был недостижим).
 	if _upd_open:
+		if ke.echo:
+			_eaten()
+			return
 		if (
 			ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER
 			or ke.unicode == 10 or ke.unicode == 13
@@ -468,13 +599,36 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			_upd_no()
 		_eaten()
 		return
-	# F2 — вернуться в игру тем же игроком, кого открыли меню.
 	# Раскладку физической клавиатуры мы не угадываем по сочетанию:
 	# переключатель у человека какой угодно. Следим за СОСТОЯНИЕМ —
 	# пришла буква, значит система отдаёт этот алфавит (требование
-	# автора 10.2026).
+	# автора 10.2026). Стоит раньше редактирования: язык доски должен
+	# следовать и за буквами, набранными в поле имени.
 	if ke.unicode > 0:
 		_follow_keyboard_lang(String.chr(ke.unicode))
+	# Строчное редактирование: Enter фиксирует, Esc отменяет. Навигацию
+	# (стрелки, пробел, Tab, Delete, Insert, F2) глотаем, чтобы посреди
+	# ввода не прыгали выделение и флаги. А буквы, цифры и Backspace
+	# идут штатным путём ниже (input_active поднят): раньше ветка глотала
+	# вообще всё, и с реальной клавиатуры в поле ничего не печаталось —
+	# только с виртуальной (жалоба автора 16.10.2026).
+	if editing >= 0:
+		if (
+			ke.keycode == KEY_ENTER or ke.keycode == KEY_KP_ENTER
+			or ke.unicode == 10 or ke.unicode == 13
+		):
+			_commit_edit()
+			_eaten()
+			return
+		if ke.keycode == KEY_ESCAPE:
+			_cancel_edit()
+			_eaten()
+			return
+		if ke.keycode in [KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_SPACE,
+				KEY_TAB, KEY_DELETE, KEY_INSERT, KEY_F2]:
+			_eaten()
+			return
+	# F2 — вернуться в игру тем же игроком, кого открыли меню.
 	# Физический шифт — тоже шифт доски: состояние клавиш должно меняться
 	# сразу, как его меняет щипок на самой доске (автор 10.2026: «нажатие
 	# шифта должно сразу менять состояние клавиш»). Отпускание приходит
@@ -495,6 +649,24 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		return
 	if ke.keycode == KEY_DOWN:
 		_nav(1)
+		_eaten()
+		return
+	# Постранично и в края (автор 16.10.2026): страница — высота окна,
+	# минимум строка; края без зацикливания, в отличие от стрелок.
+	if ke.keycode == KEY_PAGEUP:
+		_nav_page(-1)
+		_eaten()
+		return
+	if ke.keycode == KEY_PAGEDOWN:
+		_nav_page(1)
+		_eaten()
+		return
+	if ke.keycode == KEY_HOME:
+		_nav_to(0)
+		_eaten()
+		return
+	if ke.keycode == KEY_END:
+		_nav_to(users.size() - 1)
 		_eaten()
 		return
 	# Стрелки ←/→ — выбор колонки флагов (Про/Ё), пробел — переключить
@@ -519,7 +691,15 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		_eaten()
 		return
 	if ke.keycode == KEY_TAB:
-		_toggle_input()
+		if users.is_empty():
+			_start_edit(0)
+		else:
+			_start_edit(sel)
+		_eaten()
+		return
+	# Insert — создать нового (клавиатурный путь к строке создания).
+	if ke.keycode == KEY_INSERT:
+		_start_edit(users.size())
 		_eaten()
 		return
 	if ke.keycode == KEY_DELETE:
@@ -566,6 +746,41 @@ func _process(dt: float) -> void:
 		kb_morph = minf(1.0, kb_morph + dt / KB_MORPH_T)
 		queue_redraw()
 	_bunny_advance(dt)
+	# Заяц двигается каждый кадр полёта — рисуем кадр, иначе спрайт
+	# замирает на первой позе прыжка до его окончания (баг ниской
+	# частоты обновления спрайта, автор 16.10.2026).
+	if _bunny_t < 1.0 or _bunny_land < BUNNY_LAND_T:
+		queue_redraw()
+	# Ховер-таймер: тикает, пока курсор стоит на месте. Прокрутка под
+	# стоящим курсором — тоже движение: таймер сбрасываем, иначе пузырь
+	# всплывёт над чужим заголовком.
+	if _scroll != _hover_scroll:
+		_hover_scroll = _scroll
+		_hover_t = 0.0
+	else:
+		_hover_t = minf(_hover_t + dt, 10.0)
+	# Плавная прокрутка: список догоняет цель (колесо, флинг, стрелки).
+	# Экспонента с добегом — как скролл текста в игре.
+	if _scroll != _scroll_target:
+		var d := _scroll_target - _scroll
+		var step := d * minf(1.0, MENU_SCROLL_CHASE * dt)
+		if absf(d) <= MENU_SCROLL_SNAP:
+			_scroll = _scroll_target
+		else:
+			_scroll += step
+			if signf(step) != signf(_scroll_target - _scroll):
+				_scroll = _scroll_target
+		queue_redraw()
+	# Долгое нажатие пальцем: стоит на строке дольше порога и не едет —
+	# переименовываем (та же единая функция, что у ПКМ).
+	if _press_down and not _dragged and not _press_fired:
+		_press_t += dt
+		if _press_t >= ROW_PRESS_T:
+			_press_fired = true
+			var ri := _row_at(_drag_from)
+			if editing < 0 and ri >= 0 and ri < users.size() and _row_shown(ri):
+				_start_edit(ri)
+				get_viewport().set_input_as_handled()
 	if kb_press_t > 0.0:
 		kb_press_t = maxf(0.0, kb_press_t - dt)
 		queue_redraw()
@@ -600,16 +815,46 @@ func _input(event: InputEvent) -> void:
 	# за один палец). На десктопе касаний нет — ничего не меняется.
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
+		# Правая кнопка — переименовать строку под курсором (автор
+		# 15.10.2026; долгое удержание пальцем — то же самое, см. _process).
+		if mb.button_index == MOUSE_BUTTON_RIGHT and mb.pressed:
+			var ri := _row_at(mb.position)
+			if editing < 0 and ri >= 0 and ri < users.size() and _row_shown(ri):
+				_start_edit(ri)
+				get_viewport().set_input_as_handled()
+			return
 		if mb.button_index == MOUSE_BUTTON_LEFT and mb.pressed:
+			# Клик — не ховер: пузырь подсказки прячем (таймер с нуля).
+			_hover_t = 0.0
+			# Дабл-клик по строке — играть (автор 16.10.2026): одинарный
+			# только выделяет (см. _tap). Долгое удержание и drag при этом
+			# не взводим — жест уже классифицирован.
+			# Взялись за список — недолёт останавливаем: дальше ведёт
+			# палец, а не инерция.
+			_scroll_target = _scroll
+			if mb.double_click:
+				_press_deferred = false
+				_press_down = false
+				_drag_from = mb.position
+				_drag_scroll0 = _scroll
+				_dragged = false
+				_tap_play(mb.position)
+				return
 			_drag_from = mb.position
 			_drag_scroll0 = _scroll
 			_dragged = false
-			# Тап по листаемому списку откладываем до отпускания:
-			# иначе простой палец выбрал бы игрока, а жест прокрутки
-			# успела бы выбрать его же (или соседнего) по дороге.
-			_press_deferred = _list_scrollable() and _list_rect().has_point(
-				mb.position
-			)
+			_fling_v = 0.0
+			_fling_last_y = mb.position.y
+			_fling_last_t = Time.get_ticks_msec()
+			# Тап по СПИСКУ откладываем до отпускания — всегда, даже когда
+			# список не листовится: иначе долгое удержание (переименование,
+			# автор 15.10.2026) успело бы ещё и игру запустить, потому что
+			# тап срабатывает по нажатию. По кнопкам и полю — сразу, там
+			# долгое нажатие ничего не значит.
+			_press_deferred = _list_rect().has_point(mb.position)
+			_press_down = _press_deferred
+			_press_t = 0.0
+			_press_fired = false
 			_press_pos = mb.position
 			if not _press_deferred:
 				_tap(mb.position)
@@ -620,38 +865,63 @@ func _input(event: InputEvent) -> void:
 			_release_held()
 			var deferred := _press_deferred
 			var was_drag := _dragged
+			var was_long := _press_fired
 			_press_deferred = false
 			_dragged = false
-			if deferred and not was_drag:
+			_press_down = false
+			_press_fired = false
+			if deferred and not was_drag and not was_long:
 				_tap(_press_pos)
-			if deferred or was_drag:
+			elif was_drag and absf(_fling_v) > 240.0:
+				# Бросок: список катится по инерции и плавно встаёт.
+				# Палец вверх (v<0) — едем вниз по списку.
+				_scroll_target = _scroll_clamp(_scroll - _fling_v * 0.12)
+			_fling_v = 0.0
+			if deferred or was_drag or was_long:
 				get_viewport().set_input_as_handled()
 			return
-		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP and _cards():
-			_scroll = _scroll_clamp(_scroll - 90.0 * k)
+		elif mb.button_index == MOUSE_BUTTON_WHEEL_UP:
+			# Колесо задаёт ЦЕЛЬ, список догоняет плавно в _process.
+			_hover_t = 0.0
+			_scroll_target = _scroll_clamp(_scroll_target - 90.0 * k)
 			queue_redraw()
 			return
-		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and _cards():
-			_scroll = _scroll_clamp(_scroll + 90.0 * k)
+		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			_hover_t = 0.0
+			_scroll_target = _scroll_clamp(_scroll_target + 90.0 * k)
 			queue_redraw()
 			return
-	elif event is InputEventMouseMotion and _cards():
+	elif event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
+		if not (mm.button_mask & MOUSE_BUTTON_MASK_LEFT):
+			# Просто ведём мышью — ховер для тултипов заголовков.
+			# С нажатой кнопкой это drag: таймер сбрасываем, иначе пузырь
+			# всплывёт посреди жеста.
+			_hover_pos = mm.position
+			_hover_t = 0.0
+			return
 		if mm.button_mask & MOUSE_BUTTON_MASK_LEFT:
 			var dy := mm.position.y - _drag_from.y
 			if not _dragged and absf(dy) < DRAG_MIN:
 				return
 			_dragged = true
-			# Список едет за пальцем: палец вверх — по списку вниз.
+			# Список едет за пальцем 1:1, без отставания: цель и факт —
+			# одно и то же. Скорость запоминаем для флинга на отпускании.
 			_scroll = _scroll_clamp(_drag_scroll0 - dy)
+			_scroll_target = _scroll
+			var now := Time.get_ticks_msec()
+			var dt := float(maxi(1, now - _fling_last_t)) / 1000.0
+			_fling_v = (mm.position.y - _fling_last_y) / dt
+			_fling_last_y = mm.position.y
+			_fling_last_t = now
 			queue_redraw()
 			return
 
 
-## Лисaется ли список: иначе тап по нему обрабатывается сразу, без
-## ожидания отпускания (иначе простой тап в меню встал бы на пол-секунды).
+## Лисaется ли список сейчас: нужно для колеса мыши и для проверок
+## (тесты меряют, что окно фиксировано, а лишнее ушло в прокрутку).
 func _list_scrollable() -> bool:
-	return _cards() and _list_max_scroll() > 0.0
+	return _list_max_scroll() > 0.0
 
 
 ## Тап: прямоугольники — из тех же хелперов, что рисует _draw: единый
@@ -675,9 +945,27 @@ func _tap(pos: Vector2) -> void:
 			_upd_no()
 			get_viewport().set_input_as_handled()
 		return
+	# Редактирование: сначала клавиатура, потом крестик отмены на своей
+	# строке, потом — зафиксировать и проглотить (тап вне строки тоже
+	# фиксирует:Esc есть только на железе).
+	if editing >= 0:
+		if _own_press(pos):
+			return
+		if _del_tap_rect(editing).has_point(pos):
+			_cancel_edit()
+			get_viewport().set_input_as_handled()
+			return
+		_commit_edit()
+		get_viewport().set_input_as_handled()
+		return
 	# Внутри строки сначала точечные цели (галочка, крестик), потом
-	# сама строка: иначе тап по галке играл бы этим профилем.
-	for i in users.size():
+	# сама строка: иначе тап по галке выделял бы этого игрока.
+	# Строки за окном списка тапов не видят (как и глазом: их режет
+	# маска): иначе высокие строки на тесном экране перехватывали бы
+	# кнопки под списком (ловил тест: тап по «Без профиля» играл Петей).
+	for i in _row_count():
+		if not _row_shown(i):
+			continue
 		if _pro_tap_rect(i).has_point(pos):
 			_toggle_pro(i)
 			get_viewport().set_input_as_handled()
@@ -688,12 +976,23 @@ func _tap(pos: Vector2) -> void:
 			return
 		if _del_tap_rect(i).has_point(pos):
 			confirm_name = users[i]
+			confirm_sel = 0
 			queue_redraw()
 			get_viewport().set_input_as_handled()
 			return
-	for i in users.size():
+	for i in _row_count():
+		if not _row_shown(i):
+			continue
 		if _row_tap_rect(i).has_point(pos):
-			chosen.emit(users[i])
+			# Одинарный тап — только выделить, и строку создания тоже
+			# (автор 16.10.2026). Редактирует дабл-клик (см. _tap_play)
+			# или Enter, играет — дабл-клик или Enter по игроку. Зайчик —
+			# как при стрелках: прыжок от прежней цели (_nav).
+			var was_target := _bunny_target_y()
+			sel = i
+			_scroll_to_sel()
+			_bunny_jump(was_target)
+			queue_redraw()
 			get_viewport().set_input_as_handled()
 			return
 	# Заголовки «Про»/«Ё» — подсказка, что за галка. Повторный тап гасит.
@@ -712,25 +1011,13 @@ func _tap(pos: Vector2) -> void:
 		_upd_check()
 		get_viewport().set_input_as_handled()
 		return
-	if users.is_empty() and _check_tap_rect().has_point(pos):
-		_toggle_all_keys()
-		get_viewport().set_input_as_handled()
-		return
-	if users.is_empty() and _yocheck_tap_rect().has_point(pos):
-		input_yo_strict = not input_yo_strict
-		queue_redraw()
-		get_viewport().set_input_as_handled()
-		return
-	if _field_tap_rect().has_point(pos):
-		if not input_active:
-			_toggle_input()
-		get_viewport().set_input_as_handled()
-		return
 	# Своя клавиатура: клавиши раньше остального (тап по клавише — ввод).
 	if _own_press(pos):
 		return
-	if _play_tap_rect().has_point(pos):
-		_enter()
+	# Нижняя левая кнопка — создать нового пользователя (автор 16.10.2026:
+	# «Играть» убрана, запуск — дабл-клик или Enter по строке).
+	if _new_tap_rect().has_point(pos):
+		_start_edit(users.size())
 		get_viewport().set_input_as_handled()
 		return
 	if _guest_tap_rect().has_point(pos):
@@ -755,6 +1042,8 @@ func _letter(ke: InputEventKey) -> String:
 func _nav(direction: int) -> void:
 	if users.is_empty():
 		return
+	# Создание — кнопкой «+ Новый игрок» / Insert: в обходе стрелками его
+	# нет (постоянного пункта в списке нет, автор 16.10.2026).
 	var was_target := _bunny_target_y()
 	sel = (sel + direction + users.size()) % users.size()
 	_scroll_to_sel()
@@ -763,43 +1052,62 @@ func _nav(direction: int) -> void:
 
 
 
-func _toggle_input() -> void:
-	input_active = not input_active
-	if not input_active:
-		input_text = ""
-	_relayout()
+## Прыжок выделения на строку без зацикливания (PageUp/PageDown/Home/End):
+## края держат, в отличие от круговых стрелок (см. _nav).
+func _nav_to(i: int) -> void:
+	if users.is_empty():
+		return
+	var was_target := _bunny_target_y()
+	sel = clampi(i, 0, users.size() - 1)
+	_scroll_to_sel()
+	_bunny_jump(was_target)
 	queue_redraw()
 
 
-func _enter() -> void:
-	if input_active and not input_text.strip_edges().is_empty():
-		var name := S.clean_name(input_text)
-		# Новое имя — создать, существующее — просто войти. Флаги
-		# вводимого имени переезжают в созданный профиль.
-		if not S.user_exists(name):
-			S.create_user(name)
-			S.set_all_keys(name, input_all_keys)
-			S.set_yo_strict(name, input_yo_strict)
-		else:
-			S.touch(name)
-		input_text = ""
-		input_active = false
-		input_all_keys = false
-		input_yo_strict = true
-		chosen.emit(name)
+## Листание на страницу вверх/вниз: высота окна, минимум одна строка.
+func _nav_page(dir: int) -> void:
+	if users.is_empty():
 		return
+	var page := maxi(1, int(_list_rect().size.y / maxf(1.0, _row_step())))
+	_nav_to(sel + dir * page)
+
+
+## Дабл-клик по строке — играть этим пользователем (автор 16.10.2026:
+## одинарный тап только выделяет). Создание — кнопкой «+ Новый игрок»
+## внизу, дабл сюда не ведёт. Мимо строк и по скрытым (за маской) — ничего.
+func _tap_play(pos: Vector2) -> void:
+	if editing >= 0 or confirm_name != "" or _upd_open:
+		return
+	for i in users.size():
+		if not _row_shown(i):
+			continue
+		if _row_tap_rect(i).has_point(pos):
+			sel = i
+			chosen.emit(users[i])
+			get_viewport().set_input_as_handled()
+			return
+
+
+## Переключателя ввода больше нет (Tab правит выбранного, см. выше).
+
+
+func _enter() -> void:
+	# Enter в редактировании фиксирует строкой (см. разбор клавиш выше),
+	# сюда доходит только игра выбранным. Создание — кнопкой «+ Новый
+	# игрок» / Insert, Enter всегда играет.
 	if not users.is_empty():
 		chosen.emit(users[sel])
 		return
-	# Список пуст и ввод выключен — единственный выход, гость.
+	# Список пуст — единственный выход, гость.
 	_guest()
 
 
 func _delete() -> void:
-	if input_active or users.is_empty():
+	if editing >= 0 or input_active or users.is_empty():
 		return
 	# Удаление непоправимо — только через подтверждение.
 	confirm_name = users[sel]
+	confirm_sel = 0
 	queue_redraw()
 
 
@@ -833,7 +1141,7 @@ func _upd_ensure() -> void:
 func _upd_check() -> void:
 	_upd_ensure()
 	_upd_state = "checking"
-	_upd_msg = "Проверяю…"
+	_upd_msg = ""
 	_upd_open = false
 	queue_redraw()
 	_upd.check()
@@ -850,7 +1158,7 @@ func _on_upd_checked(has: bool, tag: String, notes: String, _url: String) -> voi
 		_upd_open = true
 	else:
 		_upd_state = "latest"
-		_upd_msg = "У вас последняя (%s)" % tag
+		_upd_msg = ""
 		_upd_open = false
 	queue_redraw()
 
@@ -870,7 +1178,6 @@ func _upd_yes() -> void:
 	if _upd.downloading():
 		_upd_open = false
 		_upd_state = "downloading"
-		_upd_msg = "Уже качаю…"
 		queue_redraw()
 		return
 	_upd_open = false
@@ -878,7 +1185,7 @@ func _upd_yes() -> void:
 	_upd_pct = -1
 	_upd_done = 0
 	_upd_total = 0
-	_upd_msg = "Качаю…"
+	_upd_msg = ""
 	queue_redraw()
 	_upd.download()
 
@@ -901,19 +1208,16 @@ func _on_upd_progress(done: int, total: int, percent: int) -> void:
 	_upd_done = done
 	_upd_total = total
 	_upd_pct = percent
-	if _upd_state == "downloading":
-		if percent >= 0:
-			_upd_msg = "Качаю… %d%%" % percent
-		elif total > 0:
-			_upd_msg = "Качаю… %d из %d МБ" % [done / 1048576, total / 1048576]
-		else:
-			_upd_msg = "Качаю… %d МБ" % (done / 1048576)
 	queue_redraw()
 
 
 ## Опрос прогресса, пока идёт закачка: HTTPRequest сам событий
 ## прогресса не шлёт.
 func _poll_update() -> void:
+	# Пока проверка или закачка идут — кадр живёт (волна/заливка в самой
+	# кнопке, см. _draw_upd_button).
+	if _upd_state == "checking" or (_upd_state == "downloading" and _upd != null and _upd.downloading()):
+		queue_redraw()
 	if _upd_state != "downloading" or not _upd.downloading():
 		return
 	_upd_poll += get_process_delta_time()
@@ -961,6 +1265,11 @@ func _toggle_all_keys() -> void:
 
 ## Про-режим строке: все клавиши сразу именно этому игроку.
 func _toggle_pro(i: int) -> void:
+	if i == users.size() and editing_new:
+		input_all_keys = not input_all_keys
+		hint_header = "pro" if _cards() else hint_header
+		queue_redraw()
+		return
 	if i < 0 or i >= users.size():
 		return
 	var name := users[i]
@@ -970,10 +1279,17 @@ func _toggle_pro(i: int) -> void:
 	# прошлого экрана), а в карточках её больше негде взять.
 	if _cards():
 		hint_header = "pro"
+	# Пилюля ужала окно — выбранное могло уйти под маску: вернуть в вид.
+	_scroll_to_sel()
 
 
 ## Строгая ё строке: различать ё и е именно этому игроку.
 func _toggle_yo(i: int) -> void:
+	if i == users.size() and editing_new:
+		input_yo_strict = not input_yo_strict
+		hint_header = "yo" if _cards() else hint_header
+		queue_redraw()
+		return
 	if i < 0 or i >= users.size():
 		return
 	var name := users[i]
@@ -983,6 +1299,8 @@ func _toggle_yo(i: int) -> void:
 	# прошлого экрана), а в карточках её больше негде взять.
 	if _cards():
 		hint_header = "yo"
+	# Пилюля ужала окно — выбранное могло уйти под маску: вернуть в вид.
+	_scroll_to_sel()
 
 
 ## Пробел по флагам: выбранная стрелками колонка (sel_col) у выбранной
@@ -1023,7 +1341,29 @@ func _cell_texts(name: String) -> Array[String]:
 ## и правый край. Имя занимает остаток (длинные режем с многоточием),
 ## остальные — по самой широкой ячейке. Та же геометрия у отрисовки,
 ## хит-теста и тестов: мимо не бьёт.
+##
+## Результат КЭШИРУЕТСЯ на кадр данных (сброс — _reload/_relayout/
+## _apply_night). Считать его — обойти всех игроков с load_profile и
+## замерами текста, а зовут его сотни раз за кадр: из каждой строки,
+## каждой галки, каждого замера имени (автор 16.10.2026, ревизия
+## производительности). Один пересчёт на кадр вместо сотен.
 func _table_cols() -> Array[float]:
+	# Ключ (вид/масштаб/состав) — плюс явный сброс в _reload на новые
+	# тексты ячеек: статистика игрока меняется при игре, а размер
+	# списка может остаться прежним.
+	if (
+		not _cols_cache.is_empty()
+		and _cw == view_w and _ck == k and _cn == users.size()
+	):
+		return _cols_cache
+	_cols_cache = _table_cols_now()
+	_cw = view_w
+	_ck = k
+	_cn = users.size()
+	return _cols_cache
+
+
+func _table_cols_now() -> Array[float]:
 	var left := 48.0 * k
 	# Полоса зайчика — и в таблице: он прыгает по строкам в обеих
 	# раскладках списка. Её вычитаем ИЗ ДОСТУПНОЙ ШИРИНЫ, а не сдвигаем
@@ -1031,15 +1371,17 @@ func _table_cols() -> Array[float]:
 	# колонки за экран и ширину крестика делал отрицательной.
 	var strip := _bunny_strip()
 	var right := view_w - 48.0 * k
-	var gap := 12.0 * k
+	# Зазор между колонками: имя важнее воздуха, но и слипаться тексту
+	# нельзя (ловил кадр таблицы: «Маруся ур.00/0» — зазор 7k впритык).
+	var gap := maxf(14.0 * k, 10.0)
 	# Колонки-галочки: не уже пальцевых 64, иначе их не нажать,
 	# и визуально галочка сливается с заголовком.
 	var col_min := 44.0 * k if Ui.is_desktop() else 64.0
-	var del_w := maxf(44.0 * k, col_min)
-	var pro_w := maxf(_text_size("Про", FONT_SMALL).x + 44.0 * k, col_min)
-	var yo_w := maxf(_text_size("Ё", FONT_SMALL).x + 44.0 * k, col_min)
-	var lvl_w := _text_size("Ур", FONT_SMALL).x + 16.0 * k
-	var rec_w := _text_size("Победы", FONT_SMALL).x + 16.0 * k
+	var del_w := maxf(36.0 * k, col_min)
+	var pro_w := maxf(_text_size("Про", FONT_SMALL).x + 28.0 * k, col_min)
+	var yo_w := maxf(_text_size("Ё", FONT_SMALL).x + 28.0 * k, col_min)
+	var lvl_w := _text_size("Ур", FONT_SMALL).x + 10.0 * k
+	var rec_w := _text_size("Победы", FONT_SMALL).x + 10.0 * k
 	for u in users:
 		var cells := _cell_texts(u)
 		lvl_w = maxf(lvl_w, _text_size(cells[0], FONT_ROW).x + 16.0 * k)
@@ -1050,7 +1392,10 @@ func _table_cols() -> Array[float]:
 	# таблица разъезжается, крестик уезжает за край, а любое имя
 	# режется в многоточие (проверено тестами на k=0.5 и 412px).
 	var avail := maxf(0.0, right - left - strip)
-	var min_name := 80.0 * k
+	# Имя получает не только минимум, но и столько, сколько нужно самому
+	# длинному имени + воздух с обеих сторон: иначе на широком окне (где
+	# масштаб растёт от высоты) колонки сжимаются и текст слипается.
+	var min_name := maxf(80.0 * k, _table_name_need() + gap)
 	var flag_want := lvl_w + rec_w + pro_w + yo_w + del_w + gap * 5.0
 	var name_w := maxf(min_name, avail - flag_want)
 	if name_w + flag_want > avail:
@@ -1076,6 +1421,73 @@ func _table_cols() -> Array[float]:
 	return cols
 
 
+## Ширина самого длинного имени при полном кегле + отступ от края
+## бокса. Имя — приоритет №1 в таблице (автор 15.10.2026), ему эта
+## ширина достаётся первой, остальные колонки ужимаются (см. _table_cols).
+func _table_name_need() -> float:
+	var need := 0.0
+	for u in users:
+		need = maxf(need, _text_size_fs(u, int(FONT_ROW * k)).x)
+	return need + 8.0 * k
+
+
+## Кегль ячеек «Ур» и «счёт»: ужимается под СВОЮ полосу, а не только
+## колонки. Колонки при нехватке места сжимаются (см. _table_cols), а
+## текст остаёк полного кегля — и наезжал на соседний столбец (кадр
+## таблицы 1000x700: кегль 54 в полосе 130, «ур.0 0/0» слипалось).
+## Пол 60% — ниже ячейка уже не читается.
+func _table_cell_fs() -> int:
+	var cols := _table_cols()
+	var bands := [
+		cols[2] - cols[1] - 14.0 * k, cols[3] - cols[2] - 14.0 * k
+	]
+	var fs := int(FONT_ROW * k)
+	var low := maxi(10, int(float(fs) * 0.6))
+	for u in users:
+		var cells := _cell_texts(u)
+		while fs > low and (
+			_text_size_fs(cells[0], fs).x > bands[0]
+			or _text_size_fs(cells[1], fs).x > bands[1]
+		):
+			fs -= 2
+	return fs
+
+
+## Кегль шапки таблицы: тот же смысл, что у ячеек — подписи столбцов не
+## должны наезжать на следующий заголовок, а колонки на узком экране
+## сжаты (см. _table_cols).
+func _table_head_fs() -> int:
+	var cols := _table_cols()
+	var bands := [
+		cols[1] - cols[0] - 14.0 * k, cols[2] - cols[1] - 14.0 * k,
+		cols[3] - cols[2] - 14.0 * k,
+	]
+	var fs := int(FONT_SMALL * k)
+	var low := maxi(9, int(float(fs) * 0.7))
+	for i in 3:
+		while fs > low and _text_size_fs(_head_label(i), fs).x > bands[i]:
+			fs -= 1
+	return fs
+
+
+## Подпись столбца шапки по индексу: 0 имя, 1 уровень, 2 победы.
+func _head_label(i: int) -> String:
+	if i == 0:
+		return "Имя"
+	if i == 1:
+		return "Ур"
+	return "Победы"
+
+
+## Все имена влезают целиком (без многоточия) — для ужатия масштаба
+## под таблицу (см. _relayout).
+func _names_fit() -> bool:
+	for u in users:
+		if _short_name(u) != u:
+			return false
+	return true
+
+
 ## Имя игрока для показа: в карточках — во всю ширину карточки (кнопки
 ## лежат на своём ряду ниже, подрезать имя не о чем), в таблице — по
 ## ширине своей колонки. Обрезка многоточием: чужая длинная строка из
@@ -1084,7 +1496,19 @@ func _short_name(name: String) -> String:
 	if _cards():
 		return _clip_fs(name, _card_name_fs(name), _card_name_cap())
 	var cols := _table_cols()
-	return _clip(name, FONT_ROW, cols[1] - cols[0] - 8.0 * k)
+	return _clip_fs(name, _table_name_fs(name), cols[1] - cols[0] - 14.0 * k)
+
+
+## Кегль имени в таблице: как в карточке — ужимается под ширину колонки,
+## а не режется (пол 60%). Многоточие — только если не влезло и так.
+func _table_name_fs(name: String) -> int:
+	var cols := _table_cols()
+	var cap := cols[1] - cols[0] - 14.0 * k
+	var full := int(FONT_ROW * k)
+	var fs := full
+	while fs > int(float(full) * 0.6) and _text_size_fs(name, fs).x > cap:
+		fs -= 2
+	return fs
 
 
 
@@ -1144,7 +1568,7 @@ func _text_size_fs(txt: String, fs: int) -> Vector2:
 	# хватает для зажимов прокрутки, а после _ready всё пересчитывается.
 	if mono == null:
 		return Vector2(float(txt.length()) * float(fs) * 0.6, float(fs))
-	return mono.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs)
+	return Ui.text_size(mono, txt, fs)
 
 
 func _text(txt: String, pos: Vector2, size_px: int, col: Color) -> void:
@@ -1160,10 +1584,7 @@ func _text_fs(txt: String, pos: Vector2, fs: int, col: Color) -> void:
 	)
 
 
-## Строка поля ввода как текст (рамка и хит-тест строятся от неё).
-func _field_text() -> String:
-	var field := "Имя: " + input_text + ("|" if input_active else "")
-	return ("> " if input_active else "  ") + field
+## Текст строчного редактора: имя плюс курсор.
 
 
 ## Базовая строка меню: заголовок + строки. Дальше всё считается от неё.
@@ -1217,104 +1638,204 @@ func _rows_top() -> float:
 	# двух игроках висел сверху, кадр «01-cards» визуального прогона).
 	# Под верхней панелью; в таблице ещё и шапки колонок (они рисуются
 	# на 44k выше первой строки).
-	return top_safe + _bar_h() + (58.0 * k if not _cards() else 0.0)
+	# Портрет: под панелью сразу список (+14k воздуха до первой карточки).
+	# Таблица: сначала шапка колонок — ей нужно место и под заголовком,
+	# и над строками (тесноту ловил аудит 15.10.2026: заголовок на шапке,
+	# шапка на строках).
+	if _cards():
+		return top_safe + _bar_h() + 14.0 * k
+	return top_safe + _bar_h() + 90.0 * k
 
 
 ## Окно списка игроков: между шапкой и полем ввода. Здесь карточки
 ## растут на всю высоту, а когда не влезают — список листается.
-## Полная высота содержимого списка БЕЗ растяжения на окно. Отдельная
-## функция, а не n × _row_step: шаг карточки тянет за собой _card_h →
-## _card_fill → окно списка → поле ввода → _buttons_y → … и получалась
-## бесконечная рекурсия (ловил сторож: «Stack overflow … _pad»).
+## Полная высота содержимого списка: строки плюс строка создания.
+## Отдельная функция, а не n × шаг: цепочка окно↔кнопки обязана идти в
+## одну сторону, иначе бесконечная рекурсия (ловил сторож:
+## «Stack overflow … _pad»).
+## Сколько строк в списке: игроки плюс строка ввода имени, но только пока
+## идёт создание (постоянного пункта «создать» в списке нет, автор
+## 16.10.2026: создание — кнопкой «+ Новый игрок» внизу). Строка ввода
+## листается вместе со всеми.
+func _row_count() -> int:
+	return users.size() + (1 if editing_new else 0)
+
+
 func _list_all_h() -> float:
-	var n := float(maxi(users.size(), 1))
+	# Высота — НАСТОЯЩАЯ: n карточек и n−1 зазоров (зазор после последней
+	# карточки не занимает экран; раньше считался — список «не влезал»
+	# на ровно один зазор и лишний раз уезжал вниз).
+	var n := maxi(_row_count(), 1)
 	if _cards():
-		return n * (_card_nat() + _CARD_GAP * _card_k())
-	var step: float = ROW_H * k
-	if not Ui.is_desktop():
-		step = maxf(step, 64.0)
-	return n * step
+		return float(n) * _card_nat() + float(n - 1) * _CARD_GAP * _card_k() + _list_end_pad()
+	return float(n) * _table_step_at(k) + _list_end_pad()
+
+
+## Воздух под последним пунктом внутри окна: низ списка не стоит ровно
+## на краю окна — иначе край карточки упирается в границу маски и
+## визуально режется (автор 16.10.2026). Едет вместе со всем содержимым
+## (см. _list_max_scroll), на центровку короткого списка не влияет
+## заметно (половина запаса сверху).
+func _list_end_pad() -> float:
+	return maxf(6.0, 8.0 * k)
+
+
+
 
 
 ## Окно списка — и в карточках, и в таблице: от шапки колонок (или от
 ## верхней панели) до поля ввода. Что не влезло — листятся; низ экрана
 ## при этом на месте (см. _buttons_y).
 func _list_rect() -> Rect2:
-	var top := _rows_top()
-	var bottom := _field_line_y() - 40.0 * k
-	var one: float = _card_nat() if _cards() else ROW_H * k
-	if not Ui.is_desktop():
-		one = maxf(one, 64.0)
+	# Кэш по входным данным. Считать окно дорого: внутри — замер текста
+	# пилюли, а сама функция зовётся десятки раз за кадр (из каждой
+	# строки, каждой кнопки, каждого хит-теста) — ревизия 16.10.2026.
+	# Ключ, а не флаг: тесты и поворот экрана пишут view_w/view_h/k
+	# напрямую, и такой кэш не может отдать чужую геометрию.
+	if (
+		_lr_ok and _lr_w == view_w and _lr_h == view_h and _lr_k == k
+		and _lr_n == users.size() and _lr_ed == editing
+		and _lr_hint == hint_header and _lr_safe == top_safe
+		and _lr_act == input_active
+	):
+		return _lr_val
+	_lr_val = _list_rect_now()
+	_lr_w = view_w
+	_lr_h = view_h
+	_lr_k = k
+	_lr_n = users.size()
+	_lr_ed = editing
+	_lr_hint = hint_header
+	_lr_safe = top_safe
+	_lr_act = input_active
+	_lr_ok = true
+	return _lr_val
+
+
+func _list_rect_now() -> Rect2:
+	# Верх окна — реальный верх первой строки. В таблице строка
+	# центрируется на _rows_top, а её бокс начинается на 38k выше
+	# (_row_tap_rect), и без этого запаса первая строка уезжала под
+	# шапку колонок, а её галка ложилась прямо на «Про» (экран автора
+	# 3120x2080). В карточках бокс начинается ровно на _rows_top.
+	var top := _rows_top() - _row_box_lead()
+	# До кнопок — с запасом: отдельного поля ввода внизу больше нет, имя
+	# правится прямо в строке (автор 15.10.2026). Под пилюлю с пояснением
+	# галки места резервируем: иначе она ложилась на строку снизу.
+	var bottom := _buttons_y() - 20.0 * k - _hint_reserve_h()
+	var one: float = _card_nat() if _cards() else _table_step_at(k)
 	return Rect2(
 		_list_left(), top,
-		view_w - _list_left() - _pad(_CARD_PAD * k),
+		view_w - _list_left() - _edge(),
 		maxf(one, bottom - top)
 	)
+
+
+## Насколько бокс строки заходит выше _rows_top: в таблице строка
+## центрируется на нём (см. _row_tap_rect), в карточке — начинается там.
+func _row_box_lead() -> float:
+	if _cards():
+		return 0.0
+	return 38.0 * k
 
 
 ## Верх списка с поправкой на пустоту: когда все карточки влезли, они
 ## стоят по центру окна (списком сверху с дырой снизу выглядит
 ## недоделанно), а при прокрутке — от самого верха окна.
 func _list_top() -> float:
-	var free := _list_rect().size.y - float(users.size()) * _row_step()
+	var free := _list_rect().size.y - _list_all_h()
 	return _rows_top() + maxf(0.0, free * 0.5)
 
 
-## Насколько список длиннее окна: столько можно пролистать.
+## Насколько список длиннее окна: столько можно пролистать. Считаем по
+## настоящей высоте содержимого (_list_all_h — со строкой создания),
+## иначе строка «Создать нового пользователя» не листовилась вовсе.
 func _list_max_scroll() -> float:
-	return maxf(0.0, float(users.size()) * _row_step() - _list_rect().size.y)
+	return maxf(0.0, _list_all_h() - _list_rect().size.y)
+
+
+## Границы прокрутки, держащие строку фокуса целиком в окне (автор
+## 16.10.2026: выбранное всегда полностью видимо). Фокус — строка ввода,
+## пока правится имя, иначе выбранная. Обычные [0, max] плюс требование
+## «строка в окне» — пересечение. Колесо, drag и флинг дальше не уходят:
+## список стоит, а не отпускает выбранное за край.
+func _focus_scroll_bounds() -> Vector2:
+	var max_sc := _list_max_scroll()
+	if users.is_empty():
+		return Vector2(0.0, max_sc)
+	var focus := editing if editing >= 0 else sel
+	focus = clampi(focus, 0, _row_count() - 1)
+	var view := _list_rect()
+	# Бокс при нулевой прокрутке: видимость — это сдвиг sc, при котором
+	# бокс целиком внутри окна. Меряем бокс, а не линию (см. _row_box_at):
+	# иначе якорь разрешал прятать верх бокса под маской.
+	var b0 := _row_box_at(focus, 0.0)
+	var lo := maxf(0.0, b0.position.y + b0.size.y - view.end.y)
+	var hi := minf(max_sc, b0.position.y - view.position.y)
+	if lo > hi:
+		# Строка выше окна целиком (карточка с клавиатурой): держим её
+		# верх, как _scroll_to_idx.
+		lo = clampf(b0.position.y - view.position.y, 0.0, max_sc)
+		hi = lo
+	return Vector2(lo, hi)
 
 
 func _scroll_clamp(v: float) -> float:
-	return clampf(v, 0.0, _list_max_scroll())
+	var b := _focus_scroll_bounds()
+	return clampf(v, b.x, b.y)
 
 
 ## Держать выбранного игрока в окне (стрелки на клавиатуре, Enter).
 func _scroll_to_sel() -> void:
-	if not _cards() or sel < 0 or sel >= users.size():
+	_scroll_to_idx(sel)
+
+
+## Строка с индексом в окно (включая строку ввода при создании):
+## редактирование начинается с видимой строки, иначе поле под маской.
+## Бокс строки i при прокрутке sc: та же геометрия, что тапается
+## (_row_tap_rect), но при заданной прокрутке, а не текущей. Нужен для
+## расчёта цели ДО того, как список доехал: целясь линией строки, обёртка
+## через край (и возврат после создания) прятала верхнюю строку таблицы
+## под маску — её бокс начинается на 38k выше линии (автор 16.10.2026).
+func _row_box_at(i: int, sc: float) -> Rect2:
+	if _cards():
+		var view := _list_rect()
+		return Rect2(
+			view.position.x, _list_top() + float(i) * _row_step() - sc,
+			view.size.x, _card_h()
+		)
+	var cols := _table_cols()
+	var row_y := _rows_top() + float(i) * _row_step() - sc
+	# Левый край — за полосой зайчика с воздухом, а не на ней (ловил
+	# аудит 15.10.2026: бокс на 4px заходил под спрайт).
+	var x0 := _list_left() + 4.0 * k
+	return Rect2(
+		x0, row_y - 38.0 * k,
+		cols[6] + 16.0 * k - x0, _row_step() - 6.0 * k
+	)
+
+
+func _scroll_to_idx(idx: int) -> void:
+	# И таблица тоже: она листается наравне с карточками.
+	if idx < 0 or idx > users.size():
 		return
-	var step := _row_step()
+	# Двигаем ЦЕЛЬ — список догонит плавно в _process. Считаем от цели же,
+	# а не от недолетевшего факта: иначе серия стрелок копила бы ошибку.
+	# Меряем БОКС (_row_box_at), а не линию: иначе верхняя строка таблицы
+	# вставала боксом под маску (см. выше).
 	var view := _list_rect()
-	var top := _list_top() + float(sel) * step - _scroll
-	if top < view.position.y:
-		_scroll = _scroll_clamp(_scroll - (view.position.y - top))
-	var own_h: float = _card_h() if _cards() else _row_step()
-	if top + own_h > view.end.y:
-		_scroll = _scroll_clamp(_scroll + (top + own_h - view.end.y))
+	var b := _row_box_at(idx, _scroll_target)
+	if b.position.y < view.position.y or (b.size.y >= view.size.y and b.end.y > view.end.y):
+		# Выше окна — или выше окна целиком (карточка с клавиатурой:
+		# показываем верх, там поле ввода, а не низ).
+		_scroll_target = _scroll_clamp(_scroll_target - (view.position.y - b.position.y))
+	elif b.end.y > view.end.y:
+		_scroll_target = _scroll_clamp(_scroll_target + (b.end.y - view.end.y))
 	queue_redraw()
 
 
-## Строка поля ввода. В карточках — над прижатым к экрану низом: поле
-## всегда на своём месте под пальцем, сколько бы игроков ни было (список
-## листается). В таблице — как раньше, после строк.
-func _field_line_y() -> float:
-	if users.is_empty():
-		return _check_line_y() - 56.0 * k
-	return _buttons_y() - 46.0 * k
-
-
-
-## Строка галочки «Про» для вводимого имени (только пустой список): в
-## карточках — над прижатым к экрану низом, в таблице — под полем.
-func _check_line_y() -> float:
-	# Над кнопками, а не под полем: низ прижат к экрану.
-	return _buttons_y() - 40.0 * k
-
-
-
-## Галочка «Про» для вводимого имени: тот же флаг, что у профилей,
-## но до создания — переедет в профиль (см. _enter).
-func _check_tap_rect() -> Rect2:
-	var y := _check_line_y()
-	var w := _text_size("Про", FONT_ROW).x
-	return Rect2(48.0 * k, y - _tap_h(48.0 * k) * 0.5, w + 84.0 * k, _tap_h(48.0 * k))
-
-
-## Компактная галка «Ё» на пустом списке: та же строка, правее.
-func _yocheck_tap_rect() -> Rect2:
-	var y := _check_line_y()
-	var w := _text_size("Ё", FONT_ROW).x
-	return Rect2(198.0 * k, y - _tap_h(48.0 * k) * 0.5, w + 84.0 * k, _tap_h(48.0 * k))
+## Нижнего поля ввода и галок для него больше нет: имя правится прямо
+## в строке списка (автор 15.10.2026).
 
 
 ## Строка кнопок действий. В карточках — прижата к низу экрана: «Играть»
@@ -1324,10 +1845,9 @@ func _buttons_y() -> float:
 	# Низ экрана: «Играть» всегда под большим пальцем. Но когда список
 	# короткий, кнопки встают сразу под ним — иначе на высоком окне под
 	# ними дыра (жалоба автора 10.2026 про пустоту).
-	var after: float = _rows_top() + _list_all_h() + 118.0 * k \
-		+ (56.0 * k if users.is_empty() else 0.0)
+	var after: float = _rows_top() + _list_all_h() + 20.0 * k
 	return minf(
-		_menu_eff_h() - _btn_h() - _pad(14.0 * k),
+		_menu_eff_h() - _btn_h() - _edge(),
 		maxf(after, _rows_top() + _bar_h())
 	)
 
@@ -1337,12 +1857,18 @@ func _buttons_y() -> float:
 ## У карточки шаг = высота + зазор (карточки идут с зазором _CARD_GAP).
 ## На телефоне строка не ниже пальца, иначе тап по строке (игра этим
 ## игроком) мажет мимо.
+## Шаг строки таблицы при масштабе kk — _at-вариант для _fit_k.
+func _table_step_at(kk: float) -> float:
+	var step := ROW_H * kk
+	if not Ui.is_desktop():
+		step = maxf(step, 64.0)
+	return step
+
+
 func _row_step() -> float:
 	if _cards():
 		return _card_h() + _CARD_GAP * _card_k()
-	if Ui.is_desktop():
-		return ROW_H * k
-	return maxf(ROW_H * k, 64.0)
+	return _table_step_at(k)
 
 
 
@@ -1371,7 +1897,7 @@ func _card_btn_at(kk: float) -> float:
 func _card_btn() -> float:
 	if Ui.is_desktop():
 		return 56.0 * _card_k()
-	return clampf(72.0 * _card_k() * _card_fill(), 64.0, 132.0)
+	return clampf(72.0 * _card_k(), 64.0, 132.0)
 
 
 
@@ -1390,13 +1916,16 @@ func _bunny_strip() -> float:
 	if users.is_empty():
 		return 0.0
 	# Полоса не съедает окно: на очень узком экране её доля падает.
-	return minf(_bunny_w() + 16.0 * k, view_w * 0.22)
+	# В карточках зазор шире (там зайчик рядом с крупным именем), в
+	# таблице колонкам тесно — там уже.
+	var gap := 24.0 * k if _cards() else 12.0 * k
+	return minf(_bunny_w() + gap, view_w * 0.22)
 
 
 ## Левый край списка без полосы: с неё полоса и начинается.
 func _list_left0() -> float:
 	if _cards():
-		return _pad(_CARD_PAD * k)
+		return _edge()
 	return 48.0 * k
 
 
@@ -1405,7 +1934,22 @@ func _list_left() -> float:
 
 
 func _bunny_x() -> float:
-	return _list_left0() + _bunny_strip() * 0.5
+	if _bunny_strip() > 0.0:
+		return _list_left0() + _bunny_strip() * 0.5
+	# Пустой список: слева от заголовка. Не влез между кнопкой обновлений
+	# и текстом — см. _bunny_visible (тогда не рисуем вовсе).
+	var tw := _text_size(TITLE_TEXT, _title_fs()).x
+	return _title_x() - tw * 0.5 - 12.0 * k - _bunny_w() * 0.5
+
+
+## Виден ли зайчик: в своей полосе — всегда, у заголовка пустого списка —
+## только если не наезжает на кнопку обновлений (ловил аудит 15.10.2026).
+func _bunny_visible() -> bool:
+	if _bunny_strip() > 0.0:
+		return true
+	if _title_fs() <= 0:
+		return false
+	return _bunny_x() - _bunny_w() * 0.5 >= _upd_button_rect().end.x + 8.0 * k
 
 
 ## Высота, на которой зайчик должен стоять: середина строки выделения.
@@ -1413,11 +1957,12 @@ func _bunny_x() -> float:
 func _bunny_target_y() -> float:
 	if users.is_empty():
 		return top_safe + _bar_h() * 0.5
-	if _cards():
-		var c := _card_rect(sel)
-		return c.position.y + c.size.y * 0.5
-	var row_y := _rows_top() + float(sel) * _row_step()
-	return row_y - 38.0 * k + _row_step() * 0.5
+	# Цель — центр рисуемого бокса (тот же хелпер, что у отрисовки):
+	# раньше центр считался отдельной формулой без прокрутки и с другим
+	# отступом — на длинном пролистанном списке заяц вставал ниже своей
+	# строки (автор 16.10.2026: «сдвинут на 1 пункт вниз»).
+	var chip := _row_draw_rect(clampi(sel, 0, maxi(0, users.size() - 1)))
+	return chip.get_center().y
 
 
 func _bunny_pos() -> Vector2:
@@ -1522,30 +2067,18 @@ func _card_k() -> float:
 	return clampf(view_w / 600.0, 0.8, 2.4)
 
 
-## Во сколько карточка растёт на окно списка: два-три игрока — карточки
-## во всю высоту (пустоты нет, под палец просторно), а когда игроков
-## много — листятся (см. _list_max_scroll): иначе двенадцать профилей
-## ужали бы весь интерфейс до нечитаемого. Потолок 1.6 — выше имя
-## уезжает в поле.
-func _card_fill() -> float:
-	var n := maxi(users.size(), 1)
-	var gap := _CARD_GAP * _card_k() * float(n - 1)
-	return clampf(
-		(_list_rect().size.y - gap) / (float(n) * _card_nat()), 1.0, 1.35
-	)
-
-
-## Кегль внутри карточки: базовый × масштаб экрана × рост карточки.
-## Один множитель на имя, статистику и подписи кнопок — иначе карточка
-## разъезжается сама с собой, а замер берёт другой кегль (см. _clip).
+## Кегль внутри карточки: базовый × масштаб экрана. Один множитель на
+## имя, статистику и подписи кнопок — иначе карточка разъезжается сама
+## с собой, а замер берёт другой кегль (см. _clip).
 func _card_fs(base_px: int) -> int:
-	return maxi(10, int(round(float(base_px) * _card_k() * _card_fill())))
+	return maxi(10, int(round(float(base_px) * _card_k())))
 
 
-
-## Высота карточки на экране: натуральная, растянутая на окно списка.
+## Высота карточки на экране: всегда натуральная. Размер строк НЕ зависит
+## от их числа (автор 15.10.2026): мало игроков — карточки по центру окна,
+## много — лишнее уходит в прокрутку.
 func _card_h() -> float:
-	return _card_nat() * _card_fill()
+	return _card_nat()
 
 
 
@@ -1594,6 +2127,102 @@ func _card_btn_rect(i: int, which: String) -> Rect2:
 
 
 ## Флаг профиля i включён? ("pro" — все клавиши, "yo" — строгая ё).
+
+
+## Поле строчного редактора: рамка + текст + курсор. x — левый край,
+## cy — центр строки, fs — кегль, cap — ширина под текст.
+func _draw_edit_field(x: float, cy: float, fs: int, cap: float) -> void:
+	var cur_w := _text_size_fs("|", fs).x
+	var adv := _text_size_fs("н", fs).x
+	var th := float(_font_h(fs))
+	var box_w := minf(_text_size_fs(input_text, fs).x + cur_w + adv + 20.0 * k, cap)
+	var r := Rect2(x, cy - th * 0.75, maxf(box_w, cur_w + adv + 20.0 * k), th * 1.5)
+	draw_style_box(box_sb, r)
+	var shown := _clip_fs(input_text, fs, maxf(r.size.x - 20.0 * k - cur_w, 4.0)) + "|"
+	_text_fs(shown, Vector2(x + 8.0 * k, cy + th * 0.35), fs, _ink())
+
+
+## Строка под точкой: игроки из списка, -1 мимо. Строка ввода имени
+## (пока идёт создание) — тоже строка: листается вместе со всеми.
+func _row_at(pos: Vector2) -> int:
+	for i in _row_count():
+		if _row_tap_rect(i).has_point(pos):
+			return i
+	return -1
+
+
+## Начать строчное редактирование (автор 15.10.2026): ПКМ, долгое нажатие,
+## кнопка «+ Новый игрок», Insert, Tab. editing_new отличает создание от
+## переименования.
+func _start_edit(i: int) -> void:
+	editing = clampi(i, 0, users.size())
+	editing_new = editing == users.size()
+	if editing_new:
+		input_text = ""
+		input_all_keys = false
+		input_yo_strict = true
+	else:
+		input_text = users[editing]
+	input_active = true
+	_relayout()
+	_scroll_to_idx(editing)
+	queue_redraw()
+
+
+## Enter в редактировании: создание — новая строка вниз списка (без
+## автозапуска), переименование — на месте. Пустое/занятое имя —
+## остаёмся в редактировании.
+func _commit_edit() -> void:
+	if editing < 0:
+		return
+	var name := S.clean_name(input_text)
+	if name.is_empty():
+		_cancel_edit()
+		return
+	if editing_new:
+		if S.user_exists(name):
+			return
+		S.create_user(name)
+		S.set_all_keys(name, input_all_keys)
+		S.set_yo_strict(name, input_yo_strict)
+		_reload()
+		sel = users.find(name)
+		_scroll_to_sel()
+		_cancel_edit()
+		return
+	if name == users[editing]:
+		_cancel_edit()
+		return
+	if S.user_exists(name):
+		return
+	var old := users[editing]
+	if S.rename_user(old, name):
+		_reload()
+		sel = users.find(name)
+		_scroll_to_sel()
+		_cancel_edit()
+
+
+## Esc в редактировании: создание — строка исчезает, переименование —
+## возвращается прежний вид (имя в списке не трогали, оно в input_text).
+func _cancel_edit() -> void:
+	editing = -1
+	editing_new = false
+	input_text = ""
+	input_active = false
+	_relayout()
+	queue_redraw()
+
+
+## Флаг строки для отрисовки: у создаваемой — черновики из поля ввода.
+func _row_flag(i: int, which: String) -> bool:
+	if i == users.size():
+		if not editing_new:
+			return false
+		return input_all_keys if which != "yo" else input_yo_strict
+	return _flag_on(i, which)
+
+
 func _flag_on(i: int, which: String) -> bool:
 	if i < 0 or i >= users.size():
 		return false
@@ -1606,11 +2235,27 @@ func _flag_on(i: int, which: String) -> bool:
 func _row_tap_rect(i: int) -> Rect2:
 	if _cards():
 		return _card_rect(i)
-	var cols := _table_cols()
-	var row_y := _rows_top() + float(i) * _row_step() - _scroll
+	# Тот же бокс, что _row_box_at при текущей прокрутке: единый источник
+	# геометрии (см. выше).
+	return _row_box_at(i, _scroll)
+
+
+## Строка видна в окне списка (для тапов): уехавшая за край — как
+## срезанная маской, её не выбрать (см. выше).
+func _row_shown(i: int) -> bool:
+	if users.is_empty():
+		return false
+	return _list_rect().intersects(_row_tap_rect(i))
+
+
+## Нарисованная строка таблицы: тап-зона ужата сверху и снизу, чтобы
+## соседние строки не слипались (аудит 15.10.2026: 6px между боксами).
+## Центр тот же — зайчик и галочки стоят как стояли.
+func _row_draw_rect(i: int) -> Rect2:
+	var t := _row_tap_rect(i)
 	return Rect2(
-		cols[0] - 16.0 * k, row_y - 38.0 * k,
-		cols[6] - cols[0] + 32.0 * k, _row_step() - 6.0 * k
+		t.position + Vector2(0.0, 5.0 * k),
+		t.size - Vector2(0.0, 10.0 * k)
 	)
 
 
@@ -1690,8 +2335,10 @@ func _title_x() -> float:
 ## Заголовок — по центру верхней панели, между кнопкой обновлений и
 ## темой; по базовой линии он стоит чуть ниже середины кнопки.
 func _title_y() -> float:
+	# От базовой панели (без сообщения): иначе круг _bar_h → заголовок →
+	# сообщение → _bar_h (ловил сторожем: тысячи ошибок за прогон).
 	var gh: float = float(_font_h(maxi(_title_fs(), 1)))
-	return top_safe + (_bar_h() + gh) * 0.5
+	return top_safe + (_bar_base_h() + gh) * 0.5
 
 
 ## Базовая строка пояснения к галочке. В карточках — над полем ввода,
@@ -1699,10 +2346,28 @@ func _title_y() -> float:
 ## клавиатура (ловил на кадре «name-field»: текст ложился на верхний ряд
 ## клавиш). Отдельная функция, чтобы проверять положение числом
 ## (profiles_test, _part29_card_scroll).
+## Верх пилюли пояснения к галочке. Пилюля плавает над низом окна списка
+## (временный тост со сплошным фоном): в зазоре до поля ей тесно, а под
+## кнопками она уходила бы за экран. Та же точка в обоих режимах.
 func _chip_hint_y() -> float:
-	if _cards():
-		return _list_rect().end.y - 8.0 * k
-	return _buttons_y() + _btn_h() + 30.0 * k
+	# Строкой ниже рамки окна (с воздухом 6k): иначе пилюля ложилась
+	# прямо на её нижний край и перекрывала его.
+	return _list_rect().end.y + 6.0 * k
+
+
+## Высота пилюли с пояснением (одна строка + подложка).
+func _hint_pill_h() -> float:
+	return _text_size("Про: все буквы сразу, важен регистр.", FONT_SMALL).y + 16.0 * k
+
+
+## Сколько окно списка уступает пилюле. Пусто — когда пояснения нет
+## (или идёт редактирование: пилюля ложилась на поле и чипы строки).
+## Запас внутри окна, а не поверх карточек: строка, до которой пилюля
+## не дотянулась, уезжает в прокрутку.
+func _hint_reserve_h() -> float:
+	if hint_header == "" or not _cards() or editing >= 0:
+		return 0.0
+	return _hint_pill_h() + 12.0 * k
 
 
 ## Заголовки «Про»/«Ё»: тап показывает, что за галка (hint_header).
@@ -1714,7 +2379,7 @@ func _pro_head_rect() -> Rect2:
 		return Rect2()
 	var cols := _table_cols()
 	var cx := (cols[3] + cols[4]) * 0.5
-	var y := _rows_top() - 44.0 * k
+	var y := _rows_top() - 56.0 * k
 	return Rect2(cx - 48.0 * k, y - 28.0 * k, 96.0 * k, 40.0 * k)
 
 
@@ -1723,8 +2388,69 @@ func _yo_head_rect() -> Rect2:
 		return Rect2()
 	var cols := _table_cols()
 	var cx := (cols[4] + cols[5]) * 0.5
-	var y := _rows_top() - 44.0 * k
+	var y := _rows_top() - 56.0 * k
 	return Rect2(cx - 48.0 * k, y - 28.0 * k, 96.0 * k, 40.0 * k)
+
+
+## Заголовки «Ур» и «Победы»: хит-зона в той же строке шапки. Ширина — по
+## тексту с воздухом (те же 12k с каждой стороны, что у отступа имени).
+func _ur_head_rect() -> Rect2:
+	if _cards():
+		return Rect2()
+	var cols := _table_cols()
+	var y := _rows_top() - 56.0 * k
+	var w := _text_size_fs("Ур", _table_head_fs()).x + 24.0 * k
+	return Rect2(cols[1] - 12.0 * k, y - 28.0 * k, w, 40.0 * k)
+
+
+func _rec_head_rect() -> Rect2:
+	if _cards():
+		return Rect2()
+	var cols := _table_cols()
+	var y := _rows_top() - 56.0 * k
+	var w := _text_size_fs("Победы", _table_head_fs()).x + 24.0 * k
+	return Rect2(cols[2] - 12.0 * k, y - 28.0 * k, w, 40.0 * k)
+
+
+## Текст тултипа под курсором: все заголовки таблицы, кроме очевидного
+## «Имя» (автор 16.10.2026). Пусто — курсор не на заголовке или не таблица.
+func _head_tip_at(pos: Vector2) -> String:
+	if _cards() or users.is_empty():
+		return ""
+	if _ur_head_rect().has_point(pos):
+		return "Уровень: растёт с победами."
+	if _rec_head_rect().has_point(pos):
+		return "Победы / все партии."
+	if _pro_head_rect().has_point(pos):
+		return "Про: все буквы сразу, важен регистр."
+	if _yo_head_rect().has_point(pos):
+		return "Ё: без галки е засчитывается за ё."
+	return ""
+
+
+## Пузырь ховер-подсказки у курсора. Та же пилюля (hint_sb) и те же отступы,
+## что у нижней подсказки про чипы, — один стиль. К краю экрана пузырь
+## перекидывается на другую сторону курсора, а не уезжает за него.
+func _draw_hover_tip() -> void:
+	if _hover_t < HOVER_TIP_T or editing >= 0 or confirm_name != "" or _upd_open:
+		return
+	var tip := _head_tip_at(_hover_pos)
+	if tip == "":
+		return
+	var fs := int(FONT_SMALL * k)
+	var tw := _text_size_fs(tip, fs).x
+	var th := _text_size_fs(tip, fs).y
+	var w := tw + 28.0 * k
+	var h := th + 16.0 * k
+	var p := _hover_pos + Vector2(16.0 * k, 20.0 * k)
+	if p.x + w > view_w - _edge():
+		p.x = _hover_pos.x - w - 8.0 * k
+	if p.y + h > view_h - _edge():
+		p.y = _hover_pos.y - h - 8.0 * k
+	p.x = clampf(p.x, _edge(), maxf(_edge(), view_w - _edge() - w))
+	p.y = clampf(p.y, _edge(), maxf(_edge(), view_h - _edge() - h))
+	draw_style_box(hint_sb, Rect2(p, Vector2(w, h)))
+	_text_fs(tip, Vector2(p.x + 14.0 * k, p.y + 8.0 * k + th), fs, _uitext())
 
 
 ## Мелочи, из-за которых кнопку не попасть пальцем, а в чехле — тем
@@ -1756,6 +2482,16 @@ func _pad_at(p: float) -> float:
 	return p if Ui.is_desktop() else maxf(p, _PAD_MIN)
 
 
+## Внешний отступ от края окна (автор 15.10.2026: элементы липли к краям —
+## на телефоне там чехол и палец мажет, да и неэстетично). Стандартно:
+## 16k на десктопе, на сенсоре не меньше 28px.
+const _EDGE_MIN := 36.0
+
+
+func _edge() -> float:
+	return maxf(24.0 * k, 24.0 if Ui.is_desktop() else _EDGE_MIN)
+
+
 
 ## Верхняя панель меню (автор 15.10.2026): слева «Обновления», по
 ## центру «Кто играет?», справа солнце-луна. Всё, что раньше лежало в
@@ -1771,23 +2507,87 @@ func _bar_btn() -> float:
 
 ## Высота верхней панели: кнопка плюс поля, а с сообщением об
 ## обновлении — ещё строка под ним (иначе текст лёг бы на список).
-func _bar_h() -> float:
+## Высота панели без строки сообщения. Отдельная функция, чтобы разорвать
+## круг: сообщение меряется от заголовка, а заголовок — от панели.
+func _bar_base_h() -> float:
 	# Панель выше любой из двух вещей: кнопки под палец и заголовка.
 	var gh: float = float(_font_h(maxi(_title_fs(), 1)))
 	var h: float = maxf(_bar_btn(), gh if _title_fs() > 0 else 0.0)
-	return h + _bar_pad() * 2.0 + (26.0 * k if _upd_msg != "" else 0.0)
+	return h + _bar_pad() * 2.0
+
+
+func _bar_h() -> float:
+	# Строки сообщения больше нет (всё в кнопке) — высота панели
+	# постоянна и ни от чего не ездит (автор 15.10.2026).
+	return _bar_base_h()
 
 
 ## Кнопка проверки обновлений — левый край верхней панели. Ширина
 ## ограничена тем, что справа живут заголовок и тема: на узком экране
 ## кнопка ужимается, а не вылезает за поле (тест жмёт view_w до 64).
 ## Замер — тем же кеглем, каким рисует _button (26, не FONT_SMALL).
+## Подпись кнопки обновлений по состоянию. Всё — внутри кнопки:
+## раскладка от текста не ездит (автор 15.10.2026).
+func _upd_label() -> String:
+	match _upd_state:
+		"checking":
+			return "Проверка…"
+		"latest":
+			return "Обновлений нет"
+		"error":
+			return _upd_msg if _upd_msg != "" else "Ошибка"
+		"downloading":
+			if _upd_pct >= 0:
+				return "%d%%" % _upd_pct
+			return "Качаю…"
+		_:
+			if _upd_tag != "" and not _upd_open:
+				return "Установить " + _upd_tag
+			return _app_version()
+
+
+## Ширина кнопки — по самому длинному варианту подписи сразу, чтобы её
+## не приходилось расширять (автор 15.10.2026). Ошибку в ширину не
+## закладываем (текст чужой) — она ужимается клиппингом.
 func _upd_button_rect() -> Rect2:
-	var pad := _pad(12.0 * k)
+	var pad := _edge()
 	var h := _bar_btn()
-	var w := _text_size("Обновления", 26).x + 36.0 * k
+	var w := 0.0
+	# Теги версий одной длины (v0.0.x): меряем по текущей, а не по
+	# выдуманной длинной — иначе кнопка съедает полпанели.
+	for cand in [_app_version(), "Проверка…", "Обновлений нет", "Установить " + _app_version(), "100%"]:
+		w = maxf(w, _text_size(cand, 26).x)
+	w += 36.0 * k
 	var room: float = view_w - pad * 2.0 - h - 24.0 * k
 	return Rect2(pad, top_safe + _bar_pad(), minf(maxf(w, h), maxf(0.0, room)), h)
+
+
+## Кнопка обновлений: подпись-версия и состояния — внутри, заливка
+## прогресса — тоже внутри (автор 15.10.2026: никаких подписей и полос
+## снаружи, раскладка не ездит).
+func _draw_upd_button() -> void:
+	var ub := _upd_button_rect()
+	# Заливка и волна — строго внутри кнопки: снаружи им делать нечего
+	# (ловил автор 15.10.2026: волна вылезала за границы).
+	var inner := Rect2(
+		ub.position + Vector2(3.0 * k, 3.0 * k),
+		ub.size - Vector2(6.0 * k, 6.0 * k)
+	)
+	if _upd_state == "downloading" and _upd_pct >= 0:
+		var fill := Rect2(
+			ub.position, Vector2(ub.size.x * float(_upd_pct) / 100.0, ub.size.y)
+		).intersection(inner)
+		if fill.size.x > 0.0:
+			draw_rect(fill, Color(0.35, 0.62, 0.92, 0.45))
+	elif _upd_state == "checking":
+		# Процентов нет — бегущая волна: видно, что дело идёт.
+		var t := fmod(Time.get_ticks_msec() / 1000.0 * 1.2, 1.0)
+		var ww := ub.size.x * 0.35
+		var xx := ub.position.x - ww + t * (ub.size.x + ww * 2.0)
+		var wave := Rect2(xx, ub.position.y, ww, ub.size.y).intersection(inner)
+		if wave.size.x > 0.0:
+			draw_rect(wave, Color(0.35, 0.62, 0.92, 0.45))
+	_button(ub, _clip(_upd_label(), 26, maxf(ub.size.x - 16.0 * k, 10.0)))
 
 
 ## Карточка «Вышла версия?»: заголовок + заметки + две кнопки.
@@ -1817,15 +2617,7 @@ func _upd_no_rect() -> Rect2:
 	)
 
 
-## Рамка поля ввода (рисуется только когда активно, тыкается всегда).
-func _field_tap_rect() -> Rect2:
-	var y := _field_line_y()
-	var fw := _text_size(_field_text(), FONT_ROW).x
-	var x := _pad(48.0 * k)
-	return Rect2(
-		x, y - 38.0 * k,
-		minf(maxf(fw + 48.0 * k, 420.0 * k), view_w - x * 2.0), _tap_h(54.0 * k)
-	)
+## Нижнего поля ввода больше нет (см. выше).
 
 
 ## Краски текста под режим: днём константы, ночью светлые.
@@ -1856,6 +2648,7 @@ func _night_resolve() -> void:
 ## Применить ночь: панели мутируют на месте, фон переключается.
 func _apply_night() -> void:
 	_night_resolve()
+	_cols_cache = []  # на всякий случай: смена темы могла сдвинуть метрики
 	# До _ready панелей ещё нет (open зовут и до входа в дерево): красить
 	# нечего, а писать в Nil нельзя — в шаблоне это роняет игру, хотя
 	# редактор прощает (ловил segfault 15.10.2026). _ready сам красит.
@@ -1869,6 +2662,7 @@ func _apply_night() -> void:
 		selbox_sb.border_color = Color("#8b93a8")
 		hint_sb.bg_color = Color(0.10, 0.12, 0.20, 0.80)
 		hint_sb.border_color = Color("#3a4a6b")
+		list_frame_sb.border_color = Color("#3a4a6b")
 		kb_key_sb.bg_color = Color("#232c44")
 		kb_key_sb.border_color = Color("#8b93a8")
 		kb_press_sb.bg_color = Color("#6b5a2a")
@@ -1881,6 +2675,7 @@ func _apply_night() -> void:
 		selbox_sb.border_color = INK
 		hint_sb.bg_color = Color(1, 1, 1, 0.72)
 		hint_sb.border_color = Color("#e0d5bd")
+		list_frame_sb.border_color = Color("#e0d5bd")
 		kb_key_sb.bg_color = Color("#ffffff")
 		kb_key_sb.border_color = INK
 		kb_press_sb.bg_color = Color("#ffd98a")
@@ -1916,7 +2711,8 @@ func _btn_h_at(kk: float) -> float:
 
 
 
-func _play_tap_rect() -> Rect2:
+## Нижняя левая кнопка: создать нового пользователя (раньше «Играть»).
+func _new_tap_rect() -> Rect2:
 	var r := _btn_row()
 	var h := _btn_h()
 	var free := _btn_free(r)
@@ -1934,7 +2730,7 @@ func _guest_tap_rect() -> Rect2:
 ## Солнце-луна — правый край верхней панели (автор 15.10.2026).
 func _night_tap_rect() -> Rect2:
 	var h := _bar_btn()
-	var pad := _pad(12.0 * k)
+	var pad := _edge()
 	return Rect2(view_w - pad - h, top_safe + _bar_pad(), h, h)
 
 
@@ -1944,12 +2740,12 @@ func _night_tap_rect() -> Rect2:
 ## визуального прогона 10.2026). Теперь ряд всегда в границах
 ## экрана, а оставшееся место делят «Играть» и «Без профиля».
 func _btn_row() -> Rect2:
-	var m := _pad(12.0 * k)
+	var m := _edge()
 	return Rect2(m, _buttons_y(), view_w - m * 2.0, _btn_h())
 
 
 func _btn_gap() -> float:
-	return 12.0 * k
+	return 16.0 * k
 
 
 ## Свободная ширина ряда кнопок (ночная кнопка уехала наверх, 15.10.2026).
@@ -2004,8 +2800,10 @@ func _check_on() -> bool:
 ## Кнопка-пилюля с подписью по центру. Кегль ужимается под ширину
 ## кнопки: на телефоне с плотностью «Без профиля» на 26k не влезала
 ## и подпись вылезала за край.
-func _button(r: Rect2, label: String) -> void:
-	draw_style_box(hint_sb, r)
+func _button(r: Rect2, label: String, focused := false) -> void:
+	# Сфокусированная кнопка залита, как выбранная галка (selbox_sb):
+	# иначе в модалке не видно, где стоит выделение.
+	draw_style_box(selbox_sb if focused else hint_sb, r)
 	var fs := int(26.0 * k)
 	# Замер — null-безопасный: _draw исполняется, даже пока шрифта нет.
 	while fs > 10 and _text_size_fs(
@@ -2081,111 +2879,45 @@ func _draw() -> void:
 			_ink()
 		)
 	# Зайчик — либо в своей полосе слева от списка (и прыгает по строкам),
-	# либо у заголовка, пока список пуст.
-	_draw_bunny(_bunny_pos())
-	if users.is_empty():
-		_text(
-			"Пока нет сохранённых игроков",
-			Vector2(cx - _text_size("Пока нет сохранённых игроков", FONT_ROW).x * 0.5, y),
-			FONT_ROW,
-			_dim()
-		)
-	y = _field_line_y()
-	# Компактные галки для вводимого имени — только когда список пуст
-	# (иначе флаги живут в колонках таблицы). Обе в одну строку:
-	# места хватает, раскладку не двигаем. Выбранную стрелками колонку
-	# обводим (пробел переключает её флаг).
-	if users.is_empty():
-		var cy := _check_line_y()
-		var ychk_col := Color("#f2ede0") if night else INK
-		var pro_box0 := selbox_sb if sel_col == 0 else box_sb
-		draw_style_box(pro_box0, Rect2(60.0 * k, cy - 32.0 * k, 32.0 * k, 32.0 * k))
-		var pro_chk0 := INK if sel_col == 0 else ychk_col
-		if _check_on():
-			draw_line(
-				Vector2(66.0 * k, cy - 12.0 * k), Vector2(76.0 * k, cy - 2.0 * k),
-				pro_chk0, 4.0 * k
-			)
-			draw_line(
-				Vector2(76.0 * k, cy - 2.0 * k), Vector2(92.0 * k, cy - 26.0 * k),
-				pro_chk0, 4.0 * k
-			)
-		_text("Про", Vector2(104.0 * k, cy), FONT_ROW, _ink())
-		var yob := 210.0 * k
-		var yo_box0 := selbox_sb if sel_col == 1 else box_sb
-		draw_style_box(yo_box0, Rect2(yob, cy - 32.0 * k, 32.0 * k, 32.0 * k))
-		var yo_chk0 := INK if sel_col == 1 else ychk_col
-		if input_yo_strict:
-			draw_line(
-				Vector2(yob + 6.0 * k, cy - 12.0 * k), Vector2(yob + 16.0 * k, cy - 2.0 * k),
-				yo_chk0, 4.0 * k
-			)
-			draw_line(
-				Vector2(yob + 16.0 * k, cy - 2.0 * k), Vector2(yob + 32.0 * k, cy - 26.0 * k),
-				yo_chk0, 4.0 * k
-			)
-		_text("Ё", Vector2(yob + 44.0 * k, cy), FONT_ROW, _ink())
-	# Поле ввода нового имени. Рамка — только когда активно, а тыкается
-	# всегда: тап включает ввод, как Tab.
-	var field_txt := _field_text()
-	if input_active:
-		draw_style_box(box_sb, _field_tap_rect())
-	_text(
-		field_txt,
-		Vector2(60.0 * k, y),
-		FONT_ROW,
-		_ink() if input_active else _dim()
-	)
+	# либо у заголовка, пока список пуст (если влез, см. _bunny_visible).
+	if _bunny_visible():
+		_draw_bunny(_bunny_pos())
+	# Нижнего поля и галок для него больше нет: всё правится в строках.
 	# Кнопки действий: та же механика, что Enter и Esc, но пальцем.
 	# Третья — ночь: иконка показывает, во что переключит.
-	_button(_play_tap_rect(), "Играть")
+	_button(_new_tap_rect(), "+ Новый игрок")
 	_button(_guest_tap_rect(), "Без профиля")
 	_draw_own_kb()
 	# Пояснение галки по тапу на заголовок — строкой под кнопками.
-	# Модалка его перекрывает (рисуется позже поверх).
-	if hint_header != "" and confirm_name == "":
+	# Модалка его перекрывает (рисуется позже поверх). В редактировании
+	# не показываем: пилюля ложилась прямо на поле и чипы строки.
+	if hint_header != "" and confirm_name == "" and editing < 0:
 		var expl: Array[String] = []
 		if hint_header == "pro":
 			expl = ["Про: все буквы сразу, важен регистр."]
 		else:
 			expl = ["Ё: без галки е засчитывается за ё."]
-		# Пояснение — всплывающая подсказка: в карточках оно лежит над
-		# полем ввода, внутри окна списка. Под кнопками ему места нет —
-		# низ прижат к экрану, и там своя клавиатура (ловил на кадре
-		# «name-field»: текст ложился на верхний ряд клавиш).
+		# Пояснение — пилюля в своём зазоре (см. _chip_hint_y): текст без
+		# подложки ложился на карточки и читался как грязь.
 		var ey := _chip_hint_y()
 		for li in expl.size():
 			var lw := _text_size(expl[li], FONT_SMALL).x
+			var base := ey + 8.0 * k + _text_size(expl[li], FONT_SMALL).y
+			draw_style_box(
+				box_sb,
+				Rect2(
+					view_w * 0.5 - lw * 0.5 - 14.0 * k, ey,
+					lw + 28.0 * k, base - ey + 8.0 * k
+				)
+			)
 			_text(
-				expl[li], Vector2(view_w * 0.5 - lw * 0.5, ey + 30.0 * k * float(li)),
+				expl[li], Vector2(view_w * 0.5 - lw * 0.5, base),
 				FONT_SMALL, _uitext()
 			)
 	# Кнопка проверки обновлений слева вверху + строка состояния.
 	# На десктопе и телефоне одинаково: проверка — обычный HTTP.
-	var ub := _upd_button_rect()
-	_button(ub, "Обновления")
+	_draw_upd_button()
 	_draw_daynight(_night_tap_rect())
-	if _upd_msg != "":
-		var mw := _text_size(_upd_msg, FONT_SMALL).x
-		_text(
-			_upd_msg,
-			Vector2(
-				(view_w - mw) * 0.5,
-				ub.position.y + ub.size.y + 20.0 * k
-			),
-			FONT_SMALL, _uitext()
-		)
-		# Полоса прогресса закачки: видно, что дело идёт, и сколько ждать
-		# (жалоба автора 10.2026: «было бы зорово видеть прогресс»).
-		if _upd_state == "downloading" and _upd_pct >= 0:
-			var bar := Rect2(
-				_pad(16.0 * k), ub.position.y + ub.size.y + 44.0 * k,
-				view_w - _pad(16.0 * k) * 2.0, 14.0 * k
-			)
-			draw_rect(bar, Color(0.18, 0.17, 0.14, 0.55))
-			var fill := bar
-			fill.size.x = bar.size.x * (float(_upd_pct) / 100.0)
-			draw_rect(fill, Color(0.35, 0.62, 0.92))
 	# Модалка «Вышла версия?» — поверх всего, кроме удаления
 	# (удаление первее: его ветка ввода раньше).
 	if _upd_open:
@@ -2226,52 +2958,53 @@ func _draw() -> void:
 			Vector2(card.get_center().x - qw * 0.5, card.position.y + 62.0 * k),
 			FONT_ROW, _ink()
 		)
-		_button(_confirm_yes_rect(), "Да")
-		_button(_confirm_no_rect(), "Нет")
+		_button(_confirm_yes_rect(), "Да", confirm_sel == 0)
+		_button(_confirm_no_rect(), "Нет", confirm_sel == 1)
 
 
 ## Таблица игроков (широкий экран, десктоп): шапка колонок + строки.
-## Тап по строке сразу играет этим игроком, тап по галочке — только
-## флаг, тап по крестику — удаление с подтверждением. Тап по
-## заголовку «Про»/«Ё» объясняет галку. Выбранная стрелками колонка
-## подсвечена в шапке (пробел переключает её флаг).
+## Тап по строке только выделяет, играет дабл-клик или Enter; тап по
+## галочке — только флаг, тап по крестику — удаление с подтверждением.
+## Тап по заголовку «Про»/«Ё» объясняет галку. Выбранная стрелками
+## колонка подсвечена в шапке (пробел переключает её флаг).
 func _draw_table() -> void:
 	var y := _rows_top()
-	# Таблица игроков: шапка + строки во всю ширину. Тап по строке
-	# сразу играет этим игроком, тап по галочке — только флаг,
-	# тап по крестику — удаление с подтверждением. Тап по заголовку
-	# «Про»/«Ё» объясняет галку. Выбранная стрелками колонка подсвечена
-	# в шапке (пробел переключает её флаг).
-	if not users.is_empty():
-		var hcols := _table_cols()
-		_text("Имя", Vector2(hcols[0], y - 44.0 * k), FONT_SMALL, _dim())
-		_text("Ур", Vector2(hcols[1], y - 44.0 * k), FONT_SMALL, _dim())
-		_text("Победы", Vector2(hcols[2], y - 44.0 * k), FONT_SMALL, _dim())
-		var pro_hw := _text_size("Про", FONT_SMALL).x
-		_text(
-			"Про",
-			Vector2((hcols[3] + hcols[4]) * 0.5 - pro_hw * 0.5, y - 44.0 * k),
-			FONT_SMALL, _ink() if sel_col == 0 else _dim()
-		)
-		var yo_hw := _text_size("Ё", FONT_SMALL).x
-		_text(
-			"Ё",
-			Vector2((hcols[4] + hcols[5]) * 0.5 - yo_hw * 0.5, y - 44.0 * k),
-			FONT_SMALL, _ink() if sel_col == 1 else _dim()
-		)
-	for i in users.size():
+	# Таблица игроков: строки во всю ширину. Тап по строке только
+	# выделяет, тап по галочке — только флаг, тап по крестику —
+	# удаление с подтверждением. Шапка колонок рисуется ПОСЛЕ строк и
+	# своей полосой бумаги: строка таблицы центрируется на _rows_top и
+	# уезжает на полстроки вверх — бокс первой строки ложился прямо на
+	# подписи «Про»/«Ё» (экран автора 3120x2080).
+	var view := _list_rect()
+	for i in _row_count():
 		var row_y := y + float(i) * _row_step() - _scroll
+		if row_y > view.end.y or row_y + _row_step() < view.position.y:
+			continue
 		var cols := _table_cols()
-		var chip := _row_tap_rect(i)
+		var chip := _row_draw_rect(i)
 		draw_style_box(row_sb if i == sel else row_idle_sb, chip)
 		# Выбранная строка всегда на жёлтом — тёмным текстом.
 		var tcol := INK if i == sel else _ink()
-		_text(
-			_short_name(users[i]), Vector2(cols[0], row_y), FONT_ROW, tcol
-		)
-		var cells := _cell_texts(users[i])
-		_text(cells[0], Vector2(cols[1], row_y), FONT_ROW, tcol)
-		_text(cells[1], Vector2(cols[2], row_y), FONT_ROW, tcol)
+		var cy := chip.get_center().y
+		if editing == i:
+			# Редактируем: поле вместо имени.
+			_draw_edit_field(cols[0] + 8.0 * k, cy, int(FONT_ROW * k), cols[1] - cols[0] - 16.0 * k)
+		else:
+			# Имя с отступом от края бокса (автор 15.10.2026: примыкало),
+			# по вертикали — в центре рисуемой строки.
+			var nm := _short_name(users[i])
+			var nfs := _table_name_fs(users[i])
+			_text_fs(
+				nm,
+				Vector2(cols[0] + 8.0 * k, cy + float(_font_h(nfs)) * 0.35),
+				nfs, tcol
+			)
+		if not (editing == i and editing_new):
+			# У создаваемого профиля статистики нет — только поле и чипы.
+			var cells := _cell_texts(users[i])
+			var cfs := _table_cell_fs()
+			_text_fs(cells[0], Vector2(cols[1], row_y), cfs, tcol)
+			_text_fs(cells[1], Vector2(cols[2], row_y), cfs, tcol)
 		# Галочка «Про» по центру своей колонки. Цвет — от БОКСА, а не
 		# от строки: бокс белый днём и тёмный ночью, а цвет строки
 		# (tcol) на выбранной строке тёмный всегда — ночью галочка
@@ -2288,50 +3021,99 @@ func _draw_table() -> void:
 			else:
 				yo_box = selbox_sb
 		var pcx := (cols[3] + cols[4]) * 0.5
-		draw_style_box(pro_box, Rect2(pcx - 16.0 * k, row_y - 32.0 * k, 32.0 * k, 32.0 * k))
+		draw_style_box(pro_box, Rect2(pcx - 16.0 * k, cy - 16.0 * k, 32.0 * k, 32.0 * k))
 		# Галка на залитом боксе — тёмная всегда (заливка светлая
 		# в обеих темах), на обычном — от темы.
 		var pro_chk := INK if pro_box == selbox_sb else chk_col
-		if bool(S.load_profile(users[i]).get("all_keys", false)):
+		if _row_flag(i, "pro"):
 			draw_line(
-				Vector2(pcx - 10.0 * k, row_y - 12.0 * k),
-				Vector2(pcx, row_y - 2.0 * k),
+				Vector2(pcx - 10.0 * k, cy + 4.0 * k),
+				Vector2(pcx, cy + 14.0 * k),
 				pro_chk, 4.0 * k
 			)
 			draw_line(
-				Vector2(pcx, row_y - 2.0 * k),
-				Vector2(pcx + 16.0 * k, row_y - 26.0 * k),
+				Vector2(pcx, cy + 14.0 * k),
+				Vector2(pcx + 16.0 * k, cy - 10.0 * k),
 				pro_chk, 4.0 * k
 			)
 		# Галочка «Ё» по центру своей колонки: тот же бокс, тот же цвет.
 		var ycx := (cols[4] + cols[5]) * 0.5
-		draw_style_box(yo_box, Rect2(ycx - 16.0 * k, row_y - 32.0 * k, 32.0 * k, 32.0 * k))
+		draw_style_box(yo_box, Rect2(ycx - 16.0 * k, cy - 16.0 * k, 32.0 * k, 32.0 * k))
 		var yo_chk := INK if yo_box == selbox_sb else chk_col
-		if bool(S.load_profile(users[i]).get("yo_strict", true)):
+		if _row_flag(i, "yo"):
 			draw_line(
-				Vector2(ycx - 10.0 * k, row_y - 12.0 * k),
-				Vector2(ycx, row_y - 2.0 * k),
+				Vector2(ycx - 10.0 * k, cy + 4.0 * k),
+				Vector2(ycx, cy + 14.0 * k),
 				yo_chk, 4.0 * k
 			)
 			draw_line(
-				Vector2(ycx, row_y - 2.0 * k),
-				Vector2(ycx + 16.0 * k, row_y - 26.0 * k),
+				Vector2(ycx, cy + 14.0 * k),
+				Vector2(ycx + 16.0 * k, cy - 10.0 * k),
 				yo_chk, 4.0 * k
 			)
-		# Крестик удаления по центру своей колонки.
+		# Крестик: удаление у игроков, отмена в редактировании.
 		var dcx := (cols[5] + cols[6]) * 0.5
 		var dtxt := "✕"
 		var dw := _text_size(dtxt, FONT_ROW)
 		_text(dtxt, Vector2(dcx - dw.x * 0.5, row_y), FONT_ROW, _danger())
+	_draw_top_mask(view)
+	_draw_list_mask(view)
+	_draw_table_head()
+	_draw_scrollbar()
+	_draw_list_frame(view)
+	_draw_hover_tip()
+
+
+## Шапка колонок: имена столбцов над строками. Рисуется после верхней
+## маски (см. _draw_top_mask), поэтому её нельзя перекрыть ни строкой,
+## ни её боксом.
+func _draw_table_head() -> void:
+	if users.is_empty():
+		return
+	var y := _rows_top() - 56.0 * k
+	var hcols := _table_cols()
+	var hfs := _table_head_fs()
+	_text_fs("Имя", Vector2(hcols[0] + 8.0 * k, y), hfs, _dim())
+	_text_fs("Ур", Vector2(hcols[1], y), hfs, _dim())
+	_text_fs("Победы", Vector2(hcols[2], y), hfs, _dim())
+	var pro_hw := _text_size_fs("Про", hfs).x
+	_text_fs(
+		"Про",
+		Vector2((hcols[3] + hcols[4]) * 0.5 - pro_hw * 0.5, y),
+		hfs, _ink() if sel_col == 0 else _dim()
+	)
+	var yo_hw := _text_size_fs("Ё", hfs).x
+	_text_fs(
+		"Ё",
+		Vector2((hcols[4] + hcols[5]) * 0.5 - yo_hw * 0.5, y),
+		hfs, _ink() if sel_col == 1 else _dim()
+	)
+
+
+## Маска над окном списка: непрозрачная полоса от верха экрана до окна.
+## Строка, ушедшая вверх при прокрутке, обрезается ею, а не лезет на шапку
+## колонок и выше — за рамку (автор 16.10.2026). Короткой полосы хватало,
+## только пока список не листали: уехавшая далеко строка показывалась над
+## ней, в зоне заголовка. Шапка колонок, зайчик и верхняя панель рисуются
+## позже поверх маски, их она не трогает.
+func _draw_top_mask(view: Rect2) -> void:
+	if view.position.y <= 0.0:
+		return
+	var paper := Color("#141a2c") if night else PAPER
+	draw_rect(
+		Rect2(Vector2.ZERO, Vector2(view_w, view.position.y)),
+		paper
+	)
 
 
 ## Карточки игроков: три своих ряда (имя во всю ширину, статистика,
 ## три равные кнопки под палец) плюс маска снизу — список листается,
 ## и карточка, ушедшая за окно, не лезет на поле ввода. Тап по строке
-## играет этим игроком, тап по кнопке — только флаг, крестик удаляет.
+## только выделяет (играет дабл-клик или Enter), тап по кнопке — только
+## флаг, крестик удаляет.
 func _draw_cards() -> void:
 	var view := _list_rect()
-	for i in users.size():
+	for i in _row_count():
 		var card := _card_rect(i)
 		if card.position.y > view.end.y or card.end.y < view.position.y:
 			continue
@@ -2340,22 +3122,29 @@ func _draw_cards() -> void:
 		var tcol := INK if i == sel else _ink()
 		var x := card.position.x + _CARD_IN * k
 		var inner := card.size.x - _CARD_IN * k * 2.0
-		# Ряд 1: имя во всю ширину (обрезка — в _short_name).
-		var name := _short_name(users[i])
-		var nfs := _card_name_fs(name)
-		var nsz := _text_size_fs(name, nfs).y
-		var ny := card.position.y + _CARD_PAD * k + nsz
-		_text_fs(name, Vector2(x, ny), nfs, tcol)
+		if editing == i:
+			# Редактируем: поле вместо имени.
+			var efs := _card_fs(FONT_CARD_NAME)
+			_draw_edit_field(x, card.position.y + _CARD_PAD * k + float(_font_h(efs)) * 0.65, efs, inner)
+		else:
+			# Ряд 1: имя во всю ширину (обрезка — в _short_name).
+			var name := _short_name(users[i])
+			var nfs := _card_name_fs(name)
+			var nsz := _text_size_fs(name, nfs).y
+			var ny := card.position.y + _CARD_PAD * k + nsz
+			_text_fs(name, Vector2(x, ny), nfs, tcol)
 		# Ряд 2: статистика во всю ширину, мелко и приглушённо.
-		var cells := _cell_texts(users[i])
-		var sfs := _card_fs(FONT_CARD_STATS)
-		var stat := _clip_fs("%s · %s" % [cells[0], cells[1]], sfs, inner)
-		var ssz := _text_size_fs(stat, sfs).y
-		var sy := ny + 8.0 * k + ssz
-		_text_fs(stat, Vector2(x, sy), sfs, _uitext() if i != sel else INK)
+		# У создаваемого профиля её нет — только поле и чипы.
+		if not (editing == i and editing_new):
+			var cells := _cell_texts(users[i])
+			var sfs := _card_fs(FONT_CARD_STATS)
+			var stat := _clip_fs("%s · %s" % [cells[0], cells[1]], sfs, inner)
+			var ssz := _text_size_fs(stat, sfs).y
+			var sy := card.position.y + _CARD_PAD * k + float(_font_h(_card_fs(FONT_CARD_NAME))) + 8.0 * k + ssz
+			_text_fs(stat, Vector2(x, sy), sfs, _uitext() if i != sel else INK)
 		_card_chip(i, "pro", "Про")
 		_card_chip(i, "yo", "Ё")
-		# Крестик удаления — третьим в ряду, справа от галочек.
+		# Крестик: удаление у игроков, отмена в редактировании.
 		var del := _card_btn_rect(i, "del")
 		draw_style_box(box_sb, del)
 		var dfs := _card_fs(FONT_ROW)
@@ -2369,18 +3158,52 @@ func _draw_cards() -> void:
 			),
 			dfs, _danger()
 		)
+	_draw_top_mask(view)
 	_draw_list_mask(view)
+	_draw_scrollbar()
+	_draw_list_frame(view)
 
 
-## Маска под окном списка: непрозрачная полоса между окном и полем
-## ввода. Карточка, уехавшая вниз при прокрутке, обрезается ею, а не
-## ложится на «Имя:». Сверху маски не нужно: прокрутка ограничена
-## так, что первая карточка не поднимается выше окна.
+## Скроллбар списка (автор 15.10.2026: когда пунктов много): тонкая
+## полоса у правого края окна, бегунок — доля видимого. Рисуем поверх
+## маски, чтобы был виден всегда, пока список листается.
+func _draw_scrollbar() -> void:
+	var max_sc := _list_max_scroll()
+	if max_sc <= 0.0 or users.is_empty():
+		return
+	# Цвета — от темы: тёмный бегунок на тёмном фоне ночью было практически
+	# не видно (автор 16.10.2026). Днём — тёмный на бумаге, ночью — светлый
+	# на тёмном, той же семьи, что ночные обводки (#8b93a8).
+	var view := _list_rect()
+	var w := maxf(5.0 * k, 4.0)
+	var x := view.end.x - w - 3.0 * k
+	var track_col := Color(0.2, 0.18, 0.14, 0.18) if not night else Color(1, 1, 1, 0.10)
+	var thumb_col := Color(0.2, 0.18, 0.14, 0.65) if not night else Color("#9aa3b8")
+	draw_rect(Rect2(x, view.position.y, w, view.size.y), track_col)
+	var th := maxf(24.0 * k, view.size.y * view.size.y / (view.size.y + max_sc))
+	var ty := view.position.y + (view.size.y - th) * (_scroll / max_sc)
+	draw_rect(Rect2(x, ty, w, th), thumb_col)
+
+
+## Рамка вокруг окна списка (автор 16.10.2026: списку не хватало рамки).
+## Скруглённый тихий контур в стиле пилюли-подсказки: граница области
+## видна, но не выбивается. Контент из-под неё не выглядывает (низ держит
+## _list_end_pad).
+func _draw_list_frame(view: Rect2) -> void:
+	if list_frame_sb == null:
+		return
+	draw_style_box(list_frame_sb, view)
+
+
+## Маска под окном списка: непрозрачная полоса между окном и кнопками.
+## Уехавшая вниз при прокрутке строка обрезается ею. Сверху маски не
+## нужно: прокрутка ограничена так, что первая строка не поднимается
+## выше окна.
 func _draw_list_mask(view: Rect2) -> void:
 	var paper := Color("#141a2c") if night else PAPER
 	draw_rect(
 		Rect2(
-			Vector2(0.0, view.end.y), Vector2(view_w, _field_line_y() - view.end.y)
+			Vector2(0.0, view.end.y), Vector2(view_w, _buttons_y() - view.end.y)
 		),
 		paper
 	)
@@ -2392,7 +3215,7 @@ func _draw_list_mask(view: Rect2) -> void:
 func _card_chip(i: int, which: String, label: String) -> void:
 	var r := _card_btn_rect(i, which)
 	var lit := i == sel and sel_col == (0 if which == "pro" else 1)
-	var on := _flag_on(i, which)
+	var on := _row_flag(i, which)
 	draw_style_box(selbox_sb if lit else (row_sb if on else box_sb), r)
 	var fs := _card_fs(FONT_ROW)
 	var sz := _text_size_fs(label, fs)

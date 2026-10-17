@@ -5,6 +5,32 @@ extends RefCounted
 ## Чистые статики, состояния нет.
 
 
+## Замер строки с ЗАПОМИНАНИЕМ по (шрифт, текст, кегль). Замеры идут
+## на каждом кадре — у каждой клавиши доски, у каждой подписи, в цикле
+## обрезки длинного текста, — а font.get_string_size ходит в раскладку
+## шрифта каждый раз (ревизия 16.10.2026). Ключи ограничены тем, что
+## реально рисуют: подписи доски, имена игроков, строки подсказок.
+static var _tsize: Dictionary = {}
+
+
+static func text_size(font: Font, txt: String, fs: int) -> Vector2:
+	if font == null:
+		# Шрифта ещё нет (сцена монтируется): грубая оценка, как раньше.
+		return Vector2(float(txt.length()) * float(fs) * 0.6, float(fs))
+	var fid: int = font.get_instance_id()
+	var by_text: Dictionary = _tsize.get(fid, {})
+	var by_fs: Variant = by_text.get(txt)
+	if by_fs is Dictionary and (by_fs as Dictionary).has(fs):
+		return by_fs[fs]
+	var sz := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs)
+	if not by_fs is Dictionary:
+		by_fs = {}
+		by_text[txt] = by_fs
+	by_fs[fs] = sz
+	_tsize[fid] = by_text
+	return sz
+
+
 ## Скруглённая панель: тень — только у больших карточек, радиусы
 ## в пикселях (без пересоздания стилей при каждом ресайзе).
 static func panel_sb(bg: Color, radius: float, border := Color(0, 0, 0, 0), bw := 0.0, shadow := false) -> StyleBoxFlat:

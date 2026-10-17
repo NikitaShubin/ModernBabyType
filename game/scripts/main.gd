@@ -1255,6 +1255,15 @@ func _advance() -> void:
 			_finish(true)
 			return
 		if _hard_line(cursor_line):
+			# Ввод заблокирован, пока не открыт весь центральный ряд букв
+			# этого текста (автор 16.10.2026): серый автопропуск проходит
+			# такие переносы сам. Иначе новичок с «а, о, пробел» упирался
+			# бы в ↵ на первых же строках — до того, как выучил ряд.
+			if not _enter_unlocked():
+				cursor_line += 1
+				cursor_pos = -1
+				need_enter = false
+				continue
 			need_enter = true
 			return
 		# Обычный перенос: едем на следующую строку сами. Позиция -1 —
@@ -2722,15 +2731,26 @@ func _verdict(typed: String) -> String:
 
 ## Заливка вспышки с учётом вердикта и оставшегося времени: затухание
 ## плавное, последние кадры почти прозрачны (автор 10.2026: «затухание
-## не мгновенным»).
+## не мгновенным»). Панели ДВА и создаются раз за жизнь: раньше здесь
+## каждый кадр рождался новый StyleBoxFlat (ревизия 16.10.2026).
+var _press_sb_fade_ok: StyleBoxFlat
+var _press_sb_fade_err: StyleBoxFlat
+
+
 func _press_sb() -> StyleBox:
+	if _press_sb_fade_ok == null:
+		_press_sb_fade_ok = Ui.panel_sb(Color(1, 1, 1, 0), 10.0, Color("#4a4438"), 2.5, false)
+		_press_sb_fade_err = Ui.panel_sb(Color(1, 1, 1, 0), 10.0, Color("#4a4438"), 2.5, false)
 	var src: StyleBoxFlat = kb_press_ok_sb if kb_press_ok else kb_press_err_sb
+	var dst: StyleBoxFlat = _press_sb_fade_ok if kb_press_ok else _press_sb_fade_err
 	var k: float = clampf(kb_press_t / KB_FLASH_T, 0.0, 1.0)
 	var c := src.bg_color
 	c.a *= k
 	var b := src.border_color
 	b.a *= k
-	return Ui.panel_sb(c, 10.0, b, 2.5, false)
+	dst.bg_color = c
+	dst.border_color = b
+	return dst
 
 
 ## Показывает ли доска ввод ↵. Пока часть букв текста ещё серая
@@ -2755,6 +2775,15 @@ func _kb_enter_shown() -> bool:
 	# не касается (автор 10.2026: «разблокировал бы клавишу энтер после
 	# того, как разблокирован весь центральный ряд букв, а не в самом
 	# конце»).
+	return _enter_unlocked()
+
+
+## Ввод ↵ разблокирован: весь центральный ряд ЭТОГО текста уже открыт
+## (или режим «все клавиши»). Та же проверка сторожит и ожидание переноса
+## в _advance: заблокированный перенос серый автопропуск проходит сам.
+func _enter_unlocked() -> bool:
+	if _all_keys():
+		return true
 	for want in home_chars:
 		if not _is_active(want):
 			return false
@@ -3079,12 +3108,12 @@ func _draw_title() -> void:
 
 ## Ужать строку в ширину: длинное режем с многоточием.
 func _short_text(t: String, fs: int, max_w: float) -> String:
-	if mono.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x <= max_w:
+	# Замеры с кэшем (Ui.text_size): тут цикл замеров на каждый обрезаемый
+	# символ, а функция зовётся на каждом кадре (ревизия 16.10.2026).
+	if Ui.text_size(mono, t, fs).x <= max_w:
 		return t
 	var out := t
-	while out.length() > 1 and mono.get_string_size(
-		out + "…", HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs
-	).x > max_w:
+	while out.length() > 1 and Ui.text_size(mono, out + "…", fs).x > max_w:
 		out = out.left(out.length() - 1)
 	return out + "…"
 

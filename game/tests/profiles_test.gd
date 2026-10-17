@@ -290,6 +290,10 @@ func _part6_navigation() -> void:
 		_menu.chosen.connect(_on_chosen)
 	var ti: int = _menu.users.find("Снос3")
 	_menu.sel = ti
+	# Строка обязана быть в окне: тап за окном список игнорирует (как глаз
+	# — маска), поэтому сначала крутим к выбранному, как стрелки.
+	_menu.call("_scroll_to_sel")
+
 	_menu_tap(_menu.call("_del_tap_rect", ti).get_center())
 	printerr("DBG vw=", _menu.view_w, " k=", _menu.k, " touch=", Ui.force_touch, " cols=", _menu._table_cols(), " del=", Rect2(_menu.call("_del_tap_rect", ti)))
 	_check(
@@ -417,8 +421,10 @@ func _part9_main_game() -> void:
 	# проводка от тапа до сигнала chosen.
 	_picked = ""
 	var gpos: Vector2 = menu.call("_guest_tap_rect").get_center()
+
 	menu.call("_input", _tap(gpos))
 	menu.call("_input", _release(gpos))
+
 	_check(not _main.menu_open, "guest choice closes the menu")
 	_check(_main.profile_name == S.GUEST, "guest choice switches to guest")
 	_check(_main.state == "playing", "guest choice starts the game")
@@ -1793,8 +1799,20 @@ func _part31_menu_no_overlap() -> void:
 	Ui.force_touch = was_touch
 
 
-## Один случай матрицы: все прямоугольники меню попарно не пересекаются
-## и лежат на экране. Прямоугольники — те же функции, что рисует _draw.
+## Один случай матрицы: все рисуемые прямоугольники меню попарно не
+## пересекаются и стоят с воздухом (автор 15.10.2026: «умеренно плотно»,
+## тексты не липнут друг к другу). Пороги в k: тексты ≥12k, боксы ≥10k,
+## спрайт зайчика ≥6k. Тап-зоны здесь не меряем: они вложены по
+## построению (кнопка в карточке, чип в строке) и проверяются порядком
+## в _input, а не геометрией.
+func _menu_gap(a: Rect2, b: Rect2) -> float:
+	if a.intersects(b):
+		return -1.0
+	var dx := maxf(0.0, maxf(a.position.x - b.end.x, b.position.x - a.end.x))
+	var dy := maxf(0.0, maxf(a.position.y - b.end.y, b.position.y - a.end.y))
+	return Vector2(dx, dy).length()
+
+
 func _overlap_case(sz: Vector2i, n_users: int, msg: String, night: bool) -> void:
 	_menu.view_w = float(sz.x)
 	_menu.view_h = float(sz.y)
@@ -1802,6 +1820,8 @@ func _overlap_case(sz: Vector2i, n_users: int, msg: String, night: bool) -> void
 	_menu.night = night
 	_menu._upd_msg = msg
 	_menu.input_active = false
+	_menu.confirm_name = ""
+	_menu.hint_header = ""
 	var names: Array[String] = []
 	for i in n_users:
 		names.append("Игрок%d" % i)
@@ -1814,69 +1834,78 @@ func _overlap_case(sz: Vector2i, n_users: int, msg: String, night: bool) -> void
 			* Ui.dpr(), 0.7, 2.5), 0.7)
 	var tag := "%dx%d n=%d msg=%d night=%d" % [
 		sz.x, sz.y, n_users, 0 if msg == "" else 1, 1 if night else 0]
-	# Верхняя панель.
-	var parts := [
+	var k: float = _menu.k
+	# Прямоугольники рисуемого (боксы, кнопки, тексты, спрайт).
+	var bar := [
 		["обновления", Rect2(_menu.call("_upd_button_rect"))],
 		["тема", Rect2(_menu.call("_night_tap_rect"))],
-		["заголовок", Rect2(
-			Vector2(
-				float(_menu.call("_title_x"))
-					- _menu.call("_text_size", "Кто играет?", _menu.call("_title_fs")).x * 0.5,
-				float(_menu.call("_title_y"))
-					- _menu.mono.get_height(_menu.call("_title_fs"))
-			),
-			Vector2(
-				_menu.call("_text_size", "Кто играет?", _menu.call("_title_fs")).x,
-				_menu.mono.get_height(_menu.call("_title_fs"))
-			)
-		)],
 	]
-	for a in parts.size():
-		for b in range(a + 1, parts.size()):
-			var ra: Rect2 = parts[a][1]
-			var rb: Rect2 = parts[b][1]
-			if ra.size.x > 1.0 and rb.size.x > 1.0:
-				_check(
-					not ra.intersects(rb),
-					"%s: %s overlaps %s" % [tag, String(parts[a][0]), String(parts[b][0])]
-				)
-	# Панель не наезжает на список, поле и кнопки.
+	if _menu.call("_title_fs") > 0:
+		var tfs: int = _menu.call("_title_fs")
+		var tw: float = _menu.call("_text_size", "Кто играет?", tfs).x
+		bar.append(["заголовок", Rect2(
+			Vector2(float(_menu.call("_title_x")) - tw * 0.5,
+				float(_menu.call("_title_y")) - _menu.mono.get_height(tfs)),
+			Vector2(tw, _menu.mono.get_height(tfs)))])
+	if msg != "":
+		var mw: float = _menu.call("_text_size", msg, 20).x
+		var mbase: float = _menu.call("_msg_base_y")
+		bar.append(["сообщение", Rect2(
+			Vector2((_menu.view_w - mw) * 0.5, mbase - 20.0 * k),
+			Vector2(mw, 20.0 * k))])
+	# Внутри панели — одна визуальная группа: 6k достаточно, тексты
+	# снаружи держат 12k.
+	_gap_check(tag, k, bar, 6.0, "панель")
+	# Панель и список: заголовок не лезет на шапку/карточки.
+	var list_top: float = _menu.call("_rows_top")
 	var bar_bottom: float = float(_menu.top_safe) + _menu.call("_bar_h")
-	var rows_top: float = _menu.call("_rows_top")
-	_check(rows_top >= bar_bottom - 1.0, "%s: the list starts under the bar" % tag)
-	var below := [
+	_check(list_top >= bar_bottom + 10.0 * k - 1.0,
+		"%s: no air between the bar and the list" % tag)
+	if n_users > 0:
+		if bool(_menu.call("_cards")):
+			_gap_check(tag, k, [
+				["карточка", Rect2(_menu.call("_card_rect", 0))],
+				["заголовок", _bar_title_rect()],
+			], 12.0, "карточка-заголовок")
+		else:
+			var cols: Array = _menu.call("_table_cols")
+			_gap_check(tag, k, [
+				["шапка", Rect2(Vector2(cols[0], list_top - 56.0 * k - 20.0 * k), Vector2(cols[6] - cols[0], 20.0 * k))],
+				["заголовок", _bar_title_rect()],
+			], 12.0, "шапка-заголовок")
+			_gap_check(tag, k, [
+				["шапка", Rect2(Vector2(cols[0], list_top - 56.0 * k - 20.0 * k), Vector2(cols[6] - cols[0], 20.0 * k))],
+				["строка", _row_draw_rect0()],
+			], 8.0, "шапка-строка")
+	# Низ: поле, кнопки, клавиатура — друг над другом с воздухом.
+	_gap_check(tag, k, [
 		["поле", Rect2(_menu.call("_field_tap_rect"))],
 		["играть", Rect2(_menu.call("_play_tap_rect"))],
+	], 10.0, "низ")
+	_gap_check(tag, k, [
+		["играть", Rect2(_menu.call("_play_tap_rect"))],
 		["без профиля", Rect2(_menu.call("_guest_tap_rect"))],
-	]
-	if n_users > 0:
-		below.append(["карточка", Rect2(_menu.call("_card_rect", 0))])
-		if bool(_menu.call("_cards")):
-			below.append(["чип", Rect2(_menu.call("_pro_tap_rect", 0))])
-	for b2 in below:
-		var rb3: Rect2 = b2[1]
-		if rb3.size.x > 1.0 and rb3.size.y > 1.0:
-			_check(rb3.position.y >= bar_bottom - 1.0, "%s: %s is under the bar" % [tag, String(b2[0])])
-		_check(
-			rb3.position.x >= -1.0 and rb3.position.y >= -1.0
-				and rb3.end.x <= _menu.view_w + 1.0
-				and rb3.end.y <= _menu.view_h + 1.0,
-			"%s: %s is on screen (%s in %dx%d)" % [tag, String(b2[0]), str(rb3), sz.x, sz.y]
-		)
-	# Кнопки действий не наезжают друг на друга.
-	var play := Rect2(_menu.call("_play_tap_rect"))
-	var guest := Rect2(_menu.call("_guest_tap_rect"))
-	if play.size.x > 1.0 and guest.size.x > 1.0:
-		_check(not play.intersects(guest), "%s: action buttons overlap" % tag)
-	# Своя клавиатура снизу — кнопки обязаны быть выше неё. Масштаб
-	# пересобираем, как это делает меню при подъёме клавиатуры.
+	], 10.0, "низ")
+	# Зайчик в своей полосе: не наезжает на текст и боксы.
+	if _menu.call("_bunny_visible"):
+		var bp: Vector2 = _menu.call("_bunny_pos")
+		var bw: float = _menu.call("_bunny_w")
+		var bb := Rect2(bp - Vector2(bw * 0.5, 76.0 * k * 0.5), Vector2(bw, 76.0 * k))
+		var foes := [
+			["панель-заяц", Rect2(_menu.call("_upd_button_rect"))],
+			["заяц", bb],
+		]
+		_gap_check(tag, k, foes, 6.0, "заяц-панель")
+		if n_users > 0:
+			var rowbox := Rect2(_menu.call("_card_rect", 0)) if bool(_menu.call("_cards")) else _row_draw_rect0()
+			_gap_check(tag, k, [["строка", rowbox], ["заяц", bb]], 6.0, "заяц-строка")
+	# Своя клавиатура снизу — кнопки обязаны быть выше неё.
 	_menu.input_active = true
 	_menu.k = _menu.call("_fit_k", clampf(
 		minf(_menu.view_w / 1100.0, _menu.call("_menu_eff_h") / 650.0)
 			* Ui.dpr(), 0.7, 2.5), 0.7)
+	k = _menu.k
 	var eff: float = _menu.call("_menu_eff_h")
-	# Прямоугольник пересчитываем ПОСЛЕ подъёма клавиатуры: раскладка
-	# прижата к эффективной высоте и без неё уехала бы под доску.
 	var play_kb := Rect2(_menu.call("_play_tap_rect"))
 	var guest_kb := Rect2(_menu.call("_guest_tap_rect"))
 	_menu.input_active = false
@@ -1888,12 +1917,41 @@ func _overlap_case(sz: Vector2i, n_users: int, msg: String, night: bool) -> void
 	_menu._upd_msg = ""
 
 
-## Геометрия до _ready (шрифта ещё нет): open() зовут и до входа в дерево
-## (deferred add_child в _open_menu), и тогда _reload/_fit_k меряют без mono.
-## Метод на null-шрифте ронял шаблон segfault'ом, хотя редактор прощал
-## (ловил 15.10.2026: бинарь падал до первого кадра, gdb показал рекурсию
-## в _title_fs). Сторож build-game.sh снимает тест при SCRIPT ERROR, так
-## что молчаливый проход — тоже проверка.
+## Прямоугольник заголовка одной строкой (для зазоров).
+func _bar_title_rect() -> Rect2:
+	var tfs: int = _menu.call("_title_fs")
+	if tfs <= 0:
+		return Rect2()
+	var tw: float = _menu.call("_text_size", "Кто играет?", tfs).x
+	var th: float = _menu.mono.get_height(tfs)
+	return Rect2(
+		Vector2(float(_menu.call("_title_x")) - tw * 0.5, float(_menu.call("_title_y")) - th),
+		Vector2(tw, th))
+
+
+## Нарисованная первая строка таблицы (ужатый бокс, см. _row_draw_rect).
+func _row_draw_rect0() -> Rect2:
+	var t := Rect2(_menu.call("_row_tap_rect", 0))
+	return Rect2(
+		t.position + Vector2(0, 5.0 * _menu.k), t.size - Vector2(0, 10.0 * _menu.k)
+	)
+
+
+## Пары прямоугольников: ни пересечений, ни тесноты ниже порога (в k).
+func _gap_check(tag: String, k: float, parts: Array, need_k: float, what: String) -> void:
+	for a in parts.size():
+		for b in range(a + 1, parts.size()):
+			var ra: Rect2 = parts[a][1]
+			var rb: Rect2 = parts[b][1]
+			if ra.size.x <= 1.0 or rb.size.x <= 1.0 or ra.size.y <= 1.0 or rb.size.y <= 1.0:
+				continue
+			var g := _menu_gap(ra, rb)
+			_check(g >= 0.0,
+				"%s: %s overlaps %s (%s)" % [tag, String(parts[a][0]), String(parts[b][0]), what])
+			_check(g >= need_k * k - 1.0,
+				"%s: %s and %s are cramped (%.0fpx, %s)" % [tag, String(parts[a][0]), String(parts[b][0]), g, what])
+
+
 func _part32_pre_ready_geometry() -> void:
 	var was_touch := Ui.force_touch
 	Ui.force_touch = true
@@ -1952,6 +2010,7 @@ func _part25_corrupt_file() -> void:
 	fa.store_string("не конфиг " + String.chr(0) + String.chr(1) + " <<<>>> {{")
 	fa.close()
 	S.PATH = TEST_PATH
+	S.invalidate()  # файл писали мимо save.gd — кэш разбора сбрасываем
 	_check(S.user_list().is_empty(), "a garbage file yields an empty user list")
 	var prof: Dictionary = S.load_profile("кого-то")
 	_check(
@@ -1963,6 +2022,7 @@ func _part25_corrupt_file() -> void:
 	cfg.load(TEST_PATH)
 	cfg.set_value(S.SECTION_PROFILES, "число", 5)
 	cfg.save(TEST_PATH)
+	S.invalidate()
 	# Такой профиль в списке остаться может (имя в разделе есть), но
 	# читаться обязан без падения — иначе меню не открывается вовсе.
 	var every_loads := true
@@ -1991,6 +2051,7 @@ func _part25_corrupt_file() -> void:
 	cfg2.load(TEST_PATH)
 	cfg2.set_value(S.SECTION_PROFILES, "словарь", {"difficulty": "не число", "ema_acc": "и не доля"})
 	cfg2.save(TEST_PATH)
+	S.invalidate()
 	game.profile_name = "словарь"
 	game._start_game()
 	_check(game.state == "playing", "the game starts on a wrongly typed profile (%s)" % game.state)

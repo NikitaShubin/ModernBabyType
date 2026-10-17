@@ -53,14 +53,22 @@ func _snap() -> void:
 		]
 	)
 	img.save_png(SAVE_DIR + name + ".png")
-	for i in _menu.users.size():
+	for i in _menu.call("_row_count"):
 		var c: Rect2 = Rect2(_menu.call("_card_rect", i))
 		var p: Rect2 = Rect2(_menu.call("_pro_tap_rect", i))
 		print(
-			"  КАРТОЧКА %d %s кнопка=%s имя=«%s»" % [
-				i, str(c), str(p), String(_menu.call("_short_name", _menu.users[i])),
+			"  КАРТОЧКА %d %s кнопка=%s правка=%s" % [
+				i, str(c), str(p), str(_menu.editing == i),
 			]
 		)
+	print(
+		"  ОКНО %s кнопки=%.0f подсказка=%.0f прокрутка=%.0f" % [
+			str(Rect2(_menu.call("_list_rect"))),
+			float(_menu.call("_buttons_y")),
+			float(_menu.call("_chip_hint_y")),
+			_menu._scroll,
+		]
+	)
 	print("КАДР ", SAVE_DIR + name + ".png")
 
 
@@ -97,14 +105,13 @@ func _a_tap_pro() -> void:
 
 
 func _a_name_field() -> void:
-	_menu.input_active = true
+	_menu.call("_start_edit", _menu.users.size())
 	_menu.input_text = "Ма"
 	_menu.queue_redraw()
 
 
 func _a_delete_confirm() -> void:
-	_menu.input_active = false
-	_menu.input_text = ""
+	_menu.call("_cancel_edit")
 	var del_pos: Vector2 = Rect2(_menu.call("_del_tap_rect", 0)).get_center()
 	_menu.call("_input", _tap(del_pos))
 	_menu.call("_input", _release(del_pos))
@@ -112,14 +119,86 @@ func _a_delete_confirm() -> void:
 
 func _a_night() -> void:
 	_menu.call("_cancel_confirm")
-	_menu.night = true
+	# Добиваем список, чтобы было что листать: скроллбар проверяем ночью.
+	for n in ["Гена", "Дина", "Егор", "Жанна", "Зоя"]:
+		S.create_user(n)
+	_menu.call("_reload")
+	# Ночь — через режим, а не флагом: _apply_night пересчитывает флаг
+	# из режима (флаг напрямую не липнет).
+	_menu.nmode = S.NIGHT_ON
 	_menu.call("_apply_night")
+	_menu._scroll_target = float(_menu.call("_list_max_scroll")) * 0.5
+	_menu._scroll = _menu._scroll_target
 
 
 func _a_landscape_table() -> void:
-	_menu.night = false
+	_menu.nmode = S.NIGHT_DAY
 	_menu.call("_apply_night")
 	_win(Vector2i(1000, 700))
+
+
+## Ховер над заголовком «Победы»: таймер взведён руками (ждать полсекунды
+## реального времени драйвер не умеет), пузырь — у курсора.
+func _a_hover_tip() -> void:
+	var p: Vector2 = Rect2(_menu.call("_rec_head_rect")).get_center()
+	_menu._hover_pos = p
+	_menu._hover_t = 1.0
+	_menu.queue_redraw()
+	print("ХОВЕР «Победы» в %s: «%s»" % [str(p), String(_menu.call("_head_tip_at", p))])
+
+
+## Обратно в портрет: строчное редактирование (автор 15.10.2026).
+func _a_phone_again() -> void:
+	_win(Vector2i(540, 1140))
+
+
+## Строка создания: дабл-клик по ней открывает чистое поле ввода
+## с чипами «Про» и «Ё» и крестиком отмены (одинарный только выделяет).
+## Создание кнопкой «+ Новый игрок»: внизу, постоянного пункта в списке
+## нет. Строка ввода появляется в конце и подтягивается в окно.
+func _a_create_open() -> void:
+	var p: Vector2 = Rect2(_menu.call("_new_tap_rect")).get_center()
+	_menu.call("_input", _tap(p))
+	_menu.call("_input", _release(p))
+	_menu._scroll = _menu._scroll_target
+	_menu.input_text = "Ново"
+
+
+## Enter в поле — новая строка внизу списка, без автозапуска игры.
+func _a_create_commit() -> void:
+	_menu.call("_commit_edit")
+	print("ПОСЛЕ СОЗДАНИЯ: %s выделен=%d" % [str(_menu.users), _menu.sel])
+
+
+## ПКМ по строке — переименование: поле с прежним именем.
+func _a_rename_open() -> void:
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_RIGHT
+	ev.pressed = true
+	ev.position = Rect2(_menu.call("_row_tap_rect", 0)).get_center()
+	_menu.call("_input", ev)
+	_menu.input_text = "Марья"
+
+
+## Esc в переименовании возвращает прежний вид, имя в списке цело.
+func _a_rename_cancel() -> void:
+	_menu.call("_cancel_edit")
+
+
+## Список пролистан в самый низ: строка создания на виду.
+func _a_scroll_end() -> void:
+	_menu.call("_input", _wheel_down())
+	_menu.call("_input", _wheel_down())
+	_menu.call("_input", _wheel_down())
+	_menu.call("_input", _wheel_down())
+
+
+func _wheel_down() -> InputEventMouseButton:
+	var ev := InputEventMouseButton.new()
+	ev.button_index = MOUSE_BUTTON_WHEEL_DOWN
+	ev.pressed = true
+	ev.position = Vector2(_menu.view_w * 0.5, _menu.view_h * 0.4)
+	return ev
 
 
 func _tap(pos: Vector2) -> InputEventMouseButton:
@@ -167,4 +246,11 @@ func _plan() -> void:
 		["04-delete", _a_delete_confirm, 12],
 		["05-night", _a_night, 12],
 		["06-table", _a_landscape_table, 12],
+		["07-hover-tip", _a_hover_tip, 6],
+		["08-back-portrait", _a_phone_again, 4],
+		["09-create-open", _a_create_open, 12],
+		["10-created", _a_create_commit, 12],
+		["11-rename-open", _a_rename_open, 12],
+		["12-rename-cancel", _a_rename_cancel, 12],
+		["13-scrolled-end", _a_scroll_end, 12],
 	]

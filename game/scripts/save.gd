@@ -59,11 +59,30 @@ static func clean_name(raw: String) -> String:
 ## profiles_test — в игре не должно быть обращений к файлу в кадре).
 static var cfg_loads := 0
 
+## Разобранный файл держим в памяти. Меню рисует профили КАЖДЫЙ кадр
+## (строка, галки, статистика — десятки вызовов на строку), а чтение
+## конфига с диска на каждом кадре роняло отрисовку до ~8 fps: заяц
+## прыгал рывками (автор 16.10.2026). Теперь на диск идут только записи.
+## Ключ — PATH: тесты подставляют свой файл (смена пути сбрасывает кэш).
+static var _cache: ConfigFile = null
+static var _cache_path := ""
+
+
+## Сбросить кэш: файл изменили извне (тест пишет его мимо save.gd —
+## битый профиль, обрыв записи). В игре такого нет: пишем только сами.
+static func invalidate() -> void:
+	_cache = null
+	_cache_path = ""
+
 
 static func _cfg() -> ConfigFile:
+	if _cache != null and _cache_path == PATH:
+		return _cache
 	var cfg := ConfigFile.new()
 	cfg_loads += 1
 	cfg.load(PATH)
+	_cache = cfg
+	_cache_path = PATH
 	return cfg
 
 
@@ -114,6 +133,24 @@ static func create_user(raw: String) -> bool:
 	cfg.set_value(SECTION_PROFILES, name, data)
 	cfg.save(PATH)
 	set_last_user(name)
+	return true
+
+
+## Переименование с сохранением статистики. Пустое/занятое/чужое имя —
+## отказ без изменений. last_played не трогаем: порядок списка стабилен.
+static func rename_user(old_name: String, new_name: String) -> bool:
+	var new_clean := clean_name(new_name)
+	if new_clean.is_empty() or new_clean == GUEST:
+		return false
+	if not user_exists(old_name) or user_exists(new_clean):
+		return false
+	var data := load_profile(old_name)
+	var cfg := _cfg()
+	cfg.erase_section_key(SECTION_PROFILES, old_name)
+	cfg.set_value(SECTION_PROFILES, new_clean, data)
+	if get_last_user() == old_name:
+		set_last_user(new_clean)
+	cfg.save(PATH)
 	return true
 
 
@@ -189,7 +226,6 @@ static func save_profile(user_name: String, data: Dictionary) -> void:
 	for key in known.keys():
 		if not stored.has(key):
 			stored[key] = known[key]
-	stored["last_played"] = _now()
 	cfg.set_value(SECTION_PROFILES, user_name, stored)
 	cfg.save(PATH)
 
@@ -219,8 +255,8 @@ static func set_yo_strict(user_name: String, on: bool) -> void:
 static func touch(user_name: String) -> void:
 	if not user_exists(user_name):
 		return
-	# Пустое слияние: только бамп last_played (порядок «недавних»).
-	save_profile(user_name, {})
+	# Единственное место, двигающее порядок «недавних».
+	save_profile(user_name, {"last_played": _now()})
 
 
 ## Ночной режим устройства: -1 система, 0 день, 1 ночь. Чужое чистим
@@ -282,6 +318,8 @@ static func drop_legacy_guest() -> void:
 		cfg.save(PATH)
 
 
+## Полный сброс: пустой файл. Кэш сбрасываем — он смотрит в файл.
 static func wipe() -> void:
 	var cfg := ConfigFile.new()
 	cfg.save(PATH)
+	invalidate()

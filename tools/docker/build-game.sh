@@ -442,7 +442,11 @@ run_tests() {
 		echo "mbt-build: в коде игры остались следы системной клавиатуры" >&2
 		return 1
 	fi
-	if grep -rnE '"\?123"|ROWS_SYM|bottom_sym_row|long_alt|long_base|_long_swap|LONG_PRESS' game/scripts/; then
+	# Долгое нажатие для НАБОРА запрещено точечно, своими именами
+	# (LONG_PRESS_MS, _lp_* — как их назвала выкинутая реализация):
+	# у меню своё долгое нажатие на строке списка (ROW_PRESS_T), это
+	# другое и оно нужно.
+	if grep -rnE '"\?123"|ROWS_SYM|bottom_sym_row|long_alt|long_base|_long_swap|LONG_PRESS_MS|_lp_(act|line|pos|t|press)' game/scripts/; then
 		echo "mbt-build: в коде игры остались следы слоя знаков или долгого нажатия" >&2
 		return 1
 	fi
@@ -454,7 +458,7 @@ run_tests() {
 	local pids=() failed=0
 	local s pid
 	# Мелочь — целиком, каждая своим процессом.
-	for s in logic_test.gd update_test.gd profiles_test.gd; do
+	for s in logic_test.gd update_test.gd profiles_test.gd menu_scroll_test.gd perf_test.gd; do
 		run_test "$s" 600 &
 		pids+=($!)
 	done

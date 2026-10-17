@@ -93,15 +93,29 @@ const US_SHIFT := {
 ## двух языках разная (2 → " / @, 3 → № / #, 4 → ; / $, 6 → : / ^,
 ## 7 → ? / &), поэтому на клавише три знака, а не два (требование
 ## автора 10.2026). У букв это заглавные + пара раскладки.
+##
+## Результат ЗАПОМИНЕН: функция чистая, а её зовут ~60 раз на кадр
+## (каждая клавиша доски), и каждый вызов рождал массив из четырёх
+## строк с новыми to_upper() — мусор в куче на каждом кадре (ревизия
+## 16.10.2026). Набор подписей фиксирован, кэш не растёт. Никто
+## результат не меняет — все только читают.
+static var _legends_cache: Dictionary = {}
+
+
 static func legends(s: String) -> Array:
+	if _legends_cache.has(s):
+		return _legends_cache[s]
+	var out: Array = []
 	if OVERLOAD.has(s):
-		return Array(OVERLOAD[s])
-	if RU_SHIFT.has(s):
-		return [s, String(RU_SHIFT[s]), s, String(EN_SHIFT[s])]
-	var pair := pair_of(s)
-	if pair != "" and s.length() == 1:
-		return [s, s.to_upper(), pair, String(US_SHIFT.get(pair, pair.to_upper()))]
-	return []
+		out = Array(OVERLOAD[s])
+	elif RU_SHIFT.has(s):
+		out = [s, String(RU_SHIFT[s]), s, String(EN_SHIFT[s])]
+	else:
+		var pair := pair_of(s)
+		if pair != "" and s.length() == 1:
+			out = [s, s.to_upper(), pair, String(US_SHIFT.get(pair, pair.to_upper()))]
+	_legends_cache[s] = out
+	return out
 
 
 ## Что введёт нажатие этой клавиши при данном языке и шифте. Пустая
@@ -535,7 +549,37 @@ static func _h_of_w(view_w: float) -> float:
 ## левый шифт во всю высоту ступени), «стереть» = ровно остаток (≥28px).
 ## Остальные ряды и слои — по-старому (заливка/центровка): там нет
 ## буквенных краёв, которым надо держать ступеньку.
+## Кнопки доски (чистая функция геометрии). Результат ЗАПОМИНЕН на
+## (area, shift, enter): каждый кадр рисования и каждый тап строили
+## ~60 словарей заново — на 3120x2080 это самая дорогая часть кадра
+## после чтения конфига (ревизия 16.10.2026).
+static var _btn_key_ok := false
+static var _btn_pos := Vector2.ZERO
+static var _btn_size := Vector2.ZERO
+static var _btn_shift := false
+static var _btn_enter := false
+static var _btn_cache: Array = []
+
+
 static func buttons(area: Rect2, shift: bool, enter := false) -> Array:
+	if (
+		_btn_key_ok
+		and _btn_pos == area.position
+		and _btn_size == area.size
+		and _btn_shift == shift
+		and _btn_enter == enter
+	):
+		return _btn_cache
+	_btn_cache = _buttons_now(area, shift, enter)
+	_btn_key_ok = true
+	_btn_pos = area.position
+	_btn_size = area.size
+	_btn_shift = shift
+	_btn_enter = enter
+	return _btn_cache
+
+
+static func _buttons_now(area: Rect2, shift: bool, enter := false) -> Array:
 	var rows: Array = all_rows(enter)
 	var out: Array = []
 	var gap := 8.0
@@ -772,7 +816,7 @@ static func draw(
 			# влезать в узкую клавишу: на маленьком экране шифт едва шире
 			# пальца, а «Ctrl» ещё и обрезался краем экрана.
 			while f > 10:
-				var probe := font.get_string_size(shown, HORIZONTAL_ALIGNMENT_LEFT, -1.0, f).x
+				var probe := Ui.text_size(font, shown, f).x
 				if probe <= r.size.x - 12.0:
 					break
 				f -= 2
@@ -791,7 +835,7 @@ static func draw(
 		# Служебная клавиша: одна подпись по центру. Заблокированные
 		# (Ctrl/Win/Alt) в наборе не участвуют — приглушены, чтобы не
 		# звать палец.
-		var tw := font.get_string_size(shown, HORIZONTAL_ALIGNMENT_LEFT, -1.0, f).x
+		var tw := Ui.text_size(font, shown, f).x
 		var th := font.get_height(f)
 		var blocked := _is_blocked(s)
 		ci.draw_string(
@@ -807,7 +851,7 @@ static func _draw_glyph(
 	ci: CanvasItem, font: Font, txt: String, at: Vector2, f: float, col: Color
 ) -> void:
 	var fi := int(f)
-	var w := font.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fi).x
+	var w := Ui.text_size(font, txt, fi).x
 	ci.draw_string(
 		font, Vector2(at.x - w * 0.5, at.y + float(font.get_height(fi)) * 0.3),
 		txt, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fi, col
