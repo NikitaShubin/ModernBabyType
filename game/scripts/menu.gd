@@ -282,10 +282,10 @@ func _release_held() -> void:
 	queue_redraw()
 
 
-func _own_press(pos: Vector2) -> bool:
+func _own_press(pos: Vector2, finger := false) -> bool:
 	if not _own_shown() or not input_active:
 		return false
-	var act := Kbd.hit(_own_rect(), kb_shift, true, pos)
+	var act := Kbd.hit(_own_rect(), kb_shift, true, pos, finger)
 	if act == "":
 		return false
 	_flash(act)
@@ -933,8 +933,10 @@ func _input(event: InputEvent) -> void:
 			_hover_t = 0.0
 			_scroll_target = _scroll
 			if input_active:
-				var tkey := Kbd.hit(_own_rect(), kb_shift, true, tb.position)
-				if _own_press(tb.position):
+				# Палец: ищем клавишу с запасом (см. Kbd.hit) — контактная
+				# пятна шире клавиши, и тап в щель не должен пропадать.
+				var tkey := Kbd.hit(_own_rect(), kb_shift, true, tb.position, true)
+				if _own_press(tb.position, true):
 					if tkey != "":
 						_touch_keys[tb.index] = tkey
 					return

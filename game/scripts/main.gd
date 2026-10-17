@@ -230,6 +230,14 @@ var last_press_t := -1.0
 ## Рука последней набранной буквы («Л»/«П»): пробел жмётся большим
 ## пальцем противоположной (классическое правило слепой печати).
 var last_hand := ""
+## Последний ввод и то, что игра ждала в эту секунду. Нужно, когда
+## человек говорит «нажал нужную букву, а она красная» (автор
+## 17.10.2026, телефон): в табло F3 видно, ЧТО пришло в игру — «И»
+## вместо «и» (залипший шифт) или вовсе другая буква (промах мимо
+## клавиши). Без этого отличить «игра ошиблась» от «палец попал
+## мимо» можно только по памяти.
+var last_typed := ""
+var last_expect := ""
 
 
 ## Задержка подсказки: вдвое больше среднего периода нажатий.
@@ -1627,6 +1635,8 @@ func _type_char(ch: String) -> void:
 	warm_done = true  # первый ввод сделан: ёж может выезжать
 	last_hand = Kbd.hand_of(ch)
 	var expected := _current()
+	last_typed = ch  # что пришло (см. last_typed в шапке)
+	last_expect = expected
 	if expected == "":
 		return
 	# Нажата именно та буква, что написана (хоть активная, хоть серая) —
@@ -2492,9 +2502,9 @@ func _refresh_hud() -> void:
 	# клавиатуры в экранных пикселях, sc — масштаб экрана, vw/vh —
 	# вьюпорт. Нужно для настройки сдвига на живых телефонах.
 	var sc := Ui.dpr()
-	var txt := "[dbg ex=%.0f eln=%d cur=%d:%d cw=%.1f k=%.2f ok=%d bad=%d kb=%.0f sc=%.2f vw=%.0f vh=%.0f] %s" % [
+	var txt := "[dbg ex=%.0f eln=%d cur=%d:%d cw=%.1f k=%.2f ok=%d bad=%d kb=%.0f sc=%.2f vw=%.0f vh=%.0f] ввод «%s» ждём «%s» %s" % [
 		enemy_x, enemy_line, cursor_line, cursor_pos, char_w, k, typed_ok, typed_bad,
-		kb_h, sc, view_w, view_h, _marks_debug(),
+		kb_h, sc, view_w, view_h, last_typed, last_expect, _marks_debug(),
 	]
 	hud_label.text = txt
 	# Лейблу задаём свою ширину: он не должен раздуваться под текст
@@ -2863,11 +2873,11 @@ const HOME_LETTERS: Array[String] = ["ф", "ы", "в", "а", "п", "р", "о", "
 var home_chars: Array[String] = []
 
 
-func _own_press(pos: Vector2, live := false) -> bool:
+func _own_press(pos: Vector2, live := false, finger := false) -> bool:
 	if not _own_shown():
 		return false
 	_poke_idle()
-	var act := Kbd.hit(_own_rect(), kb_shift, _kb_enter_shown(), pos)
+	var act := Kbd.hit(_own_rect(), kb_shift, _kb_enter_shown(), pos, finger)
 	if act == "":
 		return false
 	if live and _repeatable(act):
@@ -3144,8 +3154,10 @@ func _input(event: InputEvent) -> void:
 	# повторный Kbd.hit отдал бы уже другую клавишу.
 	var tkey := ""
 	if finger >= 0:
-		tkey = Kbd.hit(_own_rect(), kb_shift, _kb_enter_shown(), pos)
-	if _own_press(pos, true):
+		# Палец: ищем клавишу с запасом (см. Kbd.hit) — контактная пятна
+		# шире клавиши, и тап в щель не должен пропадать.
+		tkey = Kbd.hit(_own_rect(), kb_shift, _kb_enter_shown(), pos, true)
+	if _own_press(pos, true, finger >= 0):
 		if finger >= 0 and tkey != "":
 			_touch_keys[finger] = tkey
 		return

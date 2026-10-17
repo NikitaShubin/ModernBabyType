@@ -1223,6 +1223,102 @@ func _case_warm_up() -> void:
 ## нет»). Плюс мышиное эхо того же касания — его обязаны пропустить,
 ## иначе палец набирает букву дважды.
 ##
+## Пальцевой промах: контактная пятна шире клавиши, а щель между
+## клавишами на телефоне — 18-31 % шага (замерено на раскладке 412x915).
+## Тап в щель раньше ПРОПАДАЛ: человек жал повторно, попадал в соседнюю
+## букву — а метка встаёт на ту букву, которую игра ждёт, то есть автор
+## видел «нажал правильную букву, а она красная» (телефон, 17.10.2026;
+## на десктопе не воспроизводится). Теперь тап достаёт БЛИЖАЙШУЮ клавишу,
+## и мышиный промах по-прежнему ничего не делает.
+func _case_touch_gap() -> void:
+	_fresh(1, 0)
+	_kbd_on()
+	var tag := "touch gap"
+	_check(_main._own_shown(), "%s: the own keyboard is not shown" % tag)
+	# Эталонная пара — соседние буквы одного ряда («м» и «и» в нижнем):
+	# механизм проверяем на заведомо известной геометрии, а не на том,
+	# что случайно попалось первым под курсором.
+	var pair := _row_left_of("и")
+	var left_label := String(pair[0])
+	var left_rect: Rect2 = pair[1]
+	var key_rect := _key_rect("и")
+	_check(left_rect.size.x > 0.0, "%s: «и» has no left neighbour" % tag)
+	if left_rect.size.x <= 0.0:
+		return
+	# Щель между «%s» и «и»: точка вне обеих рамок.
+	var miss := Vector2(
+		(left_rect.end.x + key_rect.position.x) * 0.5, key_rect.get_center().y
+	)
+	_check(
+		not key_rect.has_point(miss) and not left_rect.has_point(miss),
+		"%s: the probe point is not in the gap" % tag
+	)
+	# Палец: тап рядом с «и» достаёт ИМЕННО «и» (выигрывает ближайшая,
+	# а не «первая попавшаяся» в цикле по клавишам).
+	var near_и := Vector2(key_rect.position.x - 1.0, key_rect.get_center().y)
+	_check(
+		Kbd.hit(_main._own_rect(), false, false, near_и, true) == "и",
+		"%s: a finger tap near «и» did not reach it (got «%s»)" % [
+			tag, Kbd.hit(_main._own_rect(), false, false, near_и, true)
+		]
+	)
+	# Мышь: промах остаётся промахом (иначе мышь начала бы «мазать»).
+	_check(
+		Kbd.hit(_main._own_rect(), false, false, miss, false) == "",
+		"%s: a mouse click in the gap was not a miss" % tag
+	)
+	# И живой путь: игра ждёт «и», тап в щель у её края набирает её.
+	_set_level_text(["и" + left_label])
+	_main.active = {" ": true, "и": true, left_label: true}
+	_main._refresh()
+	var ok0: int = _main.typed_ok
+	_main.call("_input", _touch(0, near_и, true))
+	_main.call("_input", _touch_echo(near_и))
+	_tick(tag)
+	_check(
+		_main.typed_ok == ok0 + 1,
+		"%s: the gap tap typed nothing (%d → %d)" % [tag, ok0, _main.typed_ok]
+	)
+	_check(_main.errors.is_empty(), "%s: the gap tap left a typo mark" % tag)
+	_main.call("_input", _touch(0, near_и, false))
+	_tick(tag)
+
+
+## Соседняя слева клавиша ТОГО ЖЕ ряда: [подпись, рамка] или ["", 0].
+func _row_left_of(label: String) -> Array:
+	var bs := Kbd.buttons(_main._own_rect(), _main.kb_shift, _main._kb_enter_shown())
+	var mine := Rect2()
+	for b in bs:
+		if String(b["s"]) == label:
+			mine = b["r"]
+			break
+	if mine.size.x <= 0.0:
+		return ["", Rect2()]
+	var best := Rect2()
+	for b in bs:
+		var r: Rect2 = b["r"]
+		if String(b["s"]) == label:
+			continue
+		if absf(r.position.y - mine.position.y) > 2.0:
+			continue  # другой ряд
+		if r.end.x <= mine.position.x + 1.0 and (best.size.x <= 0.0 or r.end.x > best.end.x):
+			best = r
+	if best.size.x <= 0.0:
+		return ["", Rect2()]
+	for b in bs:
+		if (b["r"] as Rect2) == best:
+			return [String(b["s"]), best]
+	return ["", Rect2()]
+
+
+## Прямоугольник клавиши по подписи (центры уже есть в _kbd_buttons).
+func _key_rect(label: String) -> Rect2:
+	for b in Kbd.buttons(_main._own_rect(), _main.kb_shift, _main._kb_enter_shown()):
+		if String(b["s"]) == label:
+			return b["r"]
+	return Rect2()
+
+
 ## Набираем ТУ букву, которую игра ждёт (иначе метка опечатки законно
 ## появляется, и проверка «ошибок нет» ничего не значит).
 func _case_touch_multitouch() -> void:
@@ -3345,6 +3441,7 @@ func _fill_cases() -> void:
 	_cases_list.append(["_case_loss_with_marks", Callable(self, "_case_loss_with_marks"), 0])
 	_cases_list.append(["_case_touch_keyboard", Callable(self, "_case_touch_keyboard"), 0])
 	_cases_list.append(["_case_touch_multitouch", Callable(self, "_case_touch_multitouch"), 0])
+	_cases_list.append(["_case_touch_gap", Callable(self, "_case_touch_gap"), 0])
 	_cases_list.append(["_case_warm_up", Callable(self, "_case_warm_up"), 0])
 	_cases_list.append(["_case_kbd_shift_layer", Callable(self, "_case_kbd_shift_layer"), 0])
 	_cases_list.append(["_case_long_press", Callable(self, "_case_long_press"), 0])

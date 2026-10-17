@@ -747,22 +747,95 @@ static func _buttons_now(area: Rect2, shift: bool, enter := false) -> Array:
 
 ## Тап по клавиатуре: "" — мимо, иначе действие ("стереть", "шифт",
 ## "ввод", "язык", "пробел", символ). Слоя ?123 больше нет.
-static func hit(area: Rect2, shift: bool, enter: bool, pos: Vector2) -> String:
-	for b in buttons(area, shift, enter):
+## Клавиша под точкой.
+##
+## finger — режим пальца: контактная пятна шире клавиши, а щель между
+## клавишами на телефоне 18-31 % шага (замерено: ряд букв 37 px при шаге
+## 45, ряд цифр 18 px при шаге 26 — canvas). Мышь сюда не попадает: её
+## промах виден, и он виноват человек, а не палец.
+## В режиме пальца действуют два правила:
+##   1. точка ВНУТРИ клавиши — попадает в неё (тут не спорим);
+##   2. точка между клавишами — достаётся БЛИЖАЙШЕЙ, если она не дальше
+##      finger_pad() от её рамки. Раньше такой тап просто пропадал: человек
+##      жал повторно, попадал в соседнюю букву — и метка вставала на ту
+##      букву, которую он и хотел нажать (метка всегда на клетке курсора),
+##      то есть «нажал правильную букву, а она красная» (автор
+##      17.10.2026, телефон; на десктопе не воспроизводится — там щель
+##      6-8 % шага и клик точный).
+static func hit(area: Rect2, shift: bool, enter: bool, pos: Vector2, finger := false) -> String:
+	var bs := buttons(area, shift, enter)
+	if finger:
+		return _hit_finger(bs, pos)
+	for b in bs:
 		if (b["r"] as Rect2).has_point(pos):
-			var s := String(b["s"])
-			if s == "←":
-				return "стереть"
-			if s == "Shift" or s == "ShiftR":
-				return "шифт"
-			if s == "↵":
-				return "ввод"
-			if s == "глобус":
-				return "язык"
-			if _is_blocked(s):
-				return ""
-			return s
+			return _act_of(String(b["s"]))
 	return ""
+
+
+## Режим пальца: сначала «внутри», потом «рядом с ближайшей».
+static func _hit_finger(bs: Array, pos: Vector2) -> String:
+	for b in bs:
+		if (b["r"] as Rect2).has_point(pos):
+			return _act_of(String(b["s"]))
+	var pad := finger_pad(bs)
+	if pad <= 0.0:
+		return ""
+	var best := ""
+	var best_d := pad
+	for b in bs:
+		var r: Rect2 = b["r"]
+		var d := INF
+		if pos.x < r.position.x:
+			d = r.position.x - pos.x
+		elif pos.x > r.end.x:
+			d = pos.x - r.end.x
+		if pos.y < r.position.y:
+			d = maxf(d, r.position.y - pos.y)
+		elif pos.y > r.end.y:
+			d = maxf(d, pos.y - r.end.y)
+		if d < best_d:
+			best_d = d
+			best = String(b["s"])
+	return _act_of(best)
+
+
+## Запас для пальца: 40 % самого тесного шага в раскладке. Щель между
+## клавишами — примерно треть шага, поэтому 40 % её перекрывают с запасом,
+## а соседнюю клавишу при этом не украсть: выигрывает ближайшая.
+static func finger_pad(bs: Array) -> float:
+	var pitch := INF
+	var rows := {}
+	for b in bs:
+		var r: Rect2 = b["r"]
+		var key := int(round(r.position.y))
+		if not rows.has(key):
+			rows[key] = []
+		(rows[key] as Array).append(r)
+	for key in rows.keys():
+		var row: Array = []
+		row.assign(rows[key] as Array)
+		row.sort_custom(func(a: Rect2, c: Rect2) -> bool: return a.position.x < c.position.x)
+		for i in row.size() - 1:
+			var step: float = (row[i + 1] as Rect2).position.x - (row[i] as Rect2).position.x
+			pitch = minf(pitch, step)
+	if pitch == INF:
+		return 0.0
+	return pitch * 0.4
+
+
+## Подпись клавиши → действие. Пусто для заблокированных (Ctrl, Win, Alt).
+static func _act_of(s: String) -> String:
+	if s == "←":
+		return "стереть"
+	if s == "Shift" or s == "ShiftR":
+		return "шифт"
+	if s == "↵":
+		return "ввод"
+	if s == "глобус":
+		return "язык"
+	if _is_blocked(s):
+		return ""
+	return s
 
 
 ## Нарисовать кнопки на канве вызывателя. Шрифт и стиль — вызывателя.
