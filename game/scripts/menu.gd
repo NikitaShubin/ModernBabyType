@@ -909,7 +909,7 @@ func _pointer_up(finger: int) -> void:
 	elif was_drag and absf(_fling_v) > 240.0:
 		# Бросок: список катится по инерции и плавно встаёт.
 		# Палец вверх (v<0) — едем вниз по списку.
-		_scroll_target = _scroll_clamp(_scroll - _fling_v * 0.12)
+		_scroll_target = _scroll_free(_scroll - _fling_v * 0.12)
 	_fling_v = 0.0
 	if deferred or was_drag or was_long:
 		get_viewport().set_input_as_handled()
@@ -1049,7 +1049,7 @@ func _input(event: InputEvent) -> void:
 		if not _dragged and absf(fdy) < DRAG_MIN:
 			return
 		_dragged = true
-		_scroll = _scroll_clamp(_drag_scroll0 - fdy)
+		_scroll = _scroll_free(_drag_scroll0 - fdy)
 		_scroll_target = _scroll
 		var snow := Time.get_ticks_msec()
 		var sdt := float(maxi(1, snow - _fling_last_t)) / 1000.0
@@ -1077,7 +1077,7 @@ func _input(event: InputEvent) -> void:
 			_dragged = true
 			# Список едет за пальцем 1:1, без отставания: цель и факт —
 			# одно и то же. Скорость запоминаем для флинга на отпускании.
-			_scroll = _scroll_clamp(_drag_scroll0 - dy)
+			_scroll = _scroll_free(_drag_scroll0 - dy)
 			_scroll_target = _scroll
 			var now := Time.get_ticks_msec()
 			var dt := float(maxi(1, now - _fling_last_t)) / 1000.0
@@ -1967,6 +1967,18 @@ func _focus_scroll_bounds() -> Vector2:
 func _scroll_clamp(v: float) -> float:
 	var b := _focus_scroll_bounds()
 	return clampf(v, b.x, b.y)
+
+
+## Пальцевая прокрутка: свап и бросок ведут список от руки, а правило
+## «выбранный в окне ЦЕЛИКОМ» (16.10.2026, для стрелок) его СКЛЕИВАЛО
+## в ноль: при выбранной верхней строке круг был [0..0] при живом
+## max_scroll — свап мёртв (жалоба автора 17.10.2026: «то прокручивается
+## свапом, то заморожен и не двигается вообще»; заморожено ровно при
+## выбранной верхней строке, при другом sel отпускалось). Палец тянет
+## по полному ходу [0, max]; к выбранному возвращают стрелка/Enter
+## (_scroll_to_sel) и открытие меню (open()).
+func _scroll_free(v: float) -> float:
+	return clampf(v, 0.0, _list_max_scroll())
 
 
 ## Держать выбранного игрока в окне (стрелки на клавиатуре, Enter).
@@ -3507,12 +3519,13 @@ func _draw_list_frame(view: Rect2) -> void:
 ## выше окна.
 func _draw_list_mask(view: Rect2) -> void:
 	var paper := Ui.PAPER_NIGHT if night else PAPER
-	draw_rect(
-		Rect2(
-			Vector2(0.0, view.end.y), Vector2(view_w, _buttons_y() - view.end.y)
-		),
-		paper
-	)
+	# Ниже окна списка скрываем ВСЁ до края экрана, а не только до
+	# кнопок (автор 17.10.2026: «список может выходить за границы своей
+	# формы и оказываться под кнопками»). Между окном и кнопками мимо
+	# проходила десяток-другой пикселей (полоса и зазор), а карточка,
+	# заехавшая ПОД кнопки, торчала снизу и по краю. Кнопки рисуются
+	# позже и поверх маски — им маска не мешает.
+	draw_rect(Rect2(Vector2(0.0, view.end.y), Vector2(view_w, view_h - view.end.y)), paper)
 
 
 

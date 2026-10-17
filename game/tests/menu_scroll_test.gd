@@ -130,7 +130,30 @@ func _mode(tag: String) -> void:
 	)
 	_drag_far()
 	_snap()
-	_sel_visible(tag + ": якорь держит при drag")
+	# Палец листает ПОЛНЫЙ ход: якорь «выбранный целиком в окне»
+	# (16.10.2026) держал драг в нуле, когда выбрана верхняя строка —
+	# круг фокуса [0..0] при живом max_scroll, свап был мёртв
+	# (автор 17.10.2026: «то прокручивается свапом, то заморожен и
+	# не двигается вообще»). Колесу и стрелкам якорь оставлен;
+	# к выбранному возвращают стрелка/Enter/_scroll_to_sel и open().
+	_check(
+		_menu._scroll > 0.0,
+		tag + ": drag scrolls even with the top row selected"
+	)
+	# Тот же полный ход пальцем (телефонный путь — ScreenDrag).
+	_menu.sel = 0
+	_menu._scroll = 0.0
+	_menu._scroll_target = 0.0
+	_drag_finger()
+	_snap()
+	_check(
+		_menu._scroll > 0.0,
+		tag + ": finger drag scrolls with the top row selected"
+	)
+	# К выбранному якорь возвращается навигацией, а не зажимом свапа.
+	_menu.call("_scroll_to_sel")
+	_snap()
+	_sel_visible(tag + ": nav returns the anchor after a free drag")
 
 
 func _cards_mode() -> void:
@@ -160,15 +183,35 @@ func _drag_far() -> void:
 	press.position = p
 	_menu.call("_input", press)
 	var mv := InputEventMouseMotion.new()
-	mv.position = p + Vector2(0.0, 600.0)
-	mv.relative = Vector2(0.0, 600.0)
+	mv.position = p + Vector2(0.0, -600.0)
+	mv.relative = Vector2(0.0, -600.0)
 	mv.button_mask = MOUSE_BUTTON_MASK_LEFT
 	_menu.call("_input", mv)
 	var rel := InputEventMouseButton.new()
 	rel.button_index = MOUSE_BUTTON_LEFT
 	rel.pressed = false
-	rel.position = p + Vector2(0.0, 600.0)
+	rel.position = p + Vector2(0.0, -600.0)
 	_menu.call("_input", rel)
+
+
+## Свап РЕАЛЬНОГО телефона: ScreenTouch + ScreenDrag (эмуляция мыши
+## выключена, который 0.0.29 — мышиное эхо на телефоне не приходит).
+func _drag_finger() -> void:
+	var p: Vector2 = Rect2(_menu.call("_row_tap_rect", _menu.sel)).get_center()
+	var down := InputEventScreenTouch.new()
+	down.position = p
+	down.pressed = true
+	_menu.call("_input", down)
+	var far := p
+	for step in [Vector2(0.0, -150.0), Vector2(0.0, -380.0), Vector2(0.0, -600.0)]:
+		far = p + step
+		var sd := InputEventScreenDrag.new()
+		sd.position = far
+		_menu.call("_input", sd)
+	var up := InputEventScreenTouch.new()
+	up.position = far
+	up.pressed = false
+	_menu.call("_input", up)
 
 
 func _report() -> void:

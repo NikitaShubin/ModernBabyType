@@ -1498,20 +1498,15 @@ func _part29_card_scroll() -> void:
 		) < 1.0,
 		"cards moved up together with the window"
 	)
-	# Жест до упора — зажим: дальше некуда, и выбранная строка (её
-	# полное попадание в окно и есть граница, см. _focus_scroll_bounds)
-	# не должна уехать за маску.
-	var hi := Vector2(_menu.call("_focus_scroll_bounds")).y
+	# Жест до упора — зажим ПО НОМЕРАМ СПИСКА [0, max] (автор 17.10.2026:
+	# свап ведёт полный ход, «выбранный в окне» остаётся у клавиатуры).
+	# Дальше дна палец не едет, но выбранная строка может уехать
+	# за маску — её возвращает навигация (_scroll_to_sel) и open().
+	var topb: float = _menu.call("_list_max_scroll")
 	_menu.call("_input", _motion(at - Vector2(0.0, 240.0), at - Vector2(0.0, 9000.0)))
 	_check(
-		absf(_menu._scroll - hi) < 1.0 and hi <= max_scroll + 1.0,
-		"the drag stops at the scroll bound (%.1f of %.1f, max %.1f)"
-		% [_menu._scroll, hi, max_scroll]
-	)
-	_check(
-		_menu._scroll >= _menu.call("_row_box_at", _menu.sel, _menu._scroll).end.y
-			- Rect2(_menu.call("_list_rect")).end.y - 1.0,
-		"the selected card stays inside the window at the bound"
+		absf(_menu._scroll - topb) < 1.0,
+		"the drag stops at the scroll bound (%.1f of max %.1f)" % [_menu._scroll, topb]
 	)
 	# Тап после жеста игрока НЕ выбирает: это была прокрутка.
 	_picked = ""
@@ -1534,11 +1529,10 @@ func _part29_card_scroll() -> void:
 	_menu._scroll = max_scroll
 	var at2 := view.get_center()
 	_menu.call("_input", _tap(at2))
-	var lo := Vector2(_menu.call("_focus_scroll_bounds")).x
 	_menu.call("_input", _motion(at2, at2 + Vector2(0.0, 9000.0)))
 	_check(
-		absf(_menu._scroll - lo) < 1.0 and lo >= 0.0,
-		"the list stops at the top bound (%.1f, bound %.1f)" % [_menu._scroll, lo]
+		absf(_menu._scroll) < 1.0,
+		"the list stops at the top bound (%.1f, bound 0.0)" % _menu._scroll
 	)
 	_menu.call("_input", _release(at2 + Vector2(0.0, 9000.0)))
 	# Колесо мыши (десктоп) листает список так же — и задаёт ЦЕЛЬ:

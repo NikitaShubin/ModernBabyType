@@ -297,6 +297,9 @@ var _players_rect := Rect2()
 ## Кружок уровня: тап по нему включает/выключает дебаг (на телефоне
 ## клавиши F3 нет, а цифры клавиатуры для настройки нужны).
 var _badge_rect := Rect2()
+## Заголовок текущей строки (имя игрока): для проверок перекрытий
+## верхней панели (панель обязана не наезжать сама на себя).
+var _title_rect := Rect2()
 ## Оформление (только картинка, логику не трогает): скруглённые панели
 ## под карточкой текста, табло и подсказкой. Стили создаются раз в
 ## _ready, геометрию считает _layout_card().
@@ -969,10 +972,16 @@ func _relayout() -> void:
 	# Геометрия модалки — в _layout_text_lines (каждый кадр): позиция
 	# зависит от скролла. Здесь только кнопки и панели.
 	hud_label.size = Vector2(view_w - margin * 2.0, 70.0 * k)
-	# Кнопка ≡ — справа вверху, на всех платформах одинаково. Отдельной
+	# Кнопка ≡ — справа вверху, на всех платформах одинаково. Пол
+	# 44dp на сенсорных экранах: в альбоме k ужимается эффективной
+	# высотой, кнопка падала до ~50×43 px канваса и еле ловилась тапом
+	# (автор 17.10.2026). На десктопе пола нет — как было. Отдельной
 	# кнопки вызова клавиатуры нет: её вызывает тап по полю ввода
 	# в меню и по рабочей области в игре (решение автора 10.2026).
-	_players_rect = Rect2(view_w - 72.0 * k, 16.0 * k + top_safe, 56.0 * k, 48.0 * k)
+	var tuber := not Ui.is_desktop()
+	var pw := maxf(56.0 * k, (44.0 * Ui.dpr()) if tuber else 0.0)
+	var phh := maxf(48.0 * k, pw)
+	_players_rect = Rect2(view_w - pw - 16.0 * k, 16.0 * k + top_safe, pw, phh)
 	_layout_card()
 	_layout_pills()
 	# Панель модалки обновляется в _layout_text_lines (каждый кадр),
@@ -2656,6 +2665,19 @@ func _draw() -> void:
 	_draw_hero()
 
 
+## Кегль верхней панели (бейдж уровня, заголовок с именем игрока):
+## базовый 26k, но по полом — 22 производных пикселя на сенсорных
+## экранах. В альбоме k ужимается эффективной высотой (экран «низкий»,
+## к≈0.9) и весь хром сыпался до ~23 px — «еле читаемые и кликабельные»
+## (автор 17.10.2026). Пол по dpr: на десктопе dpr=1 и пола не видно,
+## на телефоне текст минимум 22dp, значит и пилюля выше него.
+func _bar_fs() -> int:
+	var fs := int(26.0 * k)
+	if not Ui.is_desktop():
+		fs = maxi(fs, int(22.0 * Ui.dpr()))
+	return fs
+
+
 ## Своя клавиатура: клавиши прямо дают символы (тап → буква, без IME).
 ## Рисуется в _draw поверх всего нижнего (области не пересекаются).
 ## Подписи клавиш, которые подсветить после простоя. Пусто — рано
@@ -3266,14 +3288,19 @@ func _title_text() -> String:
 ## Длинное режем многоточием, чтобы не налезть на бейдж и кнопки.
 func _draw_title() -> void:
 	var who := _title_text()
-	var fs := int(26.0 * k)
+	var fs := _bar_fs()
 	var pad := 16.0 * k
-	var max_w := maxf(view_w - _badge_rect.size.x - 220.0 * k, 120.0 * k)
+	# Зазор между бейджем и кнопкой ≡ честный: с пальцевым полом кнопка
+	# стала шире, и старый запас 220k мог наехать на неё.
+	var max_w := maxf(
+		_players_rect.position.x - _badge_rect.end.x - 40.0 * k, 120.0 * k
+	)
 	var t := _short_text(who, fs, max_w)
 	var tw := mono.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x
 	var w := tw + pad * 2.0
-	var h := 42.0 * k
+	var h := maxf(42.0 * k, float(fs) * 1.55)
 	var r := Rect2(Vector2((view_w - w) * 0.5, 14.0 * k + top_safe), Vector2(w, h))
+	_title_rect = r
 	draw_style_box(pill_sb, r)
 	draw_string(
 		mono, r.position + Vector2(pad, h * 0.5 + float(fs) * 0.36), t,
@@ -3301,11 +3328,11 @@ func _badge_text() -> String:
 func _draw_level_badge() -> void:
 	# Уровень и счёт до него одной дробью: «УР 2 · 2/3».
 	var t := _badge_text()
-	var fs := int(26.0 * k)
+	var fs := _bar_fs()
 	var tw := mono.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x
 	var pad := 16.0 * k
 	var w := tw + pad * 2.0
-	var h := 42.0 * k
+	var h := maxf(42.0 * k, float(fs) * 1.55)
 	var r := Rect2(Vector2(14.0 * k, 14.0 * k + top_safe), Vector2(w, h))
 	_badge_rect = r.grow(4.0 * k)
 	draw_style_box(badge_sb, r)

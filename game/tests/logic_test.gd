@@ -318,6 +318,7 @@ func _process(_dt: float) -> bool:
 		_marker_cells()
 		_legend_roundtrip()
 		_layout_positions()
+		_bar_floors()
 		_report()
 		return true
 	return false
@@ -1157,6 +1158,68 @@ func _lin_stable() -> void:
 	DisplayServer.window_set_size(Vector2i(1100, 650))
 	root.size = Vector2i(1100, 650)
 	_main._relayout()
+
+
+## Верхняя панель — палец даже в альбоме (автор 17.10.2026: «в
+## горизонтальном... еле читаемые и кликабельные — слишком мелкие»).
+## k в альбоме ужимается эффективной высотой (≈0.9), и хром на k сыпался:
+## кегль 26k ≈ 23 px, кнопка ≡ 50×43. Пол по dpr: телефон получает
+## минимум 22dp текста и 44dp кнопку, десктоп (dpr=1) не меняется.
+## Панель обязана не наезжать сама на себя в обеих ориентациях.
+func _bar_floors() -> void:
+	var was_dpr := Ui.dpr_override
+	var was_ft := bool(_main._force_touch)
+	# Альбомный телефон: канвас 2280×1080 (физические пиксели), dpr=2,
+	# сенсор принудительно. k в игре меряет от физических размеров,
+	# поэтому «полу-канвасом» как в menu пробы не равны.
+	DisplayServer.window_set_size(Vector2i(2280, 1080))
+	root.size = Vector2i(2280, 1080)
+	Ui.dpr_override = 2.0
+	_main._force_touch = true
+	Ui.force_touch = true
+	_main._relayout()
+	var fs: int = _main.call("_bar_fs")
+	_check(fs >= int(22.0 * 2.0), "landscape phone badge kegl keeps the 22dp floor (%d)" % fs)
+	var pr: Rect2 = _main._players_rect
+	_check(pr.size.x >= 44.0 * 2.0 - 0.5 and pr.size.y >= 44.0 * 2.0 - 0.5,
+		"landscape ≡ button keeps the 44dp finger floor (%dx%d)" % [pr.size.x, pr.size.y])
+	# Бейдж, заголовок и ≡ попарно не пересекаются и не выше карты.
+	var bd := Rect2(_main._badge_rect)
+	var te := Rect2(_main._title_rect)
+	_check(not bd.intersects(te), "landscape: badge does not overlap the title")
+	_check(not te.intersects(pr) and not bd.intersects(pr),
+		"landscape: top bar does not overlap ≡")
+	_check(te.end.y < bd.position.y + 2.0 * bd.size.y, "landscape: top bar in its band")
+	# Портретный телефон: канвас 1080×2280, тот же dpr.
+	DisplayServer.window_set_size(Vector2i(1080, 2280))
+	root.size = Vector2i(1080, 2280)
+	_main._relayout()
+	var fs_p: int = _main.call("_bar_fs")
+	_check(fs_p >= fs - 1, "portrait badge kegl is not smaller than landscape (%d < %d)" % [fs_p, fs])
+	var prp: Rect2 = _main._players_rect
+	_check(prp.size.x >= 44.0 * 2.0 - 0.5 and prp.size.y >= 44.0 * 2.0 - 0.5,
+		"portrait ≡ button keeps the floor (%dx%d)" % [prp.size.x, prp.size.y])
+	var tbd := Rect2(_main._badge_rect)
+	var tit := Rect2(_main._title_rect)
+	_check(not tbd.intersects(tit) and not tit.intersects(prp),
+		"portrait: top bar does not overlap itself")
+	# Десктоп: полы бездействуют (не сенсорный экран) — прежнее поведение.
+	DisplayServer.window_set_size(Vector2i(1100, 650))
+	root.size = Vector2i(1100, 650)
+	Ui.dpr_override = 0.0
+	var was_ft2 := bool(_main._force_touch)
+	_main._force_touch = false
+	Ui.force_touch = false
+	_main._relayout()
+	var fs_d: int = _main.call("_bar_fs")
+	_check(fs_d == int(26.0 * float(_main.k)),
+		"desktop kegl stays 26k (%d vs %d)" % [fs_d, int(26.0 * float(_main.k))])
+	var prd: Rect2 = _main._players_rect
+	_check(absf(prd.size.x - 56.0 * float(_main.k)) < 0.5,
+		"desktop ≡ button keeps its old size (%.0f)" % prd.size.x)
+	_main._force_touch = was_ft2
+	Ui.force_touch = was_ft2
+
 
 
 func _text_bases() -> void:
