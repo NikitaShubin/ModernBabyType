@@ -322,6 +322,10 @@ func _own_press(pos: Vector2) -> bool:
 var selbox_sb: StyleBoxFlat
 var hint_sb: StyleBoxFlat
 var list_frame_sb: StyleBoxFlat
+## Панели чипов-флагов в карточке: своя заливка «включено» и ободок
+## выделения (см. _ready и _card_chip).
+var chip_on_sb: StyleBoxFlat
+var chip_focus_sb: StyleBoxFlat
 ## Ночь (S.resolve_night: ручной выбор или система). Краски берутся
 ## из хелперов _ink/_uitext/_dim, панели мутируют в _apply_night.
 var night := false
@@ -344,6 +348,16 @@ func _ready() -> void:
 	kb_press_err_sb = Ui.panel_sb(Color("#ff8a80"), 10.0, INK, 2.5, false)
 	selbox_sb = Ui.panel_sb(Color("#a9c6ec"), 10.0, INK, 2.0, false)
 	hint_sb = Ui.panel_sb(Color(1, 1, 1, 0.72), 14.0, Color("#e0d5bd"), 1.5, false)
+	# Чип флага «включено»: своя зелёная заливка. Раньше включённый флаг
+	# красился жёлтым row_sb — тем же, что фон выделенной строки, и на
+	# выбранной карточке он тонул в выделении («выделение внутри
+	# выделения», жалоба автора 16.10.2026), а ночью этот жёлтый стоял
+	# пятном на тёмном фоне. Зелёный не совпадает ни с жёлтым
+	# выделением, ни с пустой рамкой выключенного флага.
+	chip_on_sb = Ui.panel_sb(Color("#c7e0ac"), 10.0, INK, 2.0, false)
+	# Выделение колонки с клавиатуры — только ободок, заливку не трогает:
+	# иначе фокус снова прятал состояние флага.
+	chip_focus_sb = Ui.panel_sb(Color(0, 0, 0, 0), 10.0, Color("#4a88c8"), 3.0, false)
 	# Рамка списка — та же тихая обводка, что у пилюли-подсказки
 	# (автор 16.10.2026: рамка должна быть скруглённой и неконтрастной,
 	# в стиле остального интерфейса). Заливки нет, только контур.
@@ -1917,9 +1931,9 @@ func _cards() -> bool:
 ## палец, но не выше 132px: при k≈2.5 (телефон с плотностью экрана)
 ## кнопка, посчитанная от k, съела бы пол-карточки и место для имени.
 func _card_btn_at(kk: float) -> float:
-	if Ui.is_desktop():
-		return 56.0 * kk
-	return clampf(72.0 * kk, 64.0, 150.0)
+	if _finger():
+		return clampf(72.0 * kk, _TAP_MIN, 132.0)
+	return 56.0 * kk
 
 
 ## Сторона кнопки в карточке (Про, Ё, ✕). На телефоне — под палец: пол
@@ -1927,9 +1941,7 @@ func _card_btn_at(kk: float) -> float:
 ## съела бы пол-карточки). В карточке, растянутой на окно, кнопка тоже
 ## растёт — но в тех же пределах.
 func _card_btn() -> float:
-	if Ui.is_desktop():
-		return 56.0 * _card_k()
-	return clampf(72.0 * _card_k(), 64.0, 132.0)
+	return _card_btn_at(_card_k())
 
 
 
@@ -2146,8 +2158,19 @@ func _card_btn_row(i: int) -> float:
 func _card_btn_rect(i: int, which: String) -> Rect2:
 	var c := _card_rect(i)
 	var gap := maxf(8.0 * k, 2.0)
-	var x0 := c.position.x + _CARD_IN * k
-	var w := (c.size.x - _CARD_IN * k * 2.0 - gap * 2.0) / 3.0
+	var inset := _CARD_IN * k
+	var x0 := c.position.x + inset
+	var w := (c.size.x - inset * 2.0 - gap * 2.0) / 3.0
+	if _finger() and w < _TAP_MIN:
+		# Три кнопки в ряд на узкой карточке были по 48px — мимо пальца.
+		# Сжимаем поля и зазор ровно настолько, чтобы дойти до пола, и
+		# НЕ БОЛЬШЕ: поля по краям карточки держат имя и цифры в одной
+		# колонке (иначе чипы уезжают под зайчика и к самому краю).
+		var edge: float = minf(_TAP_MIN, (c.size.x - 6.0 * k) / 3.0)
+		var want: float = edge * 3.0 + gap * 2.0
+		inset = maxf(2.0 * k, inset - (want - c.size.x) * 0.5)
+		w = maxf((c.size.x - inset * 2.0 - gap * 2.0) / 3.0, edge)
+		x0 = c.position.x + inset
 	var y := _card_btn_row(i)
 	# Слева направо: Про, Ё, ✕.
 	var idx := 0
@@ -2514,6 +2537,14 @@ const _TAP_MIN := 64.0
 const _PAD_MIN := 22.0
 
 
+## Палец или мышь. Узкое окно — палец даже на десктопе: автор гонял
+## игру в портретном окне и жаловался, что кнопки «новый игрок» и «без
+## профиля» мелкие, а чипы «Про/Ё/✕» тем более (16.10.2026). Правило
+## поэтому не про платформу, а про форму: портретное окно — палец.
+func _finger() -> bool:
+	return not Ui.is_desktop() or view_w < 700.0
+
+
 ## Высота зоны тапа: на телефоне меньше 64px не для пальца, на десктопе
 ## курсором и так попасть можно. _at-вариант — для подбора k (см. _fit_k).
 func _tap_h(h: float) -> float:
@@ -2714,6 +2745,9 @@ func _apply_night() -> void:
 		selbox_sb.border_color = Color("#8b93a8")
 		hint_sb.bg_color = Color(0.10, 0.12, 0.20, 0.80)
 		hint_sb.border_color = Color("#3a4a6b")
+		chip_on_sb.bg_color = Color("#33513c")
+		chip_on_sb.border_color = Color("#7fae86")
+		chip_focus_sb.border_color = Color("#9ec8ff")
 		list_frame_sb.border_color = Color("#3a4a6b")
 		kb_key_sb.bg_color = Color("#232c44")
 		kb_key_sb.border_color = Color("#8b93a8")
@@ -2727,6 +2761,9 @@ func _apply_night() -> void:
 		selbox_sb.border_color = INK
 		hint_sb.bg_color = Color(1, 1, 1, 0.72)
 		hint_sb.border_color = Color("#e0d5bd")
+		chip_on_sb.bg_color = Color("#c7e0ac")
+		chip_on_sb.border_color = INK
+		chip_focus_sb.border_color = Color("#4a88c8")
 		list_frame_sb.border_color = Color("#e0d5bd")
 		kb_key_sb.bg_color = Color("#ffffff")
 		kb_key_sb.border_color = INK
@@ -2757,9 +2794,11 @@ func _btn_h() -> float:
 
 
 func _btn_h_at(kk: float) -> float:
-	if Ui.is_desktop():
-		return 52.0 * kk
-	return maxf(52.0 * kk, 64.0)
+	# Ряд кнопок внизу — те же 72×масштаб и тот же пол 64px под палец, что
+	# у чипов в карточке: автор просил «примерно то же, что с Про и Ё».
+	if _finger():
+		return clampf(72.0 * kk, _TAP_MIN, 132.0)
+	return 52.0 * kk
 
 
 
@@ -3264,18 +3303,35 @@ func _draw_list_mask(view: Rect2) -> void:
 
 ## Подпись на кнопке карточки (Про / Ё / ✕): кегль карточки, а не
 ## табличный, иначе на растянутой карточке подпись тонет.
+## Чип-флаг в карточке: «Про» и «Ё».
+##
+## Состояние — ЗНАКОМ и своей заливкой (автор 16.10.2026: «включение и
+## выключение кнопки про почему-то никак не отличается», а «Ё»
+## закрашивалась в цвет фона выделенной строки — выделение внутри
+## выделения»):
+##   включено — «✓ Про» на зелёном (chip_on_sb), тёмный текст;
+##   выключено — пустая рамка box_sb, подпись приглушённая;
+##   выделение колонки с клавиатуры — ТОЛЬКО ободок (chip_focus_sb),
+##   иначе фокус опять спрятал бы состояние.
 func _card_chip(i: int, which: String, label: String) -> void:
 	var r := _card_btn_rect(i, which)
 	var lit := i == sel and sel_col == (0 if which == "pro" else 1)
 	var on := _row_flag(i, which)
-	draw_style_box(selbox_sb if lit else (row_sb if on else box_sb), r)
+	var txt := ("✓ " if on else "") + label
 	var fs := _card_fs(FONT_ROW)
-	var sz := _text_size_fs(label, fs)
-	var tcol := INK if (lit or on) else _uitext()
+	# «✓ Про» на узкой карточке не влезает — ужимаем кегль, а не режем
+	# подпись (иначе состояние снова не читается).
+	var room: float = r.size.x - 12.0 * k
+	while fs > 9 and _text_size_fs(txt, fs).x > room:
+		fs -= 1
+	var sz := _text_size_fs(txt, fs)
+	draw_style_box(chip_on_sb if on else box_sb, r)
+	if lit:
+		draw_style_box(chip_focus_sb, r)
 	_text_fs(
-		label,
+		txt,
 		Vector2(r.get_center().x - sz.x * 0.5, r.get_center().y + sz.y * 0.3),
-		fs, tcol
+		fs, INK if on else _uitext()
 	)
 
 
