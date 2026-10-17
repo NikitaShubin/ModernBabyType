@@ -474,13 +474,26 @@ func _reload() -> void:
 	# экрана, на котором его показали.
 	confirm_name = ""
 	hint_header = ""
-	# Пустой список — это первый запуск: курсор сразу в поле имени.
-	# Иначе буквы уходят в никуда, и кажется, что игра не реагирует.
-	# Набирать имя при пустом списке больше нечем, так что неактивное
-	# поле здесь — просто ловушка.
+	# Пустой список — это первый запуск: сразу открыта строка создания
+	# с полем. Иначе буквы уходят в никуда, и кажется, что игра не
+	# реагирует. Именно СТРОКА (как и остальное создание), а не голое
+	# input_active: поле рисуется в строке, и без строки набираемое имя
+	# было не видно вообще (ловил 16.10.2026 на первом запуске).
 	if users.is_empty():
-		input_active = true
-		input_text = ""
+		# Пустой список: единственная строка — создание. Если правилась
+		# не она (список только что опустел), открываем её заново.
+		if editing < 0 or not editing_new:
+			_start_edit(0)
+	elif editing >= 0:
+		# Правка держится ровно на своей строке: создание — это строка с
+		# номером users.size(), переименование — существующая. Всё прочее
+		# (список пересобрали не из той строки, кто-то создал игрока в
+		# обход меню) — висячая правка, её закрываем.
+		var row_ok := editing < users.size()
+		if editing_new:
+			row_ok = editing == users.size()
+		if not row_ok:
+			_drop_edit()
 	_scroll = _scroll_clamp(_scroll)
 	_scroll_target = _scroll_clamp(_scroll_target)
 	# Список пересобран — ховер под новым содержимым гасим.
@@ -624,8 +637,15 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			_cancel_edit()
 			_eaten()
 			return
+		if ke.keycode == KEY_F2:
+			# Выход из ЛЮБОГО состояния (правило chaos-теста): правка
+			# имени — не тупик, F2 отменяет её и возвращает в игру.
+			_cancel_edit()
+			chosen.emit(resume_user)
+			_eaten()
+			return
 		if ke.keycode in [KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_SPACE,
-				KEY_TAB, KEY_DELETE, KEY_INSERT, KEY_F2]:
+				KEY_TAB, KEY_DELETE, KEY_INSERT]:
 			_eaten()
 			return
 	# F2 — вернуться в игру тем же игроком, кого открыли меню.
@@ -950,6 +970,18 @@ func _tap(pos: Vector2) -> void:
 	# фиксирует:Esc есть только на железе).
 	if editing >= 0:
 		if _own_press(pos):
+			return
+		# Галки строки правки — свои: на них нарисован текущий флаг,
+		# значит и переключаются они (иначе чипы декоративные: у
+		# создаваемого профиля статистики нет, всё остальное в строке
+		# занято полем ввода).
+		if _pro_tap_rect(editing).has_point(pos):
+			_toggle_pro(editing)
+			get_viewport().set_input_as_handled()
+			return
+		if _yo_tap_rect(editing).has_point(pos):
+			_toggle_yo(editing)
+			get_viewport().set_input_as_handled()
 			return
 		if _del_tap_rect(editing).has_point(pos):
 			_cancel_edit()
@@ -2177,6 +2209,10 @@ func _commit_edit() -> void:
 		return
 	var name := S.clean_name(input_text)
 	if name.is_empty():
+		# Создание без имени: человек ещё набирает — поле остаётся.
+		# Переименование пустым именем — откат к прежнему виду.
+		if editing_new:
+			return
 		_cancel_edit()
 		return
 	if editing_new:
@@ -2205,11 +2241,27 @@ func _commit_edit() -> void:
 
 ## Esc в редактировании: создание — строка исчезает, переименование —
 ## возвращается прежний вид (имя в списке не трогали, оно в input_text).
+## Сброс правки БЕЗ пересборки геометрии. Из _reload звать _cancel_edit
+## нельзя: тот тянет _relayout, а тот берёт размер из вьюпорта (в тестах
+## он 64x64 и сбивает выставленные руками величины).
+func _drop_edit() -> void:
+	editing = -1
+	editing_new = false
+	input_text = ""
+	input_active = false
+	input_all_keys = false
+	input_yo_strict = true
+
+
 func _cancel_edit() -> void:
 	editing = -1
 	editing_new = false
 	input_text = ""
 	input_active = false
+	# Ждущие флаги — тоже состояние правки: без сброса они «переживали»
+	# сессию и всплывали галочками у следующего создаваемого.
+	input_all_keys = false
+	input_yo_strict = true
 	_relayout()
 	queue_redraw()
 
