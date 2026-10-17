@@ -2754,6 +2754,9 @@ func _release_held() -> void:
 	var was := kb_held
 	kb_held = ""
 	kb_repeat_t = 0.0
+	# Дедуп живёт внутри одного жеста: отпустили — новое нажатие вправе
+	# напечатать ту же букву, хоть и сразу (быстрые «сс»).
+	_own_dedup_key = ""
 	if was == "шифт":
 		_set_kb_shift(false)
 	if kb_press == was:
@@ -2872,6 +2875,23 @@ const HOME_LETTERS: Array[String] = ["ф", "ы", "в", "а", "п", "р", "о", "
 ## Из них — те, что есть в текущем тексте уровня (см. `_refresh_home_chars`).
 var home_chars: Array[String] = []
 
+## Окно дедупа касания и мыши (мс). Эмуляция мыши выключена в проекте
+## (см. project.godot), но остались железки/прошивки, где мышиное эхо
+## всё же приходит — причём РАНЬШЕ самого касания: подавление по
+## счётчику (_is_touch_echo) видит эхо ещё до того, как касание
+## взвело счётчик. На телефоне автора один тап давал ДВА ввода:
+## «и» принималась, а её дубль ложился опечаткой на следующую клетку —
+## на экране «Вии» вместо «Вид», красная поверх «д» (17.10.2026).
+## Окно узкое нарочно: две ПОСЛЕДОВАТЕЛЬНЫХ буквы («сс», «папа») — это
+## два жеста, между ними хоть 60 мс; эхо же приходит в ту же-следующую
+## пару кадров (~33 мс). Шифт не подводит: он идемпотентен.
+const TOUCH_ECHO_T := 40
+
+## Клавиша предыдущего принятого нажатия и чем оно было (палец/мышь).
+var _own_dedup_key := ""
+var _own_dedup_t := 0
+var _own_dedup_finger := false
+
 
 func _own_press(pos: Vector2, live := false, finger := false) -> bool:
 	if not _own_shown():
@@ -2880,6 +2900,19 @@ func _own_press(pos: Vector2, live := false, finger := false) -> bool:
 	var act := Kbd.hit(_own_rect(), kb_shift, _kb_enter_shown(), pos, finger)
 	if act == "":
 		return false
+	# Дедуп касания и мыши: одна и та же клавиша дважды меньше чем за
+	# TOUCH_ECHO_T от РАЗНЫХ источников — это эхо одного касания, второе
+	# ввода не делает (см. TOUCH_ECHO_T).
+	var dnow := Time.get_ticks_msec()
+	if (
+		_own_dedup_key == act
+		and _own_dedup_finger != finger
+		and dnow - _own_dedup_t <= TOUCH_ECHO_T
+	):
+		return true
+	_own_dedup_key = act
+	_own_dedup_t = dnow
+	_own_dedup_finger = finger
 	if live and _repeatable(act):
 		# Новую клавишу держим с паузой, повтор той же паузу не сносит.
 		if kb_held != act:
@@ -3051,6 +3084,10 @@ func _touch_up(finger: int) -> void:
 	# Мышиное эхо касания всегда приходит ДО отпускания — счётчик
 	# погашенных эх обнуляем здесь (см. _is_touch_echo).
 	_echo_pending = 0
+	# Дедуп тоже живёт внутри жеста (см. _release_held): следующий тап —
+	# новое нажатие, даже если это та же клавиша и было это мгновение
+	# назад (быстрые «сс»).
+	_own_dedup_key = ""
 	var act := String(_touch_keys.get(finger, ""))
 	_touch_keys.erase(finger)
 	if act == "":

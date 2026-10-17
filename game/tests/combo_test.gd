@@ -1223,6 +1223,72 @@ func _case_warm_up() -> void:
 ## нет»). Плюс мышиное эхо того же касания — его обязаны пропустить,
 ## иначе палец набирает букву дважды.
 ##
+## Эхо РАНЬШЕ касания: на некоторых телефонах мышиное дублирование
+## касания приходило ДО InputEventScreenTouch — подавление по счётчику
+## (_is_touch_echo) видело ноль и пропускало эхо как настоящее нажатие.
+## Один тап давал ДВА ввода: буква принималась, дубль ложился опечаткой
+## на следУЮщую клетку — на экране «Вии» вместо «Вид», красная поверх
+## «д», заяц на месте (жалоба автора 17.10.2026, телефон; на десктопе
+## не бывает). Исправление двухслойное: эмуляция мыши от касаний
+## выключена в project.godot (телефон шлёт только касания), плюс
+## дедуп в _own_press — одна клавиша дважды за 40 мс от разных
+## источников вводится один раз (см. TOUCH_ECHO_T). Сценарий держит
+## ВТОРОЙ слой: оба порядка событий дают ровно один ввод.
+func _case_touch_echo_first() -> void:
+	_check(
+		not bool(ProjectSettings.get_setting(
+			"input_devices/pointing/emulate_mouse_from_touch", true
+		)),
+		"touch echo first: emulate_mouse_from_touch is on again — двойной ввод возвращается"
+	)
+	_fresh(1, 0)
+	_kbd_on()
+	var tag := "touch echo first"
+	var btns := _kbd_buttons()
+	# Уровень «ид»: ждёмая буква известна заранее (буква «и»).
+	_set_level_text(["ид"])
+	_main.active = {" ": true, "и": true, "д": true}
+	_main.need_enter = false
+	_main._refresh()
+	var p: Vector2 = btns["и"]
+	# Порядок телефона: мышиное эхо приходит РАНЬШЕ касания. Один тап —
+	# один ввод: верный, без метки опечатки.
+	var ok0: int = _main.typed_ok
+	_main.call("_input", _touch_echo(p))
+	_main.call("_input", _touch(0, p, true))
+	_tick(tag)
+	_check(
+		_main.typed_ok == ok0 + 1,
+		"%s: one tap typed twice? (%d → %d)" % [tag, ok0, _main.typed_ok]
+	)
+	_check(_main.errors.is_empty(), "%s: the tap left a typo mark" % tag)
+	_check(_main.cursor_pos == 1, "%s: the cursor did not advance once" % tag)
+	_main.call("_input", _touch(0, p, false))
+	_main.call("_input", _release(p))
+	_tick(tag)
+	# И порядок «касание → эхо» не сломан (старое подавление счётчиком).
+	_fresh(1, 0)
+	_kbd_on()
+	_set_level_text(["ид"])
+	_main.active = {" ": true, "и": true, "д": true}
+	_main.need_enter = false
+	_main._refresh()
+	ok0 = _main.typed_ok
+	_main.call("_input", _touch(0, p, true))
+	_main.call("_input", _touch_echo(p))
+	_tick(tag)
+	_check(
+		_main.typed_ok == ok0 + 1,
+		"%s: the touch-then-echo order types twice (%d → %d)" % [
+			tag, ok0, _main.typed_ok
+		]
+	)
+	_main.call("_input", _touch(0, p, false))
+	_main.call("_input", _release(p))
+	_tick(tag)
+
+
+
 ## Пальцевой промах: контактная пятна шире клавиши, а щель между
 ## клавишами на телефоне — 18-31 % шага (замерено на раскладке 412x915).
 ## Тап в щель раньше ПРОПАДАЛ: человек жал повторно, попадал в соседнюю
@@ -3442,6 +3508,7 @@ func _fill_cases() -> void:
 	_cases_list.append(["_case_touch_keyboard", Callable(self, "_case_touch_keyboard"), 0])
 	_cases_list.append(["_case_touch_multitouch", Callable(self, "_case_touch_multitouch"), 0])
 	_cases_list.append(["_case_touch_gap", Callable(self, "_case_touch_gap"), 0])
+	_cases_list.append(["_case_touch_echo_first", Callable(self, "_case_touch_echo_first"), 0])
 	_cases_list.append(["_case_warm_up", Callable(self, "_case_warm_up"), 0])
 	_cases_list.append(["_case_kbd_shift_layer", Callable(self, "_case_kbd_shift_layer"), 0])
 	_cases_list.append(["_case_long_press", Callable(self, "_case_long_press"), 0])

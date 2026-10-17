@@ -288,6 +288,16 @@ func _own_press(pos: Vector2, finger := false) -> bool:
 	var act := Kbd.hit(_own_rect(), kb_shift, true, pos, finger)
 	if act == "":
 		return false
+	# Дедуп касания и мыши — как в main.gd (_own_press): мышиное эхо
+	# касания на некоторых железках приходит раньше самого касания,
+	# и один тап давал два нажатия. Окно узкое: две отдельные буквы
+	# между собой дольше, эхо — в паре кадров.
+	var dnow := Time.get_ticks_msec()
+	if _dedup_key == act and _dedup_finger != finger and dnow - _dedup_t <= 40:
+		return true
+	_dedup_key = act
+	_dedup_t = dnow
+	_dedup_finger = finger
 	_flash(act)
 	if act == "шифт":
 		# Шифт держится пальцем, а не защёлкивается: второй палец в это
@@ -849,6 +859,10 @@ func _eaten() -> void:
 ## касание превращается в мышь только для первого пальца, поэтому
 ## «зажать шифт, нажать букву» не работало (см. _is_touch_echo).
 var _touch_keys: Dictionary = {}
+## Дедуп касания и мыши (см. main.gd `_own_press` и TOUCH_ECHO_T там).
+var _dedup_key := ""
+var _dedup_t := 0
+var _dedup_finger := false
 var _touch_pos := Vector2.ZERO
 var _echo_pending := 0
 
@@ -880,6 +894,9 @@ func _pointer_up(finger: int) -> void:
 		# Удерживаемый шифт гаснет (как на настоящей клавиатуре,
 		# автор 10.2026).
 		_release_held()
+	# Дедуп живёт внутри одного жеста (см. main.gd `_own_press`): отпустили
+	# — следующий тап вправе напечатать ту же букву хоть сразу.
+	_dedup_key = ""
 	var deferred := _press_deferred
 	var was_drag := _dragged
 	var was_long := _press_fired
@@ -949,6 +966,11 @@ func _input(event: InputEvent) -> void:
 			_drag_scroll0 = _scroll
 			_dragged = false
 			_fling_v = 0.0
+			# Точка отсчёта скорости флинга: раньше её задавало мышиное
+			# эхо нажатия, теперь касание — начало жеста (эмуляция мыши
+			# выключена).
+			_fling_last_y = tb.position.y
+			_fling_last_t = Time.get_ticks_msec()
 			if not _press_deferred:
 				_tap(tb.position)
 			return
@@ -1016,6 +1038,29 @@ func _input(event: InputEvent) -> void:
 			_scroll_target = _scroll_clamp(_scroll_target + 90.0 * k)
 			queue_redraw()
 			return
+	elif event is InputEventScreenDrag:
+		# Палец ведёт список: раньше это вело мышиное эхо (эмуляция мыши,
+		# теперь выключена — эхо задваивало набранные буквы), поэтому
+		# жесту скролла своя ветка. Логика та же, что у мыши ниже: 1:1
+		# за пальцем без отставания, скорость — для флинга на отпускании.
+		var sd := event as InputEventScreenDrag
+		_hover_t = 0.0
+		var fdy := sd.position.y - _drag_from.y
+		if not _dragged and absf(fdy) < DRAG_MIN:
+			return
+		_dragged = true
+		_scroll = _scroll_clamp(_drag_scroll0 - fdy)
+		_scroll_target = _scroll
+		var snow := Time.get_ticks_msec()
+		var sdt := float(maxi(1, snow - _fling_last_t)) / 1000.0
+		# Скорость — тем же способом, что у мыши ниже: из дельты позиций,
+		# а не из sd.velocity (его единицы у платформы разные, а порог
+		# флинга откалиброван на пиксели в секунду).
+		_fling_v = (sd.position.y - _fling_last_y) / sdt
+		_fling_last_y = sd.position.y
+		_fling_last_t = snow
+		queue_redraw()
+		return
 	elif event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
 		if not (mm.button_mask & MOUSE_BUTTON_MASK_LEFT):
