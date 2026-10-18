@@ -1,6 +1,8 @@
 .venv/
 game/dist/
 game/.godot/
+game/.gradle/
+game/?/
 __pycache__/
 progress.json
 

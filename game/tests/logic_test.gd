@@ -1203,6 +1203,35 @@ func _bar_floors() -> void:
 	var tit := Rect2(_main._title_rect)
 	_check(not tbd.intersects(tit) and not tit.intersects(prp),
 		"portrait: top bar does not overlap itself")
+	# Матрица плотностей: полы держатся на ЛЮБОМ dpr, не только на круглом
+	# 2.0 (телефоны 1.35–3.0). В альбоме k ужимается до ~0.85 — там пол
+	# единственная защита кегля и ≡ (жалоба автора 18.10.2026).
+	# Уровень фикстуры короткий и центрируется — перекрытие полосы не
+	# ловит; подсовываем длинный (упирается в верх, как настоящий
+	# альбомный) и после матрицы возвращаем.
+	var saved_lines: Array = _main.display_lines
+	_main.display_lines = saved_lines + saved_lines + saved_lines
+	for d in [1.35, 1.8, 2.5, 3.0]:
+		Ui.dpr_override = float(d)
+		DisplayServer.window_set_size(Vector2i(2280, 1080))
+		root.size = Vector2i(2280, 1080)
+		_main._force_touch = true
+		Ui.force_touch = true
+		_main._relayout()
+		var fsm: int = _main.call("_bar_fs")
+		_check(fsm >= int(22.0 * float(d)), "dpr %.2f: landscape kegl keeps 22dp (%d)" % [d, fsm])
+		var prm: Rect2 = _main._players_rect
+		_check(prm.size.x >= 44.0 * float(d) - 0.5,
+			"dpr %.2f: landscape ≡ keeps 44dp (%.0f)" % [d, prm.size.x])
+		# Карточка текста начинается НИЖЕ полосы (бейдж+≡). text_y живёт
+		# в _layout_text_lines (каждый кадр) — после _relayout нужен один
+		# кадр, иначе сверяем протухшее.
+		_main._process(1.0 / 60.0)
+		var band: float = float(_main.call("_bar_band_h"))
+		var ctop: float = float(_main.text_y) - 20.0 * float(_main.k)
+		_check(ctop >= band - 0.5,
+			"dpr %.2f: card top clears the top bar (%.0f < %.0f)" % [d, ctop, band])
+	_main.display_lines = saved_lines
 	# Десктоп: полы бездействуют (не сенсорный экран) — прежнее поведение.
 	DisplayServer.window_set_size(Vector2i(1100, 650))
 	root.size = Vector2i(1100, 650)
@@ -1219,6 +1248,20 @@ func _bar_floors() -> void:
 		"desktop ≡ button keeps its old size (%.0f)" % prd.size.x)
 	_main._force_touch = was_ft2
 	Ui.force_touch = was_ft2
+	Ui.dpr_override = was_dpr
+	# Чистая арифметика dpr_from — суть фикса dpr(): dpi спасает упавший
+	# движковый scale. window_get_current_screen() на Android = −1
+	# (SCREEN_OF_MAIN_WINDOW), прежний гвард «scr < 0 → 1.0» обнулял dpr()
+	# на всех телефонах — dp-полы v0.0.31/32 не работали вовсе. А движковый
+	# scale и честной плотностью не бывает: он зажат размером окна
+	# (MIN(scaledDensity, w/800, h/600), сырец 4.3), в альбоме 1.8 из 2.6.
+	_check(absf(Ui.dpr_from(1.8, 420.0) - 2.625) < 0.001,
+		"dpr_from: honest dpi beats the window-clamped scale")
+	_check(absf(Ui.dpr_from(1.0, 420.0) - 2.625) < 0.001,
+		"dpr_from: collapsed scale (the old guard bug) is rescued by dpi")
+	_check(absf(Ui.dpr_from(1.0, 160.0) - 1.0) < 0.001, "dpr_from: 160dpi is density 1")
+	_check(absf(Ui.dpr_from(0.0, 0.0) - 1.0) < 0.001, "dpr_from: zero readings fall back to 1")
+	_check(absf(Ui.dpr_from(9.0, 960.0) - 3.5) < 0.001, "dpr_from: ceiling 3.5 holds")
 
 
 

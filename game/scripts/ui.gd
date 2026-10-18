@@ -74,6 +74,15 @@ static var dpr_override := 0.0
 ## пикселях, а на телефоне они в 2–3 раза мельче десктопных: без этого
 ## всё меню в портрете мелкое (жалоба автора 10.2026). На десктопе
 ## и в headless — всегда 1, там координаты уже независимые.
+## Чистая арифметика плотности, отдельной функцией: logic_test гоняет
+## по ней матрицу без DisplayServer. Суть правила: dpi/160 — честный
+## андроидовский dp→px, а движковый scale движок сам зажимает размером
+## окна (MIN(scaledDensity, w/800, h/600), сырец 4.3) — в альбоме он
+## отдаёт 1.8 при настоящей плотности 2.6. Упавший scale спасает dpi.
+static func dpr_from(scale: float, dpi: float) -> float:
+	return clampf(maxf(scale, dpi / 160.0), 1.0, 3.5)
+
+
 static func dpr() -> float:
 	if dpr_override > 0.0:
 		return dpr_override
@@ -81,10 +90,13 @@ static func dpr() -> float:
 		return 1.0
 	if DisplayServer.get_name() == "headless":
 		return 1.0
-	var scr := DisplayServer.window_get_current_screen()
-	if scr < 0:
-		return 1.0
-	return clampf(DisplayServer.screen_get_scale(scr), 1.0, 3.5)
+	# БЕЗ window_get_current_screen(): на Android он отвечает
+	# SCREEN_OF_MAIN_WINDOW (−1) — «экран один, смотри на главное окно», —
+	# и прежний гвард «scr < 0 → 1.0» обнулял dpr() на ВСЕХ телефонах:
+	# dp-полы верхней панели (v0.0.31/32) не работали вовсе (жалоба автора
+	# 18.10.2026: панель в альбоме мелкая). У обоих замеров дефолтный
+	# аргумент −1 и есть; Android аргумент и так игнорирует.
+	return dpr_from(DisplayServer.screen_get_scale(), float(DisplayServer.screen_get_dpi()))
 
 
 ## Затемнение героев ночью: светлый мех не светится на тёмном фоне.
