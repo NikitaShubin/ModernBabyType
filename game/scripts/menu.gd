@@ -1721,9 +1721,10 @@ func _table_name_fs(name: String) -> int:
 
 
 
-## Ширина под имя в карточке: карточка минус поля.
+## Ширина под имя в карточке: карточка минус поля (поля — от _card_k,
+## как в рисовании).
 func _card_name_cap() -> float:
-	return _card_rect(0).size.x - _CARD_IN * k * 2.0
+	return _card_rect(0).size.x - _CARD_IN * _card_k() * 2.0
 
 
 ## Кегль имени в карточке: ужимается под ширину, чтобы длинное имя
@@ -2407,9 +2408,11 @@ func _card_rect(i: int) -> Rect2:
 
 
 ## Верх ряда кнопок в карточке: прижат к низу, под статистикой.
+## Пол — от _card_k, как и высота карточки (_card_nat_at): с общим k
+## ряд поднимался выше статистики (k > _card_k на плотных экранах).
 func _card_btn_row(i: int) -> float:
 	var c := _card_rect(i)
-	return c.position.y + c.size.y - _CARD_PAD * k - _card_btn()
+	return c.position.y + c.size.y - _CARD_PAD * _card_k() - _card_btn()
 
 
 ## Прямоугольник кнопки в карточке: which — "pro", "yo" или "del".
@@ -2419,8 +2422,8 @@ func _card_btn_row(i: int) -> float:
 ## упиралось в кнопки.
 func _card_btn_rect(i: int, which: String) -> Rect2:
 	var c := _card_rect(i)
-	var gap := maxf(8.0 * k, 2.0)
-	var inset := _CARD_IN * k
+	var gap := maxf(8.0 * _card_k(), 2.0)
+	var inset := _CARD_IN * _card_k()
 	var x0 := c.position.x + inset
 	var w := (c.size.x - inset * 2.0 - gap * 2.0) / 3.0
 	if _finger() and w < _TAP_MIN:
@@ -2428,9 +2431,9 @@ func _card_btn_rect(i: int, which: String) -> Rect2:
 		# Сжимаем поля и зазор ровно настолько, чтобы дойти до пола, и
 		# НЕ БОЛЬШЕ: поля по краям карточки держат имя и цифры в одной
 		# колонке (иначе чипы уезжают под зайчика и к самому краю).
-		var edge: float = minf(_TAP_MIN, (c.size.x - 6.0 * k) / 3.0)
+		var edge: float = minf(_TAP_MIN, (c.size.x - 6.0 * _card_k()) / 3.0)
 		var want: float = edge * 3.0 + gap * 2.0
-		inset = maxf(2.0 * k, inset - (want - c.size.x) * 0.5)
+		inset = maxf(2.0 * _card_k(), inset - (want - c.size.x) * 0.5)
 		w = maxf((c.size.x - inset * 2.0 - gap * 2.0) / 3.0, edge)
 		x0 = c.position.x + inset
 	var y := _card_btn_row(i)
@@ -3533,19 +3536,24 @@ func _draw_cards() -> void:
 			continue
 		draw_style_box(row_sb if i == sel else row_idle_sb, card)
 		# Выбранная карточка всегда на жёлтом — тёмным текстом.
+		# Внутренние поля и зазоры — от _card_k, как и высота карточки
+		# (_card_nat_at): смешивание с общим k ломало раскладку при
+		# k > _card_k — статистика налезала на имя, чипы на статистику
+		# (скрин автора 18.10.2026).
+		var ck := _card_k()
 		var tcol := INK if i == sel else _ink()
-		var x := card.position.x + _CARD_IN * k
-		var inner := card.size.x - _CARD_IN * k * 2.0
+		var x := card.position.x + _CARD_IN * ck
+		var inner := card.size.x - _CARD_IN * ck * 2.0
 		if editing == i:
 			# Редактируем: поле вместо имени.
 			var efs := _card_fs(FONT_CARD_NAME)
-			_draw_edit_field(x, card.position.y + _CARD_PAD * k + float(_font_h(efs)) * 0.65, efs, inner)
+			_draw_edit_field(x, card.position.y + _CARD_PAD * ck + float(_font_h(efs)) * 0.65, efs, inner)
 		else:
 			# Ряд 1: имя во всю ширину (обрезка — в _short_name).
 			var name := _short_name(users[i])
 			var nfs := _card_name_fs(name)
 			var nsz := _text_size_fs(name, nfs).y
-			var ny := card.position.y + _CARD_PAD * k + nsz
+			var ny := card.position.y + _CARD_PAD * ck + nsz
 			_text_fs(name, Vector2(x, ny), nfs, tcol)
 		# Ряд 2: статистика во всю ширину, мелко и приглушённо.
 		# У создаваемого профиля её нет — только поле и чипы.
@@ -3554,7 +3562,7 @@ func _draw_cards() -> void:
 			var sfs := _card_fs(FONT_CARD_STATS)
 			var stat := _clip_fs("%s · %s" % [cells[0], cells[1]], sfs, inner)
 			var ssz := _text_size_fs(stat, sfs).y
-			var sy := card.position.y + _CARD_PAD * k + float(_font_h(_card_fs(FONT_CARD_NAME))) + 8.0 * k + ssz
+			var sy := card.position.y + _CARD_PAD * ck + float(_font_h(_card_fs(FONT_CARD_NAME))) + 8.0 * ck + ssz
 			_text_fs(stat, Vector2(x, sy), sfs, _uitext() if i != sel else INK)
 		_card_chip(i, "pro", "Про")
 		_card_chip(i, "yo", "Ё")
@@ -3620,13 +3628,20 @@ func _draw_scrollbar() -> void:
 	# на тёмном, той же семьи, что ночные обводки (#8b93a8).
 	var view := _list_rect()
 	var w := maxf(5.0 * k, 4.0)
-	var x := view.end.x - w - 3.0 * k
+	var x := _scrollbar_x()
 	var track_col := Color(0.2, 0.18, 0.14, 0.18) if not night else Color(1, 1, 1, 0.10)
 	var thumb_col := Color(0.2, 0.18, 0.14, 0.65) if not night else Ui.DIM_NIGHT
 	draw_rect(Rect2(x, view.position.y, w, view.size.y), track_col)
 	var th := maxf(24.0 * k, view.size.y * view.size.y / (view.size.y + max_sc))
 	var ty := view.position.y + (view.size.y - th) * (_scroll / max_sc)
 	draw_rect(Rect2(x, ty, w, th), thumb_col)
+
+
+## Полоса прокрутки — мера рисования и проверок (_part34_menu_bounds):
+## она ВНУТРИ рамки окна, а не у края экрана («вылезание за рамки»,
+## скрин автора 18.10.2026 — у края полоса выглядела оторванной).
+func _scrollbar_x() -> float:
+	return _list_rect().end.x - maxf(5.0 * k, 4.0) - 3.0 * k
 
 
 ## Рамка вокруг окна списка (автор 16.10.2026: списку не хватало рамки).

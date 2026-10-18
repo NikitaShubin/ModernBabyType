@@ -1184,8 +1184,10 @@ func _bar_floors() -> void:
 	_check(pr.size.x >= 44.0 * 2.0 - 0.5 and pr.size.y >= 44.0 * 2.0 - 0.5,
 		"landscape ≡ button keeps the 44dp finger floor (%dx%d)" % [pr.size.x, pr.size.y])
 	# Бейдж, заголовок и ≡ попарно не пересекаются и не выше карты.
-	var bd := Rect2(_main._badge_rect)
-	var te := Rect2(_main._title_rect)
+	# Ректы — из чистых калк-функций: headless не рисует, хранимые
+	# _badge_rect/_title_rect ставит только _draw.
+	var bd: Rect2 = _main.call("_badge_rect_calc")
+	var te: Rect2 = _main.call("_title_rect_calc", _main.call("_title_text"), fs)
 	_check(not bd.intersects(te), "landscape: badge does not overlap the title")
 	_check(not te.intersects(pr) and not bd.intersects(pr),
 		"landscape: top bar does not overlap ≡")
@@ -1199,38 +1201,84 @@ func _bar_floors() -> void:
 	var prp: Rect2 = _main._players_rect
 	_check(prp.size.x >= 44.0 * 2.0 - 0.5 and prp.size.y >= 44.0 * 2.0 - 0.5,
 		"portrait ≡ button keeps the floor (%dx%d)" % [prp.size.x, prp.size.y])
-	var tbd := Rect2(_main._badge_rect)
-	var tit := Rect2(_main._title_rect)
+	var tbd: Rect2 = _main.call("_badge_rect_calc")
+	var tit: Rect2 = _main.call("_title_rect_calc", _main.call("_title_text"), fs_p)
 	_check(not tbd.intersects(tit) and not tit.intersects(prp),
 		"portrait: top bar does not overlap itself")
-	# Матрица плотностей: полы держатся на ЛЮБОМ dpr, не только на круглом
-	# 2.0 (телефоны 1.35–3.0). В альбоме k ужимается до ~0.85 — там пол
-	# единственная защита кегля и ≡ (жалоба автора 18.10.2026).
+	# Матрица плотностей и ориентаций: полы держатся на ЛЮБОМ dpr, не
+	# только на круглом 2.0 (телефоны 1.35–3.0), и в ОБЕИХ ориентациях —
+	# в портрете пол 22dp раздувал бейдж до половины ширины, и он налезал
+	# на заголовок (скрин автора 18.10.2026). Там же — правило
+	# НЕИЗМЕННОСТИ видимых размеров: бейдж ≤ 45% ширины, глиф ≡ по центру
+	# своей кнопки, dp-полы прогресса, подсказка ниже строки счёта.
 	# Уровень фикстуры короткий и центрируется — перекрытие полосы не
 	# ловит; подсовываем длинный (упирается в верх, как настоящий
-	# альбомный) и после матрицы возвращаем.
+	# альбомный) и после матрицы возвращаем. Ректы бейджа/заголовка
+	# ставит _draw — в headless зовём его сами.
 	var saved_lines: Array = _main.display_lines
 	_main.display_lines = saved_lines + saved_lines + saved_lines
 	for d in [1.35, 1.8, 2.5, 3.0]:
-		Ui.dpr_override = float(d)
-		DisplayServer.window_set_size(Vector2i(2280, 1080))
-		root.size = Vector2i(2280, 1080)
-		_main._force_touch = true
-		Ui.force_touch = true
-		_main._relayout()
-		var fsm: int = _main.call("_bar_fs")
-		_check(fsm >= int(22.0 * float(d)), "dpr %.2f: landscape kegl keeps 22dp (%d)" % [d, fsm])
-		var prm: Rect2 = _main._players_rect
-		_check(prm.size.x >= 44.0 * float(d) - 0.5,
-			"dpr %.2f: landscape ≡ keeps 44dp (%.0f)" % [d, prm.size.x])
-		# Карточка текста начинается НИЖЕ полосы (бейдж+≡). text_y живёт
-		# в _layout_text_lines (каждый кадр) — после _relayout нужен один
-		# кадр, иначе сверяем протухшее.
-		_main._process(1.0 / 60.0)
-		var band: float = float(_main.call("_bar_band_h"))
-		var ctop: float = float(_main.text_y) - 20.0 * float(_main.k)
-		_check(ctop >= band - 0.5,
-			"dpr %.2f: card top clears the top bar (%.0f < %.0f)" % [d, ctop, band])
+		for orient in [[2280, 1080], [1080, 2340]]:
+			Ui.dpr_override = float(d)
+			DisplayServer.window_set_size(Vector2i(orient[0], orient[1]))
+			root.size = Vector2i(orient[0], orient[1])
+			_main._force_touch = true
+			Ui.force_touch = true
+			_main._relayout()
+			_main._process(1.0 / 60.0)
+			var side: String = "portrait" if orient[0] == 1080 else "landscape"
+			var vw: float = float(orient[0])
+			var kk: float = float(_main.k)
+			var fsm: int = _main.call("_bar_fs")
+			_check(fsm >= int(22.0 * float(d)),
+				"dpr %.2f %s: kegl keeps 22dp (%d)" % [d, side, fsm])
+			var prm: Rect2 = _main._players_rect
+			_check(prm.size.x >= 44.0 * float(d) - 0.5
+				and prm.size.y >= 44.0 * float(d) - 0.5,
+				"dpr %.2f %s: ≡ keeps 44dp (%.0fx%.0f)" % [
+					d, side, prm.size.x, prm.size.y])
+			# Бейдж не шире 45% экрана (иначе капсула съедает заголовок).
+			var bdm: Rect2 = _main.call("_badge_rect_calc")
+			var tem: Rect2 = _main.call("_title_rect_calc",
+				_main.call("_title_text"), fsm)
+			_check(bdm.size.x <= vw * 0.45 + 1.0,
+				"dpr %.2f %s: badge within 45%% of width (%.0f)" % [
+					d, side, bdm.size.x])
+			_check(not bdm.intersects(tem),
+				"dpr %.2f %s: badge overlaps the title" % [d, side])
+			_check(tem.position.x >= bdm.end.x - 0.5
+				and tem.end.x <= prm.position.x + 0.5,
+				"dpr %.2f %s: title leaves the badge/≡ zone" % [d, side])
+			_check(not tem.intersects(prm) and not bdm.intersects(prm),
+				"dpr %.2f %s: top bar overlaps ≡" % [d, side])
+			# Глиф ≡ — по центру кнопки, а не в её верхнем углу.
+			var bb: Rect2 = _main.call("_burger_box")
+			_check(absf(bb.get_center().y - prm.get_center().y) < 0.6
+				and bb.position.x >= prm.position.x - 0.5
+				and bb.end.x <= prm.end.x + 0.5,
+				"dpr %.2f %s: ≡ glyph not centered in the button" % [d, side])
+			# Карточка текста начинается НИЖЕ полосы (бейдж+≡).
+			var band: float = float(_main.call("_bar_band_h"))
+			var ctop: float = float(_main.text_y) - 20.0 * kk
+			_check(ctop >= band - 0.5,
+				"dpr %.2f %s: card top hits the top bar (%.0f < %.0f)" % [
+					d, side, ctop, band])
+			# Прогресс со счётом: dp-полы (в альбоме 12k/16k — это 4dp/6dp,
+			# неразличимо) и при большом k прежние k-значения.
+			var pm: Vector2 = _main.call("_progress_metrics")
+			_check(pm.x >= 8.0 * float(d) - 0.5 and pm.y >= 14.0 * float(d) - 1.0,
+				"dpr %.2f %s: progress loses dp floors (%.0f/%.0f)" % [
+					d, side, pm.x, pm.y])
+			_check(pm.x >= 12.0 * kk - 0.5 and pm.y >= 16.0 * kk - 1.0,
+				"dpr %.2f %s: progress loses k sizes (%.0f/%.0f)" % [
+					d, side, pm.x, pm.y])
+			# Подсказка не налезает на строку счёта.
+			var pend: float = float(_main.card_p.position.y) \
+				+ float(_main.card_p.size.y)
+			var htop: float = float(_main.call("_hint_top"))
+			_check(htop >= pend + 14.0 * kk
+				+ float(_main.call("_progress_line_h")) + 8.0 * kk - 0.5,
+				"dpr %.2f %s: hint crosses the progress line" % [d, side])
 	_main.display_lines = saved_lines
 	# Десктоп: полы бездействуют (не сенсорный экран) — прежнее поведение.
 	DisplayServer.window_set_size(Vector2i(1100, 650))

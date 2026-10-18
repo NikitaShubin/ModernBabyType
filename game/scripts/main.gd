@@ -668,7 +668,15 @@ func _marginal_adv(fs: int) -> float:
 ## 14..26, подсказка 36..100, поле 120. Подсказку резервируем ВСЕГДА:
 ## иначе текст дёргался бы на кадре, когда подсказка появляется.
 func _text_free_h() -> float:
-	return _eff_h() - 120.0 * k - _text_top_h()
+	return _eff_h() - _bottom_band_h() - _text_top_h()
+
+
+## Низ карточки: зазор, строка прогресса со счётом (dp-полы), зазор,
+## панель подсказки. Раньше тут стояло круглое 120k — меньше честного
+## расхода в альбоме, и счёт налезал на подсказку.
+func _bottom_band_h() -> float:
+	var panel_h := 48.0 * k + 16.0 * k
+	return 14.0 * k + _progress_line_h() + 8.0 * k + panel_h + 8.0 * k
 
 
 ## Ширина экрана может поменяться ПО ХОДУ уровня: на телефоне выезжает
@@ -2432,7 +2440,11 @@ func _draw_star_tip() -> void:
 ## а проверять эту геометрию надо числами (logic_test, _geo_fill).
 func _hint_top() -> float:
 	var panel_h := 48.0 * k + 16.0 * k
-	var y_top := card_p.position.y + card_p.size.y + 44.0 * k
+	# Прогресс со счётом живёт между карточкой и подсказкой; с dp-полами
+	# строка прогресса выросла — панель уструпает (старый зазор 44k резал
+	# счёт в альбоме).
+	var y_top := card_p.position.y + card_p.size.y \
+		+ maxf(44.0 * k, 14.0 * k + _progress_line_h() + 8.0 * k)
 	y_top = minf(y_top, _eff_h() - panel_h - 8.0 * k)
 	var lowest := 8.0 * k + top_safe
 	if y_top < lowest:
@@ -2677,8 +2689,45 @@ func _draw() -> void:
 ## (автор 17.10.2026). Пол по dpr: на десктопе dpr=1 и пола не видно,
 ## на телефоне текст минимум 22dp, значит и пилюля выше него.
 ## Высота капсулы бейджа — мера и рисования, и полосы сверху.
+## Кегль и ширина капсулы бейджа — одна мера для рисования, высоты
+## капсулы и зоны заголовка. Ширина — не больше 45% экрана: в портрете
+## пол 22dp раздувал капсулу до половины ширины, и она налезала на
+## заголовок (скрин автора 18.10.2026). Уступает кегль, но не ниже 14dp.
+func _badge_fs_w() -> Vector2:
+	if mono == null:
+		# До _ready шрифта нет, а геометрию уже спрашивают (мм. _part32):
+		# замер на null-объекте ронял шаблон segfault'ом.
+		return Vector2(float(_bar_fs()), 0.0)
+	var t := _badge_text()
+	var fs := _bar_fs()
+	var pad := 16.0 * k
+	var w := mono.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x \
+		+ pad * 2.0
+	if w > view_w * 0.45:
+		fs = maxi(int(float(fs) * view_w * 0.45 / w), int(14.0 * Ui.dpr()))
+		w = mono.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x \
+			+ pad * 2.0
+	return Vector2(float(fs), w)
+
+
+## Пилюля бейджа без запаса подсветки — общая мера рисования, высоты
+## и зоны заголовка. Чистая функция: headless не рисует, а проверки
+## меряют (_bar_floors).
+func _badge_pill() -> Rect2:
+	var v := _badge_fs_w()
+	return Rect2(
+		Vector2(14.0 * k, 14.0 * k + top_safe),
+		Vector2(v.y, maxf(42.0 * k, v.x * 1.55))
+	)
+
+
+## Рект бейджа с запасом подсветки — его помнит _badge_rect.
+func _badge_rect_calc() -> Rect2:
+	return _badge_pill().grow(4.0 * k)
+
+
 func _badge_h() -> float:
-	return maxf(42.0 * k, float(_bar_fs()) * 1.55)
+	return _badge_pill().size.y
 
 
 ## Размер кнопки ≡ (правый верх): общая мера раскладки и полосы сверху.
@@ -3072,12 +3121,20 @@ var _players_hover := false
 func _draw_touch_buttons() -> void:
 	# Игроки: значок ≡, на десктопе слева словами «Меню (F2)».
 	draw_style_box(pill_sb, _players_rect)
+	# Три полосы — от РАЗМЕРА кнопки и по её центру: пол 44dp вырос,
+	# а глиф от k (шаг 10k, толщина 3k) садился в верхний угол пустого
+	# квадрата в альбоме (скрин автора 18.10.2026). Рисование едет от
+	# бокса _burger_box — проверки (_bar_floors) меряют тот же бокс.
+	var bb := _burger_box()
+	var th := maxf(3.0, _players_rect.size.y * 0.075)
+	var cy := bb.get_center().y
+	var gap := (bb.size.y - th) * 0.5
 	for i in 3:
-		var ly := _players_rect.position.y + (14.0 + 10.0 * float(i)) * k
+		var ly := cy + (float(i) - 1.0) * gap
 		draw_line(
-			Vector2(_players_rect.position.x + 14.0 * k, ly),
-			Vector2(_players_rect.end.x - 14.0 * k, ly),
-			_ui_ink(), 3.0 * k
+			Vector2(bb.position.x, ly),
+			Vector2(bb.end.x, ly),
+			_ui_ink(), th
 		)
 	var ph := _players_hint()
 	if ph != "" and _players_hover:
@@ -3090,6 +3147,19 @@ func _draw_touch_buttons() -> void:
 			Vector2(_players_rect.position.x - 12.0 * k - ptw, _players_rect.get_center().y + float(pfs) * 0.36),
 			ph, HORIZONTAL_ALIGNMENT_LEFT, -1.0, pfs, _ui_ink()
 		)
+
+
+## Бокс глифа ≡ (три полосы) — от размера кнопки и по её центру.
+## Рисование (_draw_touch_buttons) и проверки (_bar_floors) меряют им.
+func _burger_box() -> Rect2:
+	var inset := _players_rect.size.x * 0.2
+	var gap := _players_rect.size.y * 0.155
+	var th := maxf(3.0, _players_rect.size.y * 0.075)
+	var cy := _players_rect.get_center().y
+	return Rect2(
+		Vector2(_players_rect.position.x + inset, cy - gap - th * 0.5),
+		Vector2(_players_rect.size.x - inset * 2.0, gap * 2.0 + th)
+	)
 
 
 ## Тач и мышь: кнопки интерфейса. Клавиши идут другим путём
@@ -3320,25 +3390,41 @@ func _title_text() -> String:
 
 ## Имя игрока заголовком сверху по центру, в рамке-пилюле.
 ## Длинное режем многоточием, чтобы не налезть на бейдж и кнопки.
-func _draw_title() -> void:
-	var who := _title_text()
-	var fs := _bar_fs()
+## Пилюля заголовка — чистая мера (рисование и проверки). Зона — между
+## фактическим краем бейджа и кнопкой ≡. Раньше пилюля центрировалась
+## на ЭКРАНЕ: в портрете бейдж с полом 22dp дорастал до половины ширины,
+## и пилюля имени ложилась на него (скрин автора 18.10.2026). Теперь
+## центр — экран, но зажатый в зону: в альбоме ничего не сдвинулось,
+## в портрете имя уходит вправо и бейдж не перекрывает. Возвращает
+## [рект, показанный текст] — рисование и проверки меряют одним.
+func _title_calc(who: String, fs: int) -> Array:
+	if mono == null:
+		return [Rect2(), ""]
 	var pad := 16.0 * k
-	# Зазор между бейджем и кнопкой ≡ честный: с пальцевым полом кнопка
-	# стала шире, и старый запас 220k мог наехать на неё.
-	var max_w := maxf(
-		_players_rect.position.x - _badge_rect.end.x - 40.0 * k, 120.0 * k
-	)
-	var t := _short_text(who, fs, max_w)
+	var zone_l := _badge_rect_calc().end.x + 10.0 * k
+	var zone_r := _players_rect.position.x - 10.0 * k
+	var max_w := maxf(zone_r - zone_l, 120.0 * k)
+	var t := _short_text(who, fs, max_w - pad * 2.0)
 	var tw := mono.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x
 	var w := tw + pad * 2.0
 	var h := maxf(42.0 * k, float(fs) * 1.55)
-	var r := Rect2(Vector2((view_w - w) * 0.5, 14.0 * k + top_safe), Vector2(w, h))
+	var cx := clampf(view_w * 0.5, zone_l + w * 0.5, zone_r - w * 0.5)
+	return [Rect2(Vector2(cx - w * 0.5, 14.0 * k + top_safe), Vector2(w, h)), t]
+
+
+func _title_rect_calc(who: String, fs: int) -> Rect2:
+	return _title_calc(who, fs)[0]
+
+
+func _draw_title() -> void:
+	var fs := _bar_fs()
+	var c := _title_calc(_title_text(), fs)
+	var r: Rect2 = c[0]
 	_title_rect = r
 	draw_style_box(pill_sb, r)
 	draw_string(
-		mono, r.position + Vector2(pad, h * 0.5 + float(fs) * 0.36), t,
-		HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs, _ui_ink()
+		mono, r.position + Vector2(16.0 * k, r.size.y * 0.5 + float(fs) * 0.36),
+		String(c[1]), HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs, _ui_ink()
 	)
 
 
@@ -3362,18 +3448,15 @@ func _badge_text() -> String:
 func _draw_level_badge() -> void:
 	# Уровень и счёт до него одной дробью: «УР 2 · 2/3».
 	var t := _badge_text()
-	var fs := _bar_fs()
-	var tw := mono.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x
+	var fs := int(_badge_fs_w().x)
 	var pad := 16.0 * k
-	var w := tw + pad * 2.0
-	var h := _badge_h()
-	var r := Rect2(Vector2(14.0 * k, 14.0 * k + top_safe), Vector2(w, h))
-	_badge_rect = r.grow(4.0 * k)
+	var r := _badge_pill()
+	_badge_rect = _badge_rect_calc()
 	draw_style_box(badge_sb, r)
 	# Тёмное на зелёном: белое давало контраст 2.5:1 и «УР» не читалось
 	# (ревизия читаемости, п.5).
 	draw_string(
-		mono, r.position + Vector2(pad, h * 0.5 + fs * 0.36), t,
+		mono, r.position + Vector2(pad, r.size.y * 0.5 + fs * 0.36), t,
 		HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs, INK
 	)
 
@@ -3382,15 +3465,34 @@ func _draw_level_badge() -> void:
 ## подпись под полосой стоила целой строки высоты в запасе карточки
 ## (автор 14.10.2026: текст мелкий, а место пустует). Полоса от этого
 ## чуть короче — она и так читается по заполнению.
+## Толщина полосы прогресса и кегль счёта — dp-полы на сенсорных:
+## в альбоме k ужимается эффективной высотой, и полоса (12k ≈ 11px =
+## 4dp) со счётом (16k ≈ 15px) становились неразличимыми (скрин автора
+## 18.10.2026). Десктоп не меняется (dpr=1: max берёт k-значения).
+func _progress_metrics() -> Vector2:
+	return Vector2(
+		maxf(12.0 * k, 8.0 * Ui.dpr()),
+		float(maxi(int(16.0 * k), int(14.0 * Ui.dpr())))
+	)
+
+
+## Высота строки прогресса (полоса + подпись по центру) — для панели
+## подсказки и низа карточки.
+func _progress_line_h() -> float:
+	var m := _progress_metrics()
+	return maxf(m.x, m.y * 1.2)
+
+
 func _draw_progress() -> void:
 	if level_total <= 0 or not card_p.visible:
 		return
 	var done := passed.size()
 	var frac := clampf(float(done) / float(level_total), 0.0, 1.0)
 	var inset := 20.0 * k
-	var th := 12.0 * k
+	var m := _progress_metrics()
+	var th := m.x
 	var t := "%d / %d" % [done, level_total]
-	var fs := int(16.0 * k)
+	var fs := int(m.y)
 	var tw := mono.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x
 	var r := Rect2(
 		card_p.position + Vector2(inset, card_p.size.y + 14.0 * k),

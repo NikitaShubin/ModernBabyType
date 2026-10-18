@@ -75,6 +75,7 @@ func _process(_dt: float) -> bool:
 	_part31_menu_no_overlap()
 	_part32_pre_ready_geometry()
 	_part33_tap_and_bunny()
+	_part34_menu_bounds()
 	_part27_menu_chaos()
 	_report()
 	return true
@@ -2077,6 +2078,85 @@ func _part32_pre_ready_geometry() -> void:
 ## внизу — ДВА, каждый в полную ширину; кегль подписи — от высоты
 ## кнопки (45%), ниже 24k падать не может; заяц не перезапускает прыжок
 ## на ту же строку (прыжок-по-месту был дрожью, а не прыжком).
+## Границы меню на плотных экранах (скрин автора 18.10.2026, v0.0.33):
+## рамка списка внутри экрана, все строки внутри рамки, скроллбар
+## внутри рамки, внутренности карточки внутри карточки. Ломалось
+## смешиванием масштабов: высота карточки меряется _card_k (от ширины
+## экрана), а рисование — общим k (от плотности) — при k > _card_k
+## статистика налезала на имя, чипы вылезали за нижнюю грань.
+func _part34_menu_bounds() -> void:
+	var was_dpr := Ui.dpr_override
+	for geo in [[1080, 2340, 2.625], [1080, 2340, 1.0], [2280, 1080, 2.625]]:
+		Ui.dpr_override = float(geo[2])
+		_menu.view_w = float(geo[0])
+		_menu.view_h = float(geo[1])
+		_menu.top_safe = 0.0
+		_menu.night = false
+		_end_edit(_menu)
+		_menu.confirm_name = ""
+		_menu.hint_header = ""
+		var names: Array[String] = []
+		for i in 6:
+			names.append("Игрок%d" % i)
+		_menu.users = names
+		_menu.sel = 0
+		_menu._scroll = 0.0
+		_menu._bunny_t = 1.0
+		_menu.k = _menu.call("_fit_k", clampf(
+			minf(_menu.view_w / 1100.0, _menu.call("_menu_eff_h") / 650.0)
+				* Ui.dpr(), 0.7, 2.5), 0.7)
+		var tag := "%dx%d dpr=%.2f" % [geo[0], geo[1], geo[2]]
+		var vw: float = _menu.view_w
+		var view: Rect2 = _menu.call("_list_rect")
+		_check(view.position.x >= -0.5 and view.end.x <= vw + 0.5,
+			"%s: list frame inside the screen (%.0f..%.0f of %.0f)" % [
+				tag, view.position.x, view.end.x, vw])
+		# Скроллбар — внутри рамки, а не у края экрана. Меряют саму
+		# меру (_scrollbar_x), а не её зеркало: поломанное рисование
+		# ломает меру — и тест это видит.
+		var sbw: float = maxf(5.0 * _menu.k, 4.0)
+		var sbx: float = _menu.call("_scrollbar_x")
+		_check(sbx >= view.position.x and sbx + sbw <= view.end.x + 0.5,
+			"%s: scrollbar outside the frame (%.0f..%.0f of %.0f..%.0f)" % [
+				tag, sbx, sbx + sbw, view.position.x, view.end.x])
+		if not bool(_menu.call("_cards")):
+			continue
+		# Все карточки внутри рамки по горизонтали.
+		for i in _menu.users.size():
+			var card: Rect2 = _menu.call("_card_rect", i)
+			_check(card.position.x >= view.position.x - 0.5
+				and card.end.x <= view.end.x + 0.5,
+				"%s: row %d outside the frame (%.0f..%.0f of %.0f..%.0f)" % [
+					tag, i, card.position.x, card.end.x,
+					view.position.x, view.end.x])
+		# Внутренности развёрнутой карточки: статистика ниже имени,
+		# чипы ниже статистики и в границах карточки.
+		var ck: float = _menu.call("_card_k")
+		var c0: Rect2 = _menu.call("_card_rect", 0)
+		var nfs: int = _menu.call("_card_name_fs", "Игрок0")
+		var nsz: float = float((_menu.call("_text_size_fs", "Игрок0", nfs) as Vector2).y)
+		var sfs: int = _menu.call("_card_fs", _menu.FONT_CARD_STATS)
+		var ssz: float = float((_menu.call("_text_size_fs", "ур.0 · 0/0", sfs) as Vector2).y)
+		var name_bottom: float = c0.position.y + _menu._CARD_PAD * ck + nsz
+		var stats_top: float = c0.position.y + _menu._CARD_PAD * ck \
+			+ float(_menu.call("_font_h", _menu.call("_card_fs", _menu.FONT_CARD_NAME))) \
+			+ 8.0 * ck
+		_check(stats_top >= name_bottom - 0.5,
+			"%s: stats cross the name (%.0f < %.0f)" % [tag, stats_top, name_bottom])
+		var chips_top: float = float(_menu.call("_card_btn_row", 0))
+		_check(chips_top >= stats_top + ssz + 2.0,
+			"%s: chips cross the stats (%.0f < %.0f)" % [
+				tag, chips_top, stats_top + ssz + 2.0])
+		for which in ["pro", "yo", "del"]:
+			var cr: Rect2 = _menu.call("_card_btn_rect", 0, which)
+			_check(cr.position.x >= c0.position.x - 0.5
+				and cr.end.x <= c0.end.x + 0.5 and cr.end.y <= c0.end.y + 0.5,
+				"%s: chip %s outside the card (%.0f..%.0f of %.0f, x %.0f..%.0f of %.0f)" % [
+					tag, which, cr.position.y, cr.end.y, c0.end.y,
+					cr.position.x, cr.end.x, c0.end.x])
+	Ui.dpr_override = was_dpr
+
+
 func _part33_tap_and_bunny() -> void:
 	var was_touch := Ui.force_touch
 	Ui.force_touch = true
