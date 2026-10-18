@@ -232,29 +232,63 @@ func _draw() -> void:
 
 ## Далёкие холмы: видны по краям карточки с текстом, середину она
 ## закрывает. Большие круги, обрезанные краем экрана, — дёшево и ровно.
-## Меры радиусов — отдельные чистые функции: headless рисование не
-## ходит, а гора обязана не съедать небо (№4, автор 18.10.2026) —
-## если рисование и тест разойдутся, поломку тест не увидит.
+## Правила холмов (автор 18.10.2026, №4 и правка после релиза 18.10:
+## «не уменьшать радиусы, а опустить вниз центры, радиусы вернуть
+## большими»): радиус от ШИРИНЫ экрана (весь s.x, у обоих) — иначе на
+## телефоне
+## видны два раздельных шара с провалом посередине; высоту держит
+## ОПУЩЕННЫЙ вниз центр: вершина обязана оставаться в нижней трети
+## неба (64%/72% высоты), чтобы не съедать солнце и луну. При таких
+## радиусах и низких центрах дуги перекрываются — провала внизу нет.
 func hill_radius_1(s: Vector2) -> float:
-	return minf(s.x, s.y) * 0.44
+	return s.x
 
 
 func hill_radius_2(s: Vector2) -> float:
-	return minf(s.x, s.y) * 0.48
+	return s.x
+
+
+## Верх первой горы: во всех ориентациях на одной высоте (доля высоты).
+func hill_top_1(s: Vector2) -> float:
+	return s.y * 0.64
+
+
+## Верх второй горы — ниже первой: земля поднимается ступеньками.
+func hill_top_2(s: Vector2) -> float:
+	return s.y * 0.72
+
+
+func hill_center_1(s: Vector2) -> Vector2:
+	return Vector2(s.x * 0.10, hill_top_1(s) + hill_radius_1(s))
+
+
+func hill_center_2(s: Vector2) -> Vector2:
+	return Vector2(s.x * 0.94, hill_top_2(s) + hill_radius_2(s))
+
+
+## Полуширина горы на высоте y (когда вершина выше): по ней тест
+## считает, что земля в нижней полосе НЕ имеет провала между шарами.
+func hill_span_1(s: Vector2, y: float) -> float:
+	var dy := hill_center_1(s).y - y
+	if dy <= 0.0 or dy >= hill_radius_1(s):
+		return 0.0
+	return sqrt(hill_radius_1(s) * hill_radius_1(s) - dy * dy)
+
+
+func hill_span_2(s: Vector2, y: float) -> float:
+	var dy := hill_center_2(s).y - y
+	if dy <= 0.0 or dy >= hill_radius_2(s):
+		return 0.0
+	return sqrt(hill_radius_2(s) * hill_radius_2(s) - dy * dy)
 
 
 func _draw_hills(s: Vector2) -> void:
-	# Радиус — от КОРОТКОЙ стороны экрана (№4, автор 18.10.2026: «в
-	# горизонтальной ориентации холмы настолько высокие, что перекрывают
-	# почти всё небо, включая луну, солнце и т.п.»): раньше радиус рос от
-	# ширины круга, и в альбоме холм съедал 85% неба. Короткая сторона в
-	# портрете и есть ширина (1080 из 2340) — портрет не меняется вовсе.
 	if night:
-		draw_circle(Vector2(s.x * 0.10, s.y * 1.10), hill_radius_1(s), Color("#16283a"))
-		draw_circle(Vector2(s.x * 0.94, s.y * 1.14), hill_radius_2(s), Color("#1b3040"))
+		draw_circle(hill_center_1(s), hill_radius_1(s), Color("#16283a"))
+		draw_circle(hill_center_2(s), hill_radius_2(s), Color("#1b3040"))
 	else:
-		draw_circle(Vector2(s.x * 0.10, s.y * 1.10), hill_radius_1(s), Color("#cfe6b8"))
-		draw_circle(Vector2(s.x * 0.94, s.y * 1.14), hill_radius_2(s), Color("#bcdc9f"))
+		draw_circle(hill_center_1(s), hill_radius_1(s), Color("#cfe6b8"))
+		draw_circle(hill_center_2(s), hill_radius_2(s), Color("#bcdc9f"))
 
 
 ## Солнце с ореолом. Ореол — не жёлтый: жёлтый по голубому небу
@@ -282,14 +316,37 @@ func _draw_moon(s: Vector2) -> void:
 
 
 ## Звёзды: детерминированные точки (формула от индекса, не randf —
-## иначе мерцали бы каждый кадр). Яркость волной от времени.
+## иначе мерцали бы каждый кадр). Раскладка (автор 18.10.2026):
+## две трети живут в мягкой наклонной полосе — имитация млечного
+## пути, треть рассыпана ПО всему верхнему небу: раньше обе
+## прогрессии были комплементарными (0.61803 и 1−0.61803), и вся
+## стая ложилась на прямую. Яркость волной от времени, размах
+## крупный: прежние 0.35·sin были еле заметны (автор: «мигания
+## чуть более сильными, а то еле заметно»).
+func star_xy(i: int) -> Vector2:
+	var u := fposmod(float(i) * 0.61803 + 0.13, 1.0)
+	if i % 3 != 2:
+		# Полоса: gentle diagonal + собственный джиттер по высоте,
+		# у каждой звезды свой сдвиг — полоса не идеальная прямая.
+		var band := 0.42 - 0.16 * (u - 0.5)
+		var j := fposmod(float(i) * 0.2731 + 0.05, 1.0)
+		return Vector2(u, clampf(band + (j - 0.5) * 0.26, 0.03, 0.62))
+	# Рассыпанные: вторая, НЕзависимая прогрессия по высоте.
+	var v := fposmod(float(i) * 0.2731 + 0.41, 1.0)
+	return Vector2(u, clampf(v * 0.62, 0.03, 0.62))
+
+
+## Яркость звезды: alpha 0.15..1.0, у каждой свой период.
+func star_tw(i: int) -> float:
+	var w := 0.6 + 0.13 * float(i % 5)
+	return clampf(0.55 + 0.45 * sin(_time * w + float(i)), 0.15, 1.0)
+
+
 func _draw_stars(s: Vector2) -> void:
 	for i in 48:
-		var fx := fposmod(float(i) * 0.61803 + 0.13, 1.0)
-		var fy := fposmod(float(i) * 0.38197 + 0.07, 0.62)
-		var tw := 0.45 + 0.35 * sin(_time * (0.6 + 0.1 * float(i % 5)) + float(i))
+		var p := star_xy(i)
 		var r := 1.0 + 1.2 * fposmod(float(i) * 0.33, 1.0)
-		draw_circle(Vector2(s.x * fx, s.y * fy), r * _scale(), Color(1, 1, 1, tw))
+		draw_circle(Vector2(s.x * p.x, s.y * p.y), r * _scale(), Color(1, 1, 1, star_tw(i)))
 
 
 func _draw_clouds(s: Vector2) -> void:

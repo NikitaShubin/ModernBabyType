@@ -3575,14 +3575,15 @@ func _fill_cases() -> void:
 	# это шарды (idx % of), и встройка в середину меняет состав шардов —
 	# сторож «the test really played» оставался без живых шагов.
 	_cases_list.append(["_case_hills_free_sky", Callable(self, "_case_hills_free_sky"), 0])
+	_cases_list.append(["_case_stars_sky", Callable(self, "_case_stars_sky"), 0])
+	_cases_list.append(["_case_win_celebration", Callable(self, "_case_win_celebration"), 0])
 # (конец списка кейсов)
-## Холмы оставляют небу бо́льшую долю (автор 18.10.2026, №4: «в горизон-
-## тальной ориентации холмы настолько высокие, что перекрывают почти всё
-## небо»): раньше радиус рос от ширины круга, и в альбоме (2340×1080)
-## гора съедала 85% неба — вместе с луной и солнцем. Меряют не зеркало
-## дуги, а чистую меру холма: верх первой горы обязан кончаться в первых
-## 40% высоты, а портрет не меняется вовсе (там гора и раньше была от
-## короткой стороны).
+## Холмы по рецепту автора (18.10.2026 после релиза: «не уменьшать
+## радиусы, а опустить вниз центры, радиусы вернуть большими»): при
+## меньших радиусах на телефоне видны два раздельных шара с провалом
+## посередине, обе ориентации. Меряют не зеркало дуги, а чистые меры
+## холма (радиусы от ширины, вершины на фикс. доле высоты, земля внизу
+## замкнута), плюс полоса солнца и луны (0.13 высоты) свободна.
 func _case_hills_free_sky() -> void:
 	_fresh(0, 0)
 	# Мера без тиков живого цикла — даём шард свой вклад в сторож
@@ -3598,39 +3599,144 @@ func _case_hills_free_sky() -> void:
 	if m == null:
 		_check(false, "hills: the meadow is missing")
 		return
-	# Портрет: ровно прежняя мера (гора 0.44 ширины) — ничего не доехало.
-	for sz in [Vector2(1080, 2340), Vector2(720, 1600)]:
-		var r1: float = m.call("hill_radius_1", sz)
+	# Холмы по рецепту автора (18.10 после релиза): радиусы БОЛЬШИЕ от
+	# ширины при ЛЮБОЙ ориентации, вершины на фиксированной доле высоты,
+	# земля внизу замкнута без провала между шарами.
+	for sz in [Vector2(1080, 2340), Vector2(2280, 1080), Vector2(1280, 800)]:
+		var mn := "%dx%d" % [int(sz.x), int(sz.y)]
+		var r1a: float = m.call("hill_radius_1", sz)
+		var r2a: float = m.call("hill_radius_2", sz)
 		_check(
-			is_equal_approx(r1, sz.x * 0.44),
-			"hills %s: portrait radius moved (%.0f of %.0f)" % [str(sz), r1, sz.x * 0.44]
+			is_equal_approx(r1a, sz.x) and is_equal_approx(r2a, sz.x),
+			"%s: hill radii are not big and from width (%.0f/%.0f)" % [mn, r1a, r2a]
 		)
-	# Альбом: гора НЕ съедает небо. Верх первой горы: центр на 1.10·h;
-	# видимый кусок горы сверху равен r1 − 0.10·h — раньше в альбоме
-	# он был 1022 из 1080, теперь обязан уложиться в 40% высоты.
+		var t1: float = m.call("hill_center_1", sz).y - r1a
+		var t2: float = m.call("hill_center_2", sz).y - r2a
+		_check(
+			is_equal_approx(t1, sz.y * 0.64) and is_equal_approx(t2, sz.y * 0.72),
+			"%s: hill tops moved (%.2f/%.2f of height)" % [
+				mn, t1 / sz.y, t2 / sz.y
+			]
+		)
+		# Низ горы — земля: на глубине 0.9·h диапазоны двух гор размаха
+		# обязаны сомкнуться (провала «два шара» больше нет, автор 18.10).
+		var y: float = sz.y * 0.90
+		var s1: float = m.call("hill_span_1", sz, y)
+		var s2: float = m.call("hill_span_2", sz, y)
+		var lo := minf(sz.x * 0.10 - s1, sz.x * 0.94 - s2)
+		var hi := maxf(sz.x * 0.10 + s1, sz.x * 0.94 + s2)
+		var cover := 0.0
+		# Простейшая сумма двух дуг: пересекаются — земля замкнута целиком.
+		if sz.x * 0.10 + s1 >= sz.x * 0.94 - s2:
+			cover = hi - lo
+		_check(
+			cover >= sz.x + 1.0,
+			"%s: a gap between the two hills at the bottom (%.0f of %.0f)" % [
+				mn, cover, sz.x
+			]
+		)
+		# Солнце и луна на 0.13 высоты: гора обязана начинаться ниже.
+		_check(
+			t1 > sz.y * 0.55,
+			"%s: the first hill eats the sun band (top %.2f)" % [mn, t1 / sz.y]
+		)
+	# Ночь те же круги: чек по сумме гор не зависит от темы.
 	var ls := Vector2(2280, 1080)
 	var r1l: float = m.call("hill_radius_1", ls)
-	_check(
-		r1l - 0.10 * ls.y <= 0.40 * ls.y,
-		"hills: the first hill eats the sky in landscape (%.0f of %.0f)" % [
-			r1l - 0.10 * ls.y, 0.40 * ls.y
-		]
-	)
-	# Солнце и луна стоят на 0.13 высоты — они обязаны быть выше горы.
-	var r2l: float = m.call("hill_radius_2", ls)
-	_check(
-		ls.y * 1.14 - r2l > ls.y * 0.13,
-		"hills: the second hill covers the sun band (%.0f <= %.0f)" % [
-			ls.y * 1.14 - r2l, ls.y * 0.13
-		]
-	)
-	# Ночь те же круги: чек по сумме гор не зависит от темы.
 	m.night = true
 	_check(
 		is_equal_approx(m.call("hill_radius_1", ls), r1l),
 		"hills: night redraws the hills differently"
 	)
 	m.night = false
+
+
+## Звёзды (автор 18.10.2026 после релиза): полоса-млечный путь остаётся,
+## но треть звёзд рассыпана по всему небу (прежде обе прогрессии были
+## комплементарными, и вся стая ложилась на прямую), а мигание глубокое
+## — прежние 0.35·sin были еле заметны («чуть более сильными»).
+func _case_stars_sky() -> void:
+	_fresh(0, 0)
+	var m: Node = null
+	for c in _main.get_children():
+		if c is Meadow:
+			m = c
+			break
+	if m == null:
+		_check(false, "stars: the meadow is missing")
+		return
+	var n_band := 0
+	var n_off := 0
+	for i in 48:
+		var a: Vector2 = m.call("star_xy", i)
+		_check(a == m.call("star_xy", i),
+			"stars %d: the position flickers (not deterministic)" % i)
+		var bc := 0.42 - 0.16 * (a.x - 0.5)
+		if i % 3 == 2:
+			if absf(a.y - bc) > 0.15:
+				n_off += 1
+		else:
+			_check(absf(a.y - bc) <= 0.14, "stars %d: a band star left the band" % i)
+			n_band += 1
+	_check(n_band == 32 and n_off >= 8,
+		"stars: band/scatter split wrong (band=%d off-band=%d of 16)" % [n_band, n_off])
+	# Глубина мигания: каждая звезда поле возвращает 0.15..1.0 с амплитудой
+	# 0.45·sin — за полный цикл размах обязан быть крупнее 0.75. Прежний
+	# размах (0.35·sin, потолок 0.70) краснеет ровно на этой строке.
+	var lo := 1.1
+	var hi := -0.1
+	var t0: float = m._time
+	var tt := 0.0
+	while tt < 10.5:
+		tt += 0.65
+		m._time = t0 + tt
+		for i in [0, 7, 13, 21, 39]:
+			var w: float = m.call("star_tw", i)
+			lo = minf(lo, w)
+			hi = maxf(hi, w)
+	m._time = t0
+	_check(hi - lo >= 0.75, "stars: twinkle too shallow (%.2f..%.2f)" % [lo, hi])
+
+
+## Победа (автор 18.10.2026): заяц прыгает от радости на месте, ёж
+## откатывается назад на спину. Меры чистые: фаза прыжка растёт от
+## времени после победы, прогресс отката _hedge_roll_p идёт 0→1 и
+## остаётся, откат _hedge_roll_off выйдет на потолок и замрёт.
+func _case_win_celebration() -> void:
+	_fresh(0, 1)
+	var tag := "win celebration"
+	# Ёж выезжает (вторая строка), ждём конца уровня победой.
+	_finish_level(tag)
+	if _main.state != "won":
+		return
+	var hp0: float = _main.hop_ph
+	for _i in 30:
+		_tick(tag)
+	var dw := fposmod(_main.hop_ph - hp0, TAU)
+	_check(dw > 1.0, "win: the bunny stopped hopping for joy (Δ%.2f in 30 frames)" % dw)
+	# Откат ежа: прогресс доходит до единицы и остаётся, откат выходит
+	# на потолок HEDGE_ROLL_BACK и не растёт дальше.
+	for _i in 120:
+		_tick(tag)
+	_check(is_equal_approx(_main.call("_hedge_roll_p"), 1.0),
+		"win: the hedgehog did not finish on its back (%.2f)" % _main.call("_hedge_roll_p"))
+	var off: float = _main.call("_hedge_roll_off")
+	for _i in 30:
+		_tick(tag)
+	_check(is_equal_approx(_main.call("_hedge_roll_off"), off),
+		"win: the hedgehog keeps rolling after landing (%.0f -> %.0f)" % [
+			off, _main.call("_hedge_roll_off")
+		])
+	_check(
+		off >= 109.0, "win: the hedgehog barely rolled back (%.0f of %.0f)" % [
+			off, 110.0
+		]
+	)
+	# Модель не тронута: ёж стоит на своём месте, рисование откатило
+	# только картинку.
+	var ex: float = _main.enemy_x
+	_tick(tag)
+	_check(is_equal_approx(_main.enemy_x, ex), "win: the roll moved the model, not the picture")
 
 
 ## Заяц восстанавливает форму после набора: фаза прыжка дотягивается до

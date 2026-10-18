@@ -28,6 +28,12 @@ const HEDGE_BOB_H := 6.0
 const CHOMP_T := 0.32
 const SHAKE_T := 0.3
 const LUNGE_T := 0.4
+## Победа (автор 18.10.2026): заяц прыгает от радости на месте
+## (JOY_HOP_W — частота фазы прыжка, рад/с), ёж откатывается назад
+## на спину за HEDGE_FLIP_T секунд, отходя на HEDGE_ROLL_BACK px·k.
+const JOY_HOP_W := 9.0
+const HEDGE_FLIP_T := 1.1
+const HEDGE_ROLL_BACK := 110.0
 
 ## Лишние мили ежа на каждой строке (в символах): заход слева из-за
 ## края и убег за конец. Заяц эти участки проскакивает быстро, ёж идёт
@@ -131,6 +137,9 @@ var _last_reason := ""
 var hero_r := Vector2.ZERO
 # Фаза прыжков зайца: идёт от пройденного картинкой расстояния.
 var hop_ph := 0.0
+# Победа: прогресс отката ежа на спину (−1 = не начат; рисование
+# меряет его же чистой мерой — см. _hedge_roll_p).
+var hedge_flip_t := -1.0
 var shake_t := 0.0
 var lunge_t := 0.0
 # Моргание зайца: раз в несколько секунд (веки — две чёрточки поверх глаз).
@@ -1238,6 +1247,8 @@ func _new_level() -> void:
 	hedge_active = false
 	enemy_x = margin
 	enemy_line = 0
+	# Откат ежа на спину с прошлого победного уровня сбрасываем.
+	hedge_flip_t = -1.0
 	state = "playing"
 	overlay_label.visible = false
 	over_p.visible = false
@@ -1892,6 +1903,8 @@ func _finish(won: bool, reason := "") -> void:
 		state = "won"
 		wins_in_row += 1
 		bounce_t = 0.6
+		# Победный откат ежа на спину начинается с этого кадра.
+		hedge_flip_t = 0.0
 		enemy_cps = B.adapt_cps(true, enemy_cps, acc)
 		if wins_in_row >= B.WINS_TO_LEVEL_UP:
 			difficulty += 1
@@ -2194,7 +2207,17 @@ func _process(dt: float) -> void:
 		if absf(scroll_y - scroll_target) < 0.5:
 			scroll_y = scroll_target
 	var hero_prev := hero_r
-	if state != "lost":
+	if state == "won":
+		hero_r = hero_r.lerp(_hero_pos(), clampf(dt * 12.0, 0.0, 1.0))
+		# Победа (автор 18.10.2026): заяц прыгает от радости на месте —
+		# фаза прыжка идёт от времени, а не от пройденного пути (путь
+		# стоит), и заяц продолжает подпрыгивать. Ёж тем временем
+		# откатывается назад и падает на спину (HEDGE_FLIP_T, рисование
+		# меряет чистой _hedge_roll_p, модельных координат это не трогает).
+		hop_ph = fmod(hop_ph + dt * JOY_HOP_W, TAU)
+		if hedge_active:
+			hedge_flip_t = minf(hedge_flip_t + dt, HEDGE_FLIP_T + 0.1)
+	elif state != "lost":
 		hero_r = hero_r.lerp(_hero_pos(), clampf(dt * 12.0, 0.0, 1.0))
 		var moved := (hero_r - hero_prev).length() / maxf(k, 0.01)
 		if moved > 0.02:
@@ -3643,7 +3666,8 @@ func _draw_hero() -> void:
 	elif ht >= 0.7:
 		var u := (ht - 0.7) / 0.3
 		crouch = 1.0 - 0.55 * (u * u * (3.0 - 2.0 * u))
-	c.y -= hop * 7.0 * k
+	# Победный прыжок выше обычного: радость на месте (автор 18.10.2026).
+	c.y -= hop * (12.0 if state == "won" else 7.0) * k
 	# Дыхание, чтобы не был статуей.
 	var breathe := 1.0 + 0.02 * sin(time * 2.5)
 	var sq := Vector2((1.0 + 0.22 * punch) * breathe, (1.0 - 0.12 * punch) / breathe)
@@ -3708,9 +3732,26 @@ func _unit_h() -> float:
 	return mono.get_height(font_size) / k
 
 
+## Прогресс победного отката ежа: 0 — не начат (и ещё не победа), 0..1 —
+## едет назад на спину, 1 — лежит. Чистая мера: и рисование, и тест
+## меряют одну и ту же штуку, зеркалить формулы негде.
+func _hedge_roll_p() -> float:
+	if hedge_flip_t < 0.0:
+		return 0.0
+	return clampf(hedge_flip_t / HEDGE_FLIP_T, 0.0, 1.0)
+
+
+## Откат ежа назад по х (px): замедляется к концу (ease-out).
+func _hedge_roll_off() -> float:
+	var p := _hedge_roll_p()
+	return HEDGE_ROLL_BACK * (1.0 - (1.0 - p) * (1.0 - p))
+
+
 ## Ёж-колобок: шара без ног походка не нужна — катится: покачивание
 ## из стороны в сторону + прыжки со сплющиванием в момент касания.
 ## В точке контакта просто остаётся, без отскока (укол — не удар).
+## Победа (автор 18.10.2026): ёж откатывается назад, крутясь пол-
+## оборота назад, и остаётся лежать на спине с лёгким покачиванием.
 func _draw_enemy() -> void:
 	if not hedge_active or enemy_line >= display_lines.size():
 		return
@@ -3718,6 +3759,7 @@ func _draw_enemy() -> void:
 	var c := Vector2(enemy_x, _track_cy(enemy_line))
 	var sq := Vector2.ONE
 	var wob := 0.0
+	var rot := 0.0
 	if running:
 		var ph := time * HEDGE_WOB_W
 		var air := maxf(0.0, sin(ph))
@@ -3725,11 +3767,23 @@ func _draw_enemy() -> void:
 		var flat := maxf(0.0, -sin(ph))
 		sq = Vector2(1.0 + 0.06 * flat, 1.0 - 0.06 * flat)
 		wob = 0.10 * sin(ph) - 0.04 * air
+	if state == "won":
+		var rp := _hedge_roll_p()
+		var e := 1.0 - (1.0 - rp) * (1.0 - rp)
+		c.x = maxf(c.x - _hedge_roll_off(), margin + 24.0 * k)
+		# Откат назад: шар крутится на пол-оборота, к концу ложится
+		# спиной вниз (морда вверх), чуть подбросив в откате.
+		rot = -PI * e
+		c.y -= 5.0 * k * sin(PI * rp)
+		# Лёжа ёж мелко дышит-покачивается.
+		rot += 0.05 * sin(time * 3.0) * e
+	else:
+		rot = wob
 	# Выпада нет: укол — не удар. В точке контакта ёж просто остаётся,
 	# без отскока и танцев: любое движение после укола читается как
 	# «не попал» (жалоба автора).
-	var s := _spr_scale(HEDGE_TEX, _unit_h()) * sq
-	draw_set_transform(c, wob, s)
+	var s2 := _spr_scale(HEDGE_TEX, _unit_h()) * sq
+	draw_set_transform(c, rot, s2)
 	draw_texture(HEDGE_TEX, -HEDGE_TEX.get_size() * 0.5, (Ui.NIGHT_TINT if night else Color.WHITE))
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	_draw_puffs()
