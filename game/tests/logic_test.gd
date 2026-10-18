@@ -318,10 +318,54 @@ func _process(_dt: float) -> bool:
 		_marker_cells()
 		_legend_roundtrip()
 		_layout_positions()
+		_legends_fit_homes()
 		_bar_floors()
 		_report()
 		return true
 	return false
+
+
+## Нецентральная подпись влезает в свой дом (автор 18.10.2026:
+## «неактивные знаки слишком большие, вылезают за границы кнопки и
+## переплетаются с центральным»). Меряют не зеркало draw(), а сам
+## источник рисования — _rest: его презентации в покое совпадают с
+## концами перелёта, а влезание меряется зоной дома (`home_rect`).
+## Кегли взяты С щедростью (верх хода draw(): лютые экраны, большие
+## знаки) — влезавший должен ужиматься сам, а не краснеть.
+func _legends_fit_homes() -> void:
+	var mono: Font = _main.mono
+	_check(mono != null, "the mono font exists for home fitting")
+	if mono == null:
+		return
+	for area in [Rect2(0, 0, 788, 384), Rect2(0, 0, 2340, 1076), Rect2(0, 0, 560, 900)]:
+		var a: Rect2 = area
+		var tag := "%dx%d" % [int(a.size.x), int(a.size.y)]
+		var rh := (a.size.y - 32.0) / 5.0
+		var f := maxi(16, int(rh * 0.40))
+		var sub := maxi(int(float(f) * 0.66), int(rh * 0.24))
+		for b in K.buttons(a, false, false):
+			var r: Rect2 = b["r"]
+			var key := String(b["s"])
+			if K.legends(key).is_empty():
+				continue
+			for lg in K.legends(key):
+				var sym := String(lg)
+				# main заведомо другой: проверяем только не-центральные
+				# дома (центральная — набираемая, она с главным кеглем).
+				# Сентинел многосимвольный: легенды всегда из одного
+				# знака, совпасть с ним не может.
+				var pr: Array = K._rest(key, r, mono, sym, "не-центр", f, sub)
+				var zr: Rect2 = K.home_rect(r, key, sym)
+				var ts: Vector2 = Ui.text_size(mono, sym, int(float(pr[1])))
+				_check(ts.x <= zr.size.x * 0.92 + 0.5,
+					"%s: «%s» on «%s» is %.1f wide in a %.1f room" % [
+						tag, sym, key, ts.x, zr.size.x])
+				_check(ts.y <= zr.size.y * 0.98 + 0.5,
+					"%s: «%s» on «%s» is %.1f tall in a %.1f room" % [
+						tag, sym, key, ts.y, zr.size.y])
+				_check(float(pr[1]) >= 8.0,
+					"%s: «%s» on «%s» shrunk to nothing (%.0f)" % [
+						tag, sym, key, float(pr[1])])
 
 
 ## Полоса детекции укола на одной строке (в символах оси).

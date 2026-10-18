@@ -249,14 +249,30 @@ static func _rest(s: String, r: Rect2, font: Font, t: String, main: String, f: i
 			# самого знака, а не клавиши: подъём действует везде одинаково.
 			at.y -= float(font.get_height(int(ff))) * 0.3
 		return [at, ff]
-	return [home(r, s, t), float(sub_fs)]
-
+	# Нецентральная подпись живёт в своём доме и обязана в нём ВЛЕЗАТЬ
+	# (автор 18.10.2026: «нецентральные знаки слишком большие, вылезают
+	# за границы кнопки и переплетаются с центральным»): кегль ужимается,
+	# пока глиф не выходит из зоны дома, — но не ниже читаемости 8.
+	var zz := home_rect(r, s, t)
+	var ff := float(sub_fs)
+	while ff > 8.0:
+		if Ui.text_size(font, t, int(ff)).x <= zz.size.x * 0.92 \
+				and float(font.get_height(int(ff))) <= zz.size.y * 0.98:
+			break
+		ff -= 1.0
+	return [zz.get_center(), ff]
 
 ## Дом подписи на клавише — одна из восьми точек (см. corner_for).
 ## Только функция от самого знака: ни язык, ни шифт, ни морф дом не
 ## двигают.
 static func home(r: Rect2, s: String, sym: String) -> Vector2:
-	return _corner(r, corner_for(s, sym)).get_center()
+	return home_rect(r, s, sym).get_center()
+
+
+## Прямоугольник дома подписи — той же мерой, что и точка дома: зона
+## нужна не только рисованью, но и влезанию знака в неё (см. _rest).
+static func home_rect(r: Rect2, s: String, sym: String) -> Rect2:
+	return _corner(r, corner_for(s, sym))
 
 
 ## Должна ли подпись перелетать. Смена раскладки — все клавиши. А вот

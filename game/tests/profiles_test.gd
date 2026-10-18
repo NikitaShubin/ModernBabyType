@@ -76,6 +76,7 @@ func _process(_dt: float) -> bool:
 	_part32_pre_ready_geometry()
 	_part33_tap_and_bunny()
 	_part34_menu_bounds()
+	_part35_landscape_menu()
 	_part27_menu_chaos()
 	_report()
 	return true
@@ -718,8 +719,13 @@ func _part13_touch() -> void:
 	var first := String(_menu.users[0])
 	var second := String(_menu.users[1])
 	_picked = ""
+	# Широкий экран — таблица (№3, автор 18.10.2026): первый тап ТОЛЬКО
+	# выделяет, играет повторный по выделенному или дабл-клик.
 	_menu_tap(_menu.call("_row_tap_rect", 1).get_center())
-	_check(_picked == second, "a single tap plays as that user")
+	_check(_menu.sel == 1, "a single tap selects the row")
+	_check(_picked == "", "a single tap in the table does not play")
+	_menu_tap(_menu.call("_row_tap_rect", 1).get_center())
+	_check(_picked == second, "the second tap on the selected row plays as that user")
 	_menu_double_tap(_menu.call("_row_tap_rect", 1).get_center())
 	_check(_picked == second, "a double tap plays as that user")
 	_menu_tap(_menu.call("_new_tap_rect").get_center())
@@ -1983,21 +1989,18 @@ func _overlap_case(sz: Vector2i, n_users: int, msg: String, night: bool) -> void
 		if n_users > 0:
 			var rowbox := Rect2(_menu.call("_card_rect", 0)) if bool(_menu.call("_cards")) else _row_draw_rect0()
 			_gap_check(tag, k, [["строка", rowbox], ["заяц", bb]], 6.0, "заяц-строка")
-	# Своя клавиатура снизу — кнопки обязаны быть выше неё.
+	# Своя клавиатура при правке имени: кнопок внизу НЕТ вовсе
+	# (№5, автор 18.10.2026: «их вообще не должно быть в момент
+	# редактирования») — раньше их ряд уезжал над доской и закрывал
+	# почти весь экран. Над доской теперь держится только список.
 	_menu.input_active = true
 	_menu.k = _menu.call("_fit_k", clampf(
 		minf(_menu.view_w / 1100.0, _menu.call("_menu_eff_h") / 650.0)
 			* Ui.dpr(), 0.7, 2.5), 0.7)
 	k = _menu.k
-	var eff: float = _menu.call("_menu_eff_h")
-	var new_kb := Rect2(_menu.call("_new_tap_rect"))
-	var guest_kb := Rect2(_menu.call("_guest_tap_rect"))
+	_check(bool(_menu.call("_btn_hidden")),
+		"%s: buttons are hidden while typing" % tag)
 	_end_edit(_menu)
-	_check(
-		new_kb.end.y <= eff + 1.0 and guest_kb.end.y <= eff + 1.0,
-		"%s: the buttons stay above the own keyboard (%.0f > %.0f)" % [
-			tag, new_kb.end.y, eff]
-	)
 	_menu._upd_msg = ""
 
 
@@ -2235,6 +2238,114 @@ func _part33_tap_and_bunny() -> void:
 	_menu._reload()
 	_menu.call("_nav", 1)
 	_check(float(_menu._bunny_t) >= 1.0, "solo wrap does not restart the bunny")
+	for u in S.user_list():
+		S.delete_user(u)
+	_menu.users = saved_users.duplicate()
+	_menu._reload()
+	root.size = Vector2i(64, 64)
+	_menu._relayout()
+	Ui.force_touch = was_touch
+
+
+## 35. Альбомное меню (пять жалоб автора 18.10.2026 — №3, №5, №6):
+## кнопки в один ряд, при правке имени их нет вовсе, тап по имени
+## только выделяет, заяц живёт в видимой части списка, танец поворотов
+## не замораживает прокрутку. Headless рисования не видит, поэтому
+## меряются ТЕ мера, из которых собирается и рисование (см. AGENTS).
+func _part35_landscape_menu() -> void:
+	var was_touch := Ui.force_touch
+	Ui.force_touch = true
+	var saved_users: Array = _menu.users.duplicate()
+	for u in S.user_list():
+		S.delete_user(u)
+	S.create_user("Оля")
+	S.create_user("Паша")
+	_menu.open(S.GUEST)
+	root.size = Vector2i(2280, 1080)
+	_menu._relayout()
+	_end_edit(_menu)
+	var tag := "landscape"
+	# (№5) Кнопки — ОДИН ряд: «+ Новый игрок» и «Без профиля» рядом,
+	# а не столбец, съедавшим пол-экрана под клавиатурой.
+	var nr := Rect2(_menu.call("_new_tap_rect"))
+	var gr := Rect2(_menu.call("_guest_tap_rect"))
+	_check(int(_menu.call("_btn_rows")) == 1, "%s: one button row" % tag)
+	_check(absf(nr.position.y - gr.position.y) < 0.5, "%s: buttons share a row" % tag)
+	_check(nr.position.x + nr.size.x <= gr.position.x + 0.5,
+		"%s: new player stands left of guest" % tag)
+	# Половины: левая = свободное − зазор − половина, правая ровно
+	# половина (см. _guest_share): разница половин и есть зазор.
+	var gap: float = float(_menu.call("_btn_gap"))
+	_check(gr.size.x >= nr.size.x and absf(gr.size.x - nr.size.x) <= gap + 1.0,
+		"%s: two like halves (%.0f vs %.0f)" % [tag, nr.size.x, gr.size.x])
+	_check(nr.end.y <= _menu.view_h + 0.5, "%s: the row fits the screen" % tag)
+	# (№5) При правке имени кнопок нет вовсе. Рисование в headless не
+	# ходит, поэтому меряем то, на чём стоит skip рисования: скрытие
+	# привязано к _own_shown; прямоугольники рядов при этом всё ещё
+	# существуют (не нулевые) — скрывать GEomетрию нельзя, иначе
+	# _list_rect_datie поедет.
+	_menu.call("_start_edit", _menu.users.size())
+	_check(_menu.input_active, "the edit opens")
+	_check(bool(_menu.call("_btn_hidden")), "%s: buttons are hidden while editing" % tag)
+	var nr2 := Rect2(_menu.call("_new_tap_rect"))
+	_check(nr2.size.y >= 32.0, "%s: hidden buttons keep their geometry" % tag)
+	_menu.call("_cancel_edit")
+	_check(not bool(_menu.call("_btn_hidden")), "%s: buttons are back after editing" % tag)
+	# (№3) В Таблице первый тап по строке только выделяет; играет
+	# повторный по выделенному (и дабл-клик, см. _part13).
+	var second := String(_menu.users[1])
+	_picked = ""
+	_menu_tap(Rect2(_menu.call("_row_tap_rect", 1)).get_center())
+	_check(int(_menu.sel) == 1, "%s: the first tap on a name selects it" % tag)
+	_check(_picked == "", "%s: the first tap does not start the game" % tag)
+	_menu_tap(Rect2(_menu.call("_row_tap_rect", 1)).get_center())
+	_check(_picked == second, "%s: the second tap plays as that user" % tag)
+	# (№2) Заяц — часть списка: строка ушла из окна — заяц с ней.
+	for u in S.user_list():
+		S.delete_user(u)
+	for i in 14:
+		S.create_user("Игрок%d" % i)
+	_menu._reload()
+	_menu.sel = 0
+	_menu._scroll = 0.0
+	_menu._bunny_t = 1.0
+	_check(_menu.call("_list_max_scroll") > 0.0, "%s: the list scrolls" % tag)
+	_check(bool(_menu.call("_bunny_row_in_view")),
+		"%s: the bunny is with its visible row" % tag)
+	_menu._scroll = _menu.call("_list_max_scroll")
+	_check(not bool(_menu.call("_bunny_row_in_view")),
+		"%s: the bunny hides with its row scrolled away" % tag)
+	_menu._scroll = 0.0
+	# (№6) Танец поворотов: книжку жеста обнуляет любая смена окна —
+	# следующий жест прокрутки жив, а не трётся у мёртвого пальца.
+	_menu._press_deferred = true
+	_menu._dragged = true
+	_menu._fling_v = 500.0
+	_menu._touch_keys[0] = "а"
+	_menu._relayout()
+	_check(not _menu._press_deferred and not _menu._dragged
+		and _menu._fling_v == 0.0 and _menu._touch_keys.is_empty(),
+		"%s: a window change forgets the stale gesture" % tag)
+	# Живой сценарий: нажали до смены окна — окно сменилось — отпустили,
+	# следующий press+drag листает.
+	_menu._scroll = 0.0
+	_menu._scroll_target = 0.0
+	var dp: Vector2 = Rect2(_menu.call("_row_tap_rect", 2)).get_center()
+	var down := InputEventScreenTouch.new()
+	down.position = dp
+	down.pressed = true
+	_menu.call("_input", down)
+	_menu._relayout()
+	var sd := InputEventScreenDrag.new()
+	sd.position = dp + Vector2(0.0, -300.0)
+	_menu.call("_input", sd)
+	var up := InputEventScreenTouch.new()
+	up.position = dp + Vector2(0.0, -300.0)
+	up.pressed = false
+	_menu.call("_input", up)
+	_check(float(_menu._scroll) > 0.0 or _menu.call("_list_max_scroll") == 0.0,
+		"%s: the list scrolls after flips" % tag)
+	_menu._forget_gesture()
 	for u in S.user_list():
 		S.delete_user(u)
 	_menu.users = saved_users.duplicate()

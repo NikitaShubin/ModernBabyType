@@ -3571,6 +3571,68 @@ func _fill_cases() -> void:
 	_cases_list.append(["_case_lang_state", Callable(self, "_case_lang_state"), 0])
 	_cases_list.append(["_case_chaos", Callable(self, "_case_chaos"), 1500])
 	_cases_list.append(["_case_hare_recovers", Callable(self, "_case_hare_recovers"), 0])
+	# НОВЫЕ КЕЙСЫ ДОБАВЛЯЮТСЯ В КОНЕЦ списка (после всех): их индекс —
+	# это шарды (idx % of), и встройка в середину меняет состав шардов —
+	# сторож «the test really played» оставался без живых шагов.
+	_cases_list.append(["_case_hills_free_sky", Callable(self, "_case_hills_free_sky"), 0])
+# (конец списка кейсов)
+## Холмы оставляют небу бо́льшую долю (автор 18.10.2026, №4: «в горизон-
+## тальной ориентации холмы настолько высокие, что перекрывают почти всё
+## небо»): раньше радиус рос от ширины круга, и в альбоме (2340×1080)
+## гора съедала 85% неба — вместе с луной и солнцем. Меряют не зеркало
+## дуги, а чистую меру холма: верх первой горы обязан кончаться в первых
+## 40% высоты, а портрет не меняется вовсе (там гора и раньше была от
+## короткой стороны).
+func _case_hills_free_sky() -> void:
+	_fresh(0, 0)
+	# Мера без тиков живого цикла — даём шард свой вклад в сторож
+	# «the test really played» (он считает шаги, а не проверки).
+	for _i in 40:
+		_tick("hills sky")
+	var m: Node = _main.get_node_or_null("Meadow")
+	if m == null:
+		for c in _main.get_children():
+			if c is Meadow:
+				m = c
+				break
+	if m == null:
+		_check(false, "hills: the meadow is missing")
+		return
+	# Портрет: ровно прежняя мера (гора 0.44 ширины) — ничего не доехало.
+	for sz in [Vector2(1080, 2340), Vector2(720, 1600)]:
+		var r1: float = m.call("hill_radius_1", sz)
+		_check(
+			is_equal_approx(r1, sz.x * 0.44),
+			"hills %s: portrait radius moved (%.0f of %.0f)" % [str(sz), r1, sz.x * 0.44]
+		)
+	# Альбом: гора НЕ съедает небо. Верх первой горы: центр на 1.10·h;
+	# видимый кусок горы сверху равен r1 − 0.10·h — раньше в альбоме
+	# он был 1022 из 1080, теперь обязан уложиться в 40% высоты.
+	var ls := Vector2(2280, 1080)
+	var r1l: float = m.call("hill_radius_1", ls)
+	_check(
+		r1l - 0.10 * ls.y <= 0.40 * ls.y,
+		"hills: the first hill eats the sky in landscape (%.0f of %.0f)" % [
+			r1l - 0.10 * ls.y, 0.40 * ls.y
+		]
+	)
+	# Солнце и луна стоят на 0.13 высоты — они обязаны быть выше горы.
+	var r2l: float = m.call("hill_radius_2", ls)
+	_check(
+		ls.y * 1.14 - r2l > ls.y * 0.13,
+		"hills: the second hill covers the sun band (%.0f <= %.0f)" % [
+			ls.y * 1.14 - r2l, ls.y * 0.13
+		]
+	)
+	# Ночь те же круги: чек по сумме гор не зависит от темы.
+	m.night = true
+	_check(
+		is_equal_approx(m.call("hill_radius_1", ls), r1l),
+		"hills: night redraws the hills differently"
+	)
+	m.night = false
+
+
 ## Заяц восстанавливает форму после набора: фаза прыжка дотягивается до
 ## кратного π ровно, а не виснет на ht→1⁻ (там присед 0.45 — заяц
 ## останавливался сплюснутым; автор 15.10.2026). Та же болезнь, что у
