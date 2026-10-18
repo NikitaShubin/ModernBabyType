@@ -1515,16 +1515,20 @@ func _part29_card_scroll() -> void:
 	_menu.call("_input", _motion(last.get_center(), last.get_center() - Vector2(0.0, 60.0)))
 	_menu.call("_input", _release(last.get_center() - Vector2(0.0, 60.0)))
 	_check(_picked == "", "a drag over a card does not play that profile")
-	# Короткий тап по карточке играет сразу (автор 17.10.2026): пресс
-	# сам по себе молчит — тап доигрывает на отпускании.
+	# Короткий тап: пресс сам по себе молчит — тап доигрывает на
+	# отпускании. В компактном списке (автор 18.10.2026) ПЕРВЫЙ тап
+	# по свёрнутому ряду только разворачивает его; повторный тап по
+	# уже развёрнутому играет.
 	_menu._scroll = max_scroll
 	var tap_at := Rect2(_menu.call("_card_rect", 11)).get_center()
 	_picked = ""
 	_menu.call("_input", _tap(tap_at))
 	_check(_picked == "", "a press alone does not play yet (waits for release)")
 	_menu.call("_input", _release(tap_at))
-	_check(_picked != "", "a short tap plays as that profile")
-	_check(int(_menu.sel) == 11, "a short tap selects that profile")
+	_check(_picked == "", "the first tap on a collapsed row only expands it")
+	_check(int(_menu.sel) == 11, "the first tap selects that profile")
+	_menu_tap(Rect2(_menu.call("_card_rect", 11)).get_center())
+	_check(_picked != "", "a second tap on the expanded row plays")
 	# Вниз до упора — тоже зажим, в ноль не уходит.
 	_menu._scroll = max_scroll
 	var at2 := view.get_center()
@@ -2122,14 +2126,22 @@ func _part33_tap_and_bunny() -> void:
 			w.x <= r.size.x - 16.0 * _menu.k,
 			"%s label fits its row (%.0f px wide)" % [pair[0], w.x]
 		)
-	# Прямой тап по карточке играет этим игроком — сразу, без дабл-клика.
+	# Компактный список (автор 18.10.2026): невыделенный ряд
+	# разворачивается тапом БЕЗ игры; повторный тап по уже
+	# развёрнутому играет.
 	var second := String(_menu.users[1])
 	_picked = ""
 	_menu_tap(Rect2(_menu.call("_row_tap_rect", 1)).get_center())
-	_check(_picked == second, "a tap on a row plays as that user")
-	_check(int(_menu.sel) == 1, "the tapped row is selected as well")
-	# Заяц: прыжок «на ту же строку» не перезапускается — раньше каждый
-	# повторный клик по одному игроку дёргал его (жалоба «трясётся»).
+	_check(int(_menu.sel) == 1, "the first tap selects the row")
+	_check(_picked == "", "the expansion tap does not play yet")
+	_menu_tap(Rect2(_menu.call("_row_tap_rect", 1)).get_center())
+	_check(_picked == second, "a tap on the expanded row plays as that user")
+	# Заяц: после разворота он честно в полёте — даём ему долететь
+	# (в headless кадров нет), а прыжок «на ту же строку» не
+	# перезапускается — раньше каждый повторный клик по одному игроку
+	# дёргал его (жалоба «трясётся»).
+	_menu._bunny_t = 1.0
+	_menu._bunny_land = 1.0
 	_menu.call("_nav", 0)  # стрелка в ту же строку: цели совпадают
 	_check(float(_menu._bunny_t) >= 1.0, "same-row hop does not restart the bunny")
 	# А на другую строку прыжок жив: стрелка вниз прыгает заново.
@@ -2322,13 +2334,20 @@ func _part28_cards() -> void:
 		Rect2(_menu.call("_yo_head_rect")).size == Vector2.ZERO,
 		"no yo header to tap in cards"
 	)
-	# Геометрия карточек: не налезают друг на друга, влезают в экран,
-	# кнопки внутри своей карточки, крупные и не пересекаются.
+	# Геометрия: свёрнутые ряды — одна строка без кнопок; в развёрнутом
+	# (сейчас ряд 0 — он выбран) чипы внутри карточки, крупные и не
+	# пересекаются (автор 18.10.2026: кнопки только у развёрнутого).
 	var c0 := Rect2(_menu.call("_card_rect", 0))
 	var c1 := Rect2(_menu.call("_card_rect", 1))
 	_check(not c0.intersects(c1), "cards do not overlap")
 	_check(c1.end.y <= _menu.view_h, "the last card fits on screen")
+	var expanded_h: float = float(_menu.call("_card_h"))
+	var collapsed_h: float = float(_menu.call("_compact_h"))
+	_check(collapsed_h < expanded_h, "a collapsed row is shorter than a card")
+	_check(collapsed_h >= 64.0, "a collapsed row still fits a finger")
 	for i in _menu.users.size():
+		if not bool(_menu.call("_row_expanded", i)):
+			continue
 		var card := Rect2(_menu.call("_card_rect", i))
 		var pro := Rect2(_menu.call("_pro_tap_rect", i))
 		var yo := Rect2(_menu.call("_yo_tap_rect", i))
@@ -2340,15 +2359,26 @@ func _part28_cards() -> void:
 			_check(card.encloses(r), "%s sits inside its card" % nm[0])
 		_check(not pro.intersects(yo) and not yo.intersects(del) and not pro.intersects(del),
 			"card buttons do not overlap each other")
-	# Тап по карточке играет этим игроком, тап по чипу — только флаг
+	# Тап по свёрнутой карточке только разворачивает; тап по
+	# развёрнутой (не по чипам) играет; тап по чипу — только флаг
 	# (и объясняет галку: шапки-то нет).
 	var first := String(_menu.users[0])
 	var second := String(_menu.users[1])
 	_picked = ""
 	_menu_tap(c1.get_center())
-	_check(_picked == second, "a tap on a card plays as that user")
-	_menu_double_tap(c1.get_center())
-	_check(_picked == second, "a double tap on a card plays as that user")
+	_check(_menu.sel == 1 and _picked == "",
+		"a tap on a collapsed card expands it without playing")
+	_menu_tap(Rect2(_menu.call("_card_rect", 1)).get_center())
+	_check(_picked == second, "a second tap on the expanded card plays as that user")
+	# Дабл-клик (мышь) играет и по свёрнутому ряду: жест уже
+	# классифицирован, сам по себе игра. sel сейчас на втором — ряд
+	# «первый» свёрнут.
+	_menu_double_tap(Rect2(_menu.call("_card_rect", 0)).get_center())
+	_check(_picked == first, "a double tap on a collapsed card plays too")
+	# Чипы развёрнутого ряда: правят флаг, не играют, крестик
+	# открывает подтверждение удаления. Ряд 0 уже выбран и развёрнут
+	# (дабл-тапом), поэтому тап по нему играет — выравниваем счёт.
+	_menu_tap(Rect2(_menu.call("_card_rect", 0)).get_center())
 	_picked = ""
 	_menu_tap(Rect2(_menu.call("_pro_tap_rect", 0)).get_center())
 	_check(S.get_all_keys(first), "card chip turns all_keys on")
@@ -2358,11 +2388,20 @@ func _part28_cards() -> void:
 	_menu_tap(Rect2(_menu.call("_yo_tap_rect", 0)).get_center())
 	_check(not S.get_yo_strict(first), "card yo chip relaxes strictness")
 	_check(String(_menu.hint_header) == "yo", "the yo chip explains itself too")
-	_menu_tap(Rect2(_menu.call("_del_tap_rect", 1)).get_center())
-	_check(String(_menu.confirm_name) == second,
+	# Тап по зоне чипа свёрнутого ряда флаг НЕ трогает: там кнопок нет,
+	# разворачивается сама строка (сел на неё). Ряд «второй» свёрнут
+	# после выбора нулевого.
+	_menu_tap(Rect2(_menu.call("_card_rect", 1)).get_center())
+	var pro0_was: bool = S.get_all_keys(first)
+	_menu_tap(Rect2(_menu.call("_pro_tap_rect", 0)).get_center())
+	_check(S.get_all_keys(first) == pro0_was, "a collapsed row has no chips to tap")
+	_check(int(_menu.sel) == 0, "the chip zone of a collapsed row selects it")
+	# Крестик развёрнутого ряда открывает подтверждение удаления.
+	_menu_tap(Rect2(_menu.call("_del_tap_rect", 0)).get_center())
+	_check(String(_menu.confirm_name) == first,
 		"the card cross opens the delete confirmation")
 	_menu_tap(Rect2(_menu.call("_confirm_no_rect")).get_center())
-	_check(S.user_exists(second), "cancelling the confirmation keeps the profile")
+	_check(S.user_exists(first), "cancelling the confirmation keeps the profile")
 	# Много игроков: интерфейс остаётся крупным, список листается. Низ
 	# (поле + кнопки) прижат к экрану и обязан на нём помещаться при
 	# любом числе игроков — это то, что раньше ломалось ужимом k.

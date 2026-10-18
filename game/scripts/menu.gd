@@ -72,6 +72,9 @@ var _lr_ed := -2
 var _lr_hint := ""
 var _lr_safe := -1.0
 var _lr_act := false
+## Выбранный ряд входит в ключ окн: в компактном списке его высота
+## зависит от выделения (развёрнутый ряд выше), и геометрия shifts.
+var _lr_sel := -2
 ## Строчное редактирование (автор 15.10.2026): номер строки (N = строка
 ## ввода имени, видна только пока идёт создание), editing_new отличает
 ## создание от переименования — у них разные Enter/Esc. Ввод идёт в
@@ -823,14 +826,24 @@ func _process(dt: float) -> void:
 				_scroll = _scroll_target
 		queue_redraw()
 	# Долгое нажатие пальцем: стоит на строке дольше порога и не едет —
-	# переименовываем (та же единая функция, что у ПКМ).
+	# переименовываем (та же единая функция, что у ПКР). В компактном
+	# списке (автор 18.10.2026) удержание на РАЗВЁРНУТОМ ряду правит
+	# имя; на свёрнутом — только разворачивает его, тап после этого
+	# проглатывается (was_long).
 	if _press_down and not _dragged and not _press_fired:
 		_press_t += dt
 		if _press_t >= ROW_PRESS_T:
 			_press_fired = true
 			var ri := _row_at(_drag_from)
 			if editing < 0 and ri >= 0 and ri < users.size() and _row_shown(ri):
-				_start_edit(ri)
+				if _compact() and ri != sel:
+					var was_target := _bunny_target_y()
+					sel = ri
+					_scroll_to_sel()
+					_bunny_jump(was_target)
+					queue_redraw()
+				else:
+					_start_edit(ri)
 				get_viewport().set_input_as_handled()
 	if kb_press_t > 0.0:
 		kb_press_t = maxf(0.0, kb_press_t - dt)
@@ -1145,8 +1158,12 @@ func _tap(pos: Vector2) -> void:
 	# Строки за окном списка тапов не видят (как и глазом: их режет
 	# маска): иначе высокие строки на тесном экране перехватывали бы
 	# кнопки под списком (ловил тест: тап по «Без профиля» играл Петей).
+	# В компактном списке чипы существуют только в развёрнутом ряду
+	# (выбранном и правимом): у свёрнутых строк кнопок нет вообще.
 	for i in _row_count():
 		if not _row_shown(i):
+			continue
+		if _compact() and i != sel and i != editing:
 			continue
 		if _pro_tap_rect(i).has_point(pos):
 			_toggle_pro(i)
@@ -1166,16 +1183,24 @@ func _tap(pos: Vector2) -> void:
 		if not _row_shown(i):
 			continue
 		if _row_tap_rect(i).has_point(pos):
-			# Прямой тап по игроку — ИГРАТЬ (автор 17.10.2026: «кликаю
-			# по своему имени в списке — зайчик трясётся, но игра не
-			# начинается»). Дабл-клик (_tap_play) и Enter играют так же;
-			# галки и крестик строки стоят раньше строки (выше), тап по
-			# правке уходит в правку. Зайчик прыгает при смене строки,
-			# а тапы по одной и той же его не трогают — раньше каждый
+			# Тап по игроку: в компактном списке (автор 18.10.2026)
+			# невыделенный ряд ТОЛЬКО разворачивается — повторный тап
+			# по уже развёрнутому играет. Прежде (17.10.2026) играли с
+			# первого тапа: тогда каждый ряд целиком был карточкой.
+			# Дабл-клик (_tap_play) и Enter играют так же; галки и
+			# крестик строки стоят раньше строки (выше), тап по правке
+			# уходит в правку. Зайчик прыгает при смене строки, а тапы
+			# по одной и той же его не трогают — раньше каждый
 			# повторный клик перезапускал прыжок «по месту», и он дрожал.
+			var was_sel := sel
+			var was_target := _bunny_target_y()
 			sel = i
 			_scroll_to_sel()
-			queue_redraw()
+			_bunny_jump(was_target)
+			if _compact() and i != was_sel:
+				queue_redraw()
+				get_viewport().set_input_as_handled()
+				return
 			chosen.emit(users[i])
 			get_viewport().set_input_as_handled()
 			return
@@ -1846,12 +1871,16 @@ func _row_count() -> int:
 
 
 func _list_all_h() -> float:
-	# Высота — НАСТОЯЩАЯ: n карточек и n−1 зазоров (зазор после последней
+	# Высота — НАСТОЯЩАЯ: n рядов и n−1 зазоров (зазор после последней
 	# карточки не занимает экран; раньше считался — список «не влезал»
-	# на ровно один зазор и лишний раз уезжал вниз).
+	# на ровно один зазор и лишний раз уезжал вниз). В компактном списке
+	# высоты рядов разные (выбранный развёрнут), считаем по собой.
 	var n := maxi(_row_count(), 1)
 	if _cards():
-		return float(n) * _card_nat() + float(n - 1) * _CARD_GAP * _card_k() + _list_end_pad()
+		var acc := _list_end_pad()
+		for j in n:
+			acc += _row_h(j)
+		return acc + float(n - 1) * _row_gap()
 	return float(n) * _table_step_at(k) + _list_end_pad()
 
 
@@ -1880,7 +1909,7 @@ func _list_rect() -> Rect2:
 		_lr_ok and _lr_w == view_w and _lr_h == view_h and _lr_k == k
 		and _lr_n == users.size() and _lr_ed == editing
 		and _lr_hint == hint_header and _lr_safe == top_safe
-		and _lr_act == input_active
+		and _lr_act == input_active and _lr_sel == sel
 	):
 		return _lr_val
 	_lr_val = _list_rect_now()
@@ -1892,6 +1921,7 @@ func _list_rect() -> Rect2:
 	_lr_hint = hint_header
 	_lr_safe = top_safe
 	_lr_act = input_active
+	_lr_sel = sel
 	_lr_ok = true
 	return _lr_val
 
@@ -1997,8 +2027,8 @@ func _row_box_at(i: int, sc: float) -> Rect2:
 	if _cards():
 		var view := _list_rect()
 		return Rect2(
-			view.position.x, _list_top() + float(i) * _row_step() - sc,
-			view.size.x, _card_h()
+			view.position.x, _row_y(i) - sc,
+			view.size.x, _row_h(i)
 		)
 	var cols := _table_cols()
 	var row_y := _rows_top() + float(i) * _row_step() - sc
@@ -2099,6 +2129,59 @@ func _row_step() -> float:
 ## (и на десктопе) — привычная таблица.
 func _cards() -> bool:
 	return view_h > view_w
+
+
+## Компактный список (автор 18.10.2026): в мобильном портрете каждый
+## пункт — ОДНА строка без кнопок; однократный тап по развёрнутому —
+## игра, по свёрнутому — разворот, удержание развёрнутого — правка
+## имени. Кнопки-чипы рисуются только в развёрнутом ряду. Десктопному
+## портретному окну (мышь) оставлено прежнее поведение карточек.
+func _compact() -> bool:
+	return _cards() and _finger()
+
+
+## Кегль строки компактного списка: имена 34·k велики для одной строки
+## рядом со статистикой, 28·k — чуть мельче карточного, читается и
+## ужимает список вдвое.
+func _compact_fs() -> int:
+	return _card_fs(28)
+
+
+## Высота свёрнутой строки: строка текста с воздухом, минимум — палец.
+func _compact_h() -> float:
+	if not _compact():
+		return _TAP_MIN
+	return maxf(_TAP_MIN, float(_font_h(_compact_fs())) * 1.75)
+
+
+## Развёрнут ли ряд: выбранный и редактируемый показывают карточку
+## с чипами, остальные — одну строку (только в компактном списке).
+func _row_expanded(i: int) -> bool:
+	return not _compact() or i == sel or editing == i
+
+
+## Зазор между рядами списка.
+func _row_gap() -> float:
+	return _CARD_GAP * _card_k()
+
+
+## Высота ряда i: в компактном списке свёрнутые строки по одной линии,
+## выбранный и правимый — карточка целиком. Вне компакта — все карточки
+## (или строки таблицы через _row_step).
+func _row_h(i: int) -> float:
+	if not _cards():
+		return _table_step_at(k)
+	return _card_h() if _row_expanded(i) else _compact_h()
+
+
+## Верх ряда i от верха окна (без прокрутки): сумма высот предыдущих.
+## В компактном списке высоты зависят от выбранного ряда — расширение
+## одного сдвигает все нижние; тапы и рисование меряют одно и то же.
+func _row_y(i: int) -> float:
+	var acc := _list_top()
+	for j in i:
+		acc += _row_h(j) + _row_gap()
+	return acc
 
 
 ## Сторона крупной кнопки в карточке (Про, Ё, ✕). На телефоне — под
@@ -2317,8 +2400,8 @@ const _CARD_IN := 18.0
 func _card_rect(i: int) -> Rect2:
 	var view := _list_rect()
 	return Rect2(
-		view.position.x, _list_top() + float(i) * _row_step() - _scroll,
-		view.size.x, _card_h()
+		view.position.x, _row_y(i) - _scroll,
+		view.size.x, _row_h(i)
 	)
 
 
@@ -3414,6 +3497,12 @@ func _draw_table_head() -> void:
 ## только пока список не листали: уехавшая далеко строка показывалась над
 ## ней, в зоне заголовка. Шапка колонок, зайчик и верхняя панель рисуются
 ## позже поверх маски, их она не трогает.
+## Прямой линией маска не справляется с УГЛАМИ рамки: рамка скруглена
+## (радиус 12 в panel_sb), и ряд у самого края торчал из-под дуги — в
+## зазоре между дугой и прямой маски был виден жёлтый фрагмент карточки
+## (автор 18.10.2026: «стал вылезать за верхнюю грань»; подтверждено
+## кадром vis-menu-10: чип «Про» вне дуги). По обеим маскам докладываем
+## уголки бумагой по геометрии рамки.
 func _draw_top_mask(view: Rect2) -> void:
 	if view.position.y <= 0.0:
 		return
@@ -3422,6 +3511,8 @@ func _draw_top_mask(view: Rect2) -> void:
 		Rect2(Vector2.ZERO, Vector2(view_w, view.position.y)),
 		paper
 	)
+	_mask_pod(view, 0, paper)
+	_mask_pod(view, 1, paper)
 
 
 ## Карточки игроков: три своих ряда (имя во всю ширину, статистика,
@@ -3434,6 +3525,11 @@ func _draw_cards() -> void:
 	for i in _row_count():
 		var card := _card_rect(i)
 		if card.position.y > view.end.y or card.end.y < view.position.y:
+			continue
+		# Свёрнутый ряд компактного списка: одна строка без кнопок,
+		# тап по нему только разворачивает (автор 18.10.2026).
+		if not _row_expanded(i):
+			_draw_compact_row(i, card)
 			continue
 		draw_style_box(row_sb if i == sel else row_idle_sb, card)
 		# Выбранная карточка всегда на жёлтом — тёмным текстом.
@@ -3482,6 +3578,36 @@ func _draw_cards() -> void:
 	_draw_list_frame(view)
 
 
+## Свёрнутая строка компактного списка: имя слева (с ужатием, как в
+## карточке, до 60% кегля, многоточие — крайний случай), статистика
+## справа приглушённо. Кнопок нет: тап по этой строке разворачивает
+## ряд (см. _tap), чипы живут только в развёрнутом.
+func _draw_compact_row(i: int, card: Rect2) -> void:
+	var fs := _compact_fs()
+	var lh := float(_font_h(fs))
+	var cy := card.get_center().y
+	var inner := card.size.x - _CARD_IN * k * 2.0
+	var x := card.position.x + _CARD_IN * k
+	# Статистика правым краем; ужимается первой, у имени останется
+	# место до 60% кегля (как у карточки, автор 10.2026).
+	var cells := _cell_texts(users[i])
+	var sfs := _card_fs(FONT_CARD_STATS)
+	var stat := _clip_fs("%s · %s" % [cells[0], cells[1]], sfs, inner * 0.45)
+	_text_fs(
+		stat,
+		Vector2(
+			card.end.x - _CARD_IN * k - _text_size_fs(stat, sfs).x,
+			cy + float(_font_h(sfs)) * 0.35
+		),
+		sfs, _dim()
+	)
+	var cap := maxf(inner - _text_size_fs(stat, sfs).x - 22.0 * k, inner * 0.3)
+	var name := _short_name(users[i])
+	while fs > int(float(_compact_fs()) * 0.6) and _text_size_fs(name, fs).x > cap:
+		fs -= 2
+	_text_fs(name, Vector2(x, cy + float(_font_h(fs)) * 0.35), fs, _ink())
+
+
 ## Скроллбар списка (автор 15.10.2026: когда пунктов много): тонкая
 ## полоса у правого края окна, бегунок — доля видимого. Рисуем поверх
 ## маски, чтобы был виден всегда, пока список листается.
@@ -3526,6 +3652,39 @@ func _draw_list_mask(view: Rect2) -> void:
 	# заехавшая ПОД кнопки, торчала снизу и по краю. Кнопки рисуются
 	# позже и поверх маски — им маска не мешает.
 	draw_rect(Rect2(Vector2(0.0, view.end.y), Vector2(view_w, view_h - view.end.y)), paper)
+	_mask_pod(view, 2, paper)
+	_mask_pod(view, 3, paper)
+
+
+## Радиус скругления рамки окна списка (12.0 в panel_sb). Заглушки углов
+## обязаны резать ровно по этой дуге, иначе под ней снова щель.
+func _list_frame_radius() -> float:
+	if list_frame_sb == null:
+		return 12.0
+	return float(list_frame_sb.corner_radius_top_left)
+
+
+## Уголок маски: квадрат (r×r) у самого угла окна минус четверть диска —
+## ровно то место, где ряд торчал из-под скругления (см. _draw_top_mask).
+## corner: 0 ЛВ, 1 ПВ, 2 ПН, 3 ЛН; полигональная дуга тем же радиусом,
+## что у рамки (шаг 1/6 дуги — для r=12 щель больше полпикселя не даст).
+func _mask_pod(view: Rect2, corner: int, paper: Color) -> void:
+	var r := _list_frame_radius()
+	if r <= 0.5 or view.size.x < r * 2.0 or view.size.y < r * 2.0:
+		return
+	var dx := -1.0 if corner == 0 or corner == 3 else 1.0
+	var dy := -1.0 if corner == 0 or corner == 1 else 1.0
+	var c := Vector2(
+		view.position.x + r if corner == 0 or corner == 3 else view.end.x - r,
+		view.position.y + r if corner == 0 or corner == 1 else view.end.y - r
+	)
+	var a0 := PI * 0.5 * float((corner + 2) % 4)
+	var pts := PackedVector2Array()
+	pts.append(c + Vector2(dx * r, dy * r))
+	for j in 7:
+		var t := a0 + PI * 0.5 * float(j) / 6.0
+		pts.append(c + Vector2(cos(t), sin(t)) * r)
+	draw_colored_polygon(pts, paper)
 
 
 
