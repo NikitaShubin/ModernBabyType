@@ -1692,10 +1692,28 @@ func _run_part2() -> void:
 	# --- Механика пропусков: серые символы — тоже клетки, откат идёт по ним.
 	# Все буквы серые (active пуст), пробелы активны всегда — автопропуск
 	# встанет на первый пробел, а все буквы перед ним пройдёт сам.
-	_main._new_level()
-	_main.active = {}
-	_main.cursor_line = 0
-	_main.cursor_pos = _first_grey()
+	# Герметичность (та же, что у ё-проверки): редкий run мог начаться
+	# строкой БЕЗ пробела после первого серого символа — автопропуск
+	# доходил до конца строки, курсор вставал в ожидание ↵, и откат там
+	# означает «отменить перенос», а не «ничего»: обе оценки ниже краснели
+	# в полном прогоне (CI 18.10.2026), и лишь изредка.
+	var guard := 0
+	while guard < 24:
+		_main._new_level()
+		_main.active = {}
+		_main.cursor_line = 0
+		_main.cursor_pos = _first_grey()
+		var l0: String = String(_main.display_lines[0])
+		var spaced := false
+		for p in range(_main.cursor_pos, l0.length()):
+			if l0.substr(p, 1) == " ":
+				spaced = true
+				break
+		if spaced:
+			break
+		guard += 1
+	if guard >= 24:
+		print("GREY-FAIL: line=[%s]" % [String(_main.display_lines[0])])
 	var skip_from: float = _main._lin(0, float(_main.cursor_pos))
 	_main._skip_inactive()
 	var skip_to: float = _main._lin(_main.cursor_line, float(_main.cursor_pos))
