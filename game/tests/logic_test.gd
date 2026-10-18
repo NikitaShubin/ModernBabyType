@@ -1276,6 +1276,23 @@ func _bar_floors() -> void:
 			var fsm: int = _main.call("_bar_fs")
 			_check(fsm >= int(22.0 * float(d)),
 				"dpr %.2f %s: kegl keeps 22dp (%d)" % [d, side, fsm])
+			# Текстовая карточка тоже: кегль не ниже 16dp на телефоне
+			# (в альбоме k ронял 36k до ~32px при честной плотности 2+).
+			# Проверка на ДОЛГОМ тексте: тогда формула ложится на пол lo,
+			# и сдвиг пола виден; на короткой фикстуре натуральный кегль
+			# и без пола выше 16dp — проверка была слепой (проба).
+			var big_lines: Array[String] = []
+			var piece: String = "то-то-ра поро-бараб "
+			for i in 40:
+				big_lines.append(piece.repeat(6))
+			var saved_disp: Array = _main.display_lines
+			_main.display_lines = big_lines
+			_main._relayout()
+			var tfs: int = int(_main.font_size)
+			_check(tfs >= int(16.0 * float(d)),
+				"dpr %.2f %s: text kegl keeps the 16dp floor (%d)" % [d, side, tfs])
+			_main.display_lines = saved_disp
+			_main._relayout()
 			var prm: Rect2 = _main._players_rect
 			_check(prm.size.x >= 44.0 * float(d) - 0.5
 				and prm.size.y >= 44.0 * float(d) - 0.5,
