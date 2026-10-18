@@ -702,14 +702,42 @@ func _case_wrap_waits_enter() -> void:
 			return
 		_hard(want2)
 		_tick(tag)
+	# Лanded: последний набор ДО отката (поиск в игре тот же —
+	# typed/ошибка позади курсора); после отмены курсор обязан стоять
+	# ровно на нём.
+	var land_exp := Vector2i(-1, -1)
+	var wl := int(_main.cursor_line)
+	var wp := int(_main.cursor_pos)
+	while wl >= 0:
+		if wp > 0:
+			wp -= 1
+		else:
+			wl -= 1
+			if wl >= 0:
+				wp = String(_main.display_lines[wl]).length() - 1
+		if wl < 0:
+			break
+		var wk := "%d:%d" % [wl, wp]
+		if bool(_main.errors.has(wk)) or bool(_main.typed_cells.has(wk)):
+			land_exp = Vector2i(wl, wp)
+			break
 	_main._backspace()
 	_tick(tag)
 	_check(not bool(_main.need_enter), "%s: backspace did not cancel the wrap" % tag)
-	# Откат встаёт НА стёртую клетку, а не висит за концом строки без
-	# ожидания (иначе курсор не на букве — ловил инвариант в хаосе).
+	# Откат в ожидании встаёт на последнюю НАБРАННУЮ клетку (правило
+	# первопричины 18.10.2026): серые буквы строки прошла сама игра, и
+	# их нечего было стирать — здесь набор добрался только до клетки 4
+	# («и», пробелы), дальше автопропуск. Инвариант прежний: курсор не
+	# висит за концом строки и стоит на набранной клетке.
 	_check(
-		int(_main.cursor_pos) == String(_main.display_lines[int(_main.cursor_line)]).length() - 1,
+		int(_main.cursor_pos) >= 0
+			and int(_main.cursor_pos) < String(_main.display_lines[int(_main.cursor_line)]).length(),
 		"%s: backspace left the cursor past the line end (%d:%d)" % [tag, int(_main.cursor_line), int(_main.cursor_pos)]
+	)
+	_check(
+		Vector2i(int(_main.cursor_line), int(_main.cursor_pos)) == land_exp,
+		"%s: backspace lands on the last typed cell (%d:%d)" % [
+			tag, int(_main.cursor_line), int(_main.cursor_pos)]
 	)
 	# ↵ после отката молчит: строка не кончилась.
 	var line_after := int(_main.cursor_line)

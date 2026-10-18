@@ -1690,30 +1690,14 @@ func _run_part2() -> void:
 	)
 
 	# --- Механика пропусков: серые символы — тоже клетки, откат идёт по ним.
-	# Все буквы серые (active пуст), пробелы активны всегда — автопропуск
-	# встанет на первый пробел, а все буквы перед ним пройдёт сам.
-	# Герметичность (та же, что у ё-проверки): редкий run мог начаться
-	# строкой БЕЗ пробела после первого серого символа — автопропуск
-	# доходил до конца строки, курсор вставал в ожидание ↵, и откат там
-	# означает «отменить перенос», а не «ничего»: обе оценки ниже краснели
-	# в полном прогоне (CI 18.10.2026), и лишь изредка.
-	var guard := 0
-	while guard < 24:
-		_main._new_level()
-		_main.active = {}
-		_main.cursor_line = 0
-		_main.cursor_pos = _first_grey()
-		var l0: String = String(_main.display_lines[0])
-		var spaced := false
-		for p in range(_main.cursor_pos, l0.length()):
-			if l0.substr(p, 1) == " ":
-				spaced = true
-				break
-		if spaced:
-			break
-		guard += 1
-	if guard >= 24:
-		print("GREY-FAIL: line=[%s]" % [String(_main.display_lines[0])])
+	# Все буквы серые (active пуст), пробелы активны всегда. Сетап не
+	# «герметизируем» обходами: строка БЕЗ пробела после серого run —
+	# законный случай, и игра обязана его держать (см. проверку
+	# «no-space grey line» ниже — 18.10.2026).
+	_main._new_level()
+	_main.active = {}
+	_main.cursor_line = 0
+	_main.cursor_pos = _first_grey()
 	var skip_from: float = _main._lin(0, float(_main.cursor_pos))
 	_main._skip_inactive()
 	var skip_to: float = _main._lin(_main.cursor_line, float(_main.cursor_pos))
@@ -1736,11 +1720,91 @@ func _run_part2() -> void:
 		_main.passed.has(_cell_key(last.x, last.y)),
 		"auto-skipped cells stay passed after Backspace"
 	)
+	# Ожидание переноса на строке, которую игра прошла САМА: серый run
+	# без единого пробела доводит автопропуск до жёсткого конца, курсор
+	# встаёт в ожидание ↵ — и Backspace там НИЧЕГО не делает: откатывать
+	# можно только набранное. Здесь же планировалась редкая CI-поломка
+	# 18.10.2026 (два разных тега краснели на этом только изредка, потому
+	# что случайная строка без пробела почти не выпадала): строка руками,
+	# детерминированно.
+	_main._new_level()
+	_main.state = "playing"
+	_main.need_enter = false
+	_main.cursor_line = 0
+	_main.display_lines = ["ёжик", "дальше"] as Array[String]
+	var hard_a: Array[bool] = [true, false]
+	_main.line_hard = hard_a
+	_main.line_drops = []
+	var noglue_a: Array[bool] = [false, false]
+	_main.line_glue = noglue_a
+	_main._reindex_lines()
+	_main.active = {}  # всё серое: «ёжик» игра проходит сама, до конца
+	_main.cursor_pos = 0
+	_main._skip_inactive()
+	var waited := Vector2i(_main.cursor_line, _main.cursor_pos)
+	_check(_main.need_enter, "a no-space grey line ends in the enter wait")
+	var pass_a: int = _main.passed.size()
+	_main._backspace()
+	_check(_main.need_enter, "backspace keeps waiting on a line nobody typed")
+	_check(
+		Vector2i(_main.cursor_line, _main.cursor_pos) == waited,
+		"the untyped wait is not cancelled by Backspace"
+	)
+	_check(_main.passed.size() == pass_a, "the wait keeps the skipped cells passed")
+	# Та же пара «ожидание ↵», но заработанная НАБОРОМ: только «к»
+	# активна — игра сама прошла «ё ж и», игрок набрал «к», курсор ждёт
+	# ↵; отмена возвращает ровно на набранную клетку (правило 10.2026).
+	_main._new_level()
+	_main.state = "playing"
+	_main.need_enter = false
+	_main.cursor_line = 0
+	_main.cursor_pos = 0
+	_main.display_lines = ["ёжик", "дальше"] as Array[String]
+	var hard_b: Array[bool] = [true, false]
+	_main.line_hard = hard_b
+	_main.line_drops = []
+	var noglue_b: Array[bool] = [false, false]
+	_main.line_glue = noglue_b
+	_main._reindex_lines()
+	_main.active = {"к": true}
+	_main.cursor_line = 0
+	_main.cursor_pos = 0
+	_main._skip_inactive()  # серые «ё ж и» проходит, встаёт на «к»
+	_check(_main.cursor_pos == 3, "the skip stops at the active letter")
+	_main._type_char(_main._current())  # игрок набрал «к» — ждём ↵
+	_check(_main.need_enter, "typing the last letter earns the enter wait")
+	var bk := _cell_key(0, 3)
+	_main._backspace()
+	_check(not _main.need_enter, "a typed wait is cancelled by Backspace")
+	_check(
+		Vector2i(_main.cursor_line, _main.cursor_pos) == Vector2i(0, 3),
+		"the typed wait retreats to the typed letter"
+	)
+	_check(
+		not _main.passed.has(bk) and not _main.typed_cells.has(bk),
+		"the typed wait erases the typed cell completely"
+	)
+	_check(
+		_main.passed.has(_cell_key(0, 0)) and _main.passed.has(_cell_key(0, 2)),
+		"the retreat keeps the auto-skipped prefix passed"
+	)
 	# А откат настоящей набранной буквы работает: сначала набираем
 	# активную букву, потом откатываемся — встаём ровно на неё.
-	_main._new_level()
-	_main.active = BB.active_chars(0)
-	_main.cursor_line = 0
+	# Герметичность: редкий уровень мог начаться строкой ЦЕЛИКОМ из
+	# серых букв — набирать в серое нельзя (typed_cells не заводится,
+	# откат честно не находит набранного: CI 18.10.2026, второй
+	# прогон). Ищем строку, где есть активная буква.
+	var guard2 := 0
+	while guard2 < 24:
+		_main._new_level()
+		_main.active = BB.active_chars(0)
+		_main.cursor_line = 0
+		var fa_try := _first_active()
+		if _main._is_active(_main.display_lines[0].substr(fa_try, 1)):
+			break
+		guard2 += 1
+	if guard2 >= 24:
+		print("ACTIVE-FAIL: line=[%s]" % [String(_main.display_lines[0])])
 	_main.cursor_pos = _first_active()
 	var fa := _first_active()
 	_main._type_char(_main._current())
