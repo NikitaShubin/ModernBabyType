@@ -458,7 +458,7 @@ run_tests() {
 	local pids=() failed=0
 	local s pid
 	# Мелочь — целиком, каждая своим процессом.
-	for s in logic_test.gd update_test.gd profiles_test.gd menu_scroll_test.gd perf_test.gd theme_test.gd; do
+	for s in logic_test.gd update_test.gd profiles_test.gd menu_scroll_test.gd perf_test.gd theme_test.gd hands_test.gd; do
 		run_test "$s" 600 &
 		pids+=($!)
 	done
@@ -616,6 +616,9 @@ case "$MODE" in
 	# только на экране — headless меряет прямоугольники, но не видит,
 	# влезает ли в них текст).
 	run_godot --path game --script res://tests/menu_driver.gd
+	# И песочницу кистей: скелет обеих рук над доской — тап и возврат
+	# меряются глазами, не числом.
+	run_godot --path game --script res://tests/hands_driver.gd
 	ls -la /tmp/opencode/vis-*.png
 	;;
 --preset)
