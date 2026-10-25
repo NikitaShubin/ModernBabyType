@@ -2058,6 +2058,11 @@ func _process(dt: float) -> void:
 		kb_press = ""
 		kb_press_t = 0.0
 		queue_redraw()
+	# Кисти едут к подсказке и возвращаются в покой — плавно: пока
+	# движение живо, держим собственный кадр (иначе палец прыгает).
+	if _own_shown() and _hands_tick(
+			dt, _own_rect(), _kb_enter_shown(), _hint_keys()):
+		queue_redraw()
 	# Высота раскладки — всегда своя клавиатура: система больше не
 	# участвует, замеров и подстройки нет, раскладка не прыгает сама.
 	var oh := _own_h()
@@ -2874,11 +2879,116 @@ func _draw_own_kb() -> void:
 		var c: Color = kb_hi_sb.bg_color
 		c.a = 0.45 + 0.35 * pulse
 		kb_hi_sb.bg_color = c
+	var area := _own_rect()
 	Kbd.draw(
-		self, _own_rect(), kb_lang, kb_shift, _kb_enter_shown(), mono,
+		self, area, kb_lang, kb_shift, _kb_enter_shown(), mono,
 		int(30.0 * k), kb_key_sb, kb_on_sb, _ui_ink(), hi, kb_hi_sb, _ui_dim(),
 		kb_morph, kb_morph_from, kb_morph_shift, _press_sb(), kb_press
 	)
+	# Скелет кистей ПОВЕРХ доски (полупрозрачно — подписи читаются):
+	# каким пальцем какую клавишу жать, и куда пальцы едут по подсказке.
+	_draw_hands(area)
+
+
+## Кисти НАД доской (автор 18.10.2026): ребёнок и взрослый видят, каким
+## пальцем на какую клавишу нажимать, а подсказка ведёт руки — палец
+## (шифт — из другой руки) съезжает к своей клавише и ждёт там нажатия.
+## Покой/ходы пальцев — от Hands (FABRIK), плавность хода — здесь.
+
+# Кэш позы покоя: геометрия доски между кадрами неизменна, FABRIK
+# пяти пальцев одной руки двигать каждый кадр лишний (~60 прямых).
+var _hands_rest: Dictionary = {}
+var _hands_key := ""
+var _hands_bs: Array = []
+var _hands_pitch := 0.0
+# Текущий ход пальцев по подсказке: {рука: {палец: [точка, ход 0..1]}}.
+# Точка хранится ПРОТИХ ВСЕГО хода: подсказка спадает — палец едет
+# к покою из КОНЕЧНОЙ точкиfé, а не рвётся мгновенно в дом-клавишу.
+var _hands_curs: Dictionary = {}
+const HANDS_CHASE := 12.0  # догон цели пальцем, сходно с зайцем (12/с)
+
+
+## Поза покоя обеих кистей над ДАННОЙ доской. Пересчёт только на смену
+## геометрии (ключ: область + ввод в низу). Собственные buttons() —
+## со сброшенным шифтом: поза смотрит только на КЛАВИШИ-прямоугольники
+## и русские легенды дом-ряда, регистр ей безразличен.
+func _hands_rest_ready(area: Rect2, enter: bool) -> Dictionary:
+	var key := "%s|%s" % [str(area), str(enter)]
+	if _hands_key == key:
+		return _hands_rest
+	_hands_key = key
+	_hands_bs = Kbd.buttons(area, false, enter)
+	_hands_pitch = Hands.pitch_of(_hands_bs)
+	_hands_rest = Hands.rest_both(_hands_bs)
+	return _hands_rest
+
+
+## Подготовка хода пальцев (каждый кадр с доской): цели — из подсказки,
+## ход догоняет цель скоростью HANDS_CHASE. True — есть движение
+## (следующий кадр нужен). Цели ставятся МОМЕНТАЛЬНО по новой подсказке:
+## сменившаяся клавиша не дожидается недоездов старой. Кэш buttons()
+## живёт своей жизнью: этот кадр руками не дышит.
+func _hands_tick(dt: float, area: Rect2, enter: bool, hi: Array) -> bool:
+	var rest := _hands_rest_ready(area, enter)
+	if rest.is_empty() or _hands_pitch <= 0.0:
+		return false
+	# Цели по подсказке: два пальца (шифт+буква — две руки,
+	# автор 18.10.2026) едут одновременно.
+	var goals := {}
+	for sig_v in hi:
+		var sig := str(sig_v)
+		var hf := Hands.hint_finger(sig)
+		if hf[0] < 0:
+			continue
+		var p := Hands.hint_point(_hands_bs, sig)
+		if p == Vector2.ZERO:
+			continue
+		if not goals.has(hf[0]):
+			goals[hf[0]] = {}
+		(goals[hf[0]] as Dictionary)[hf[1]] = p
+	var moved := false
+	var step := clampf(dt * HANDS_CHASE, 0.0, 1.0)
+	for h in [Hands.LEFT, Hands.RIGHT]:
+		if not _hands_curs.has(h):
+			_hands_curs[h] = {}
+		var curs: Dictionary = _hands_curs[h]
+		var ggen: Dictionary = goals.get(h, {})
+		for f in [Hands.THUMB, Hands.INDEX, Hands.MIDDLE, Hands.RING,
+				Hands.PINKY]:
+			var goal := 1.0 if ggen.has(f) else 0.0
+			var info: Array = curs[f] if curs.has(f) else [Vector2.ZERO, 0.0]
+			var pt: Vector2 = info[0]
+			var cur: float = info[1]
+			# Точка цели обновляется сразу: подсказка могла сменить
+			# клавишу раньше, чем палец доехал до прежней.
+			if goal > 0.0:
+				pt = ggen[f]
+			var nxt := cur
+			if absf(nxt - goal) > 0.001:
+				nxt = maxf(0.0, nxt - step) if goal == 0.0 					else minf(1.0, nxt + step)
+				moved = true
+			# Состояние пальца живёт, пока есть ход; цифровой остаток
+			# ниже порога стирем — меньше мусора в каждом кадре.
+			if nxt > 0.005:
+				curs[f] = [pt, nxt]
+			elif curs.has(f):
+				curs.erase(f)
+		if curs.is_empty():
+			_hands_curs.erase(h)
+	return moved
+
+
+## Скелет обеих кистей: раз в кадр с доской — ВСЕГДА, и в покое тоже:
+## «каким пальцем жать» видно до подсказки (автор 19.10.2026). Ходы
+## пальцев против покоя тянутся к точкам подсказки.
+func _draw_hands(area: Rect2) -> void:
+	var rest := _hands_rest_ready(area, _kb_enter_shown())
+	if rest.is_empty() or _hands_pitch <= 0.0:
+		return
+	var bone := Ui.LINE_NIGHT if night else Ui.LINE_DAY
+	var ink := Ui.INK_NIGHT if night else Ui.INK_DAY
+	Hands.draw_both(self, rest, _hands_curs, _hands_pitch, bone, ink)
+
 
 
 ## Нажатие на свою клавишу: символ — в _type_char, стереть — в _backspace,

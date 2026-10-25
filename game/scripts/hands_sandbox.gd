@@ -122,8 +122,7 @@ func _draw() -> void:
 		int(30.0 * k), kb_key_sb, kb_on_sb, Ui.INK_DAY,
 		[], null, Ui.DIM_DAY, 1.0, "", false, _flash_sb(), press_key)
 	# Кисти ПОВЕРХ доски (полупрозрачно: подписи читаются).
-	_draw_hand(Hands.LEFT)
-	_draw_hand(Hands.RIGHT)
+	_draw_hands()
 
 
 ## Заливка вспышки — тем же стилем верного ввода, но alpha = таймеру.
@@ -136,46 +135,18 @@ func _flash_sb() -> StyleBox:
 	return sb
 
 
-## Цепь пальца для рисования: покой из rest; если палец сейчас
-## «нажат», цель едет от покоя (над клавишей) к центру клавиши и
-## обратно — синус: нажал-вернулся без рыва.
-func _finger_chain(h: int, f: int) -> Array:
-	var pose: Dictionary = _rest.get(h, {})
-	var chains: Dictionary = pose.get("fingers", {})
-	if not chains.has(f):
-		return []
-	var chain: Array = chains[f]
-	if h != press_hand or f != press_finger or press_t <= 0.0:
-		return chain
-	# Ход: 0..1..0 (полсинуса от таймера танца PRESS_TIME).
-	var t01 := 1.0 - press_t / float(PRESS_TIME)
-	var depth := sin(clampf(t01, 0.0, 1.0) * PI)
-	var tgt: Vector2 = pose["targets"][f]
-	var target := tgt.lerp(press_point, depth)
-	return Hands.ik_chain(chain[0], Hands.bones_px(f, _pitch), target)
-
-
-func _draw_hand(h: int) -> void:
-	var pose: Dictionary = _rest.get(h, {})
-	if not pose.has("wrist"):
+func _draw_hands() -> void:
+	if _rest.is_empty():
 		return
-	var w := _stroke()
-	for f in pose["fingers"].keys():
-		var pts: Array = _finger_chain(h, f)
-		if pts.size() < 2:
-			continue
-		for i in pts.size() - 1:
-			draw_line(pts[i], pts[i + 1], _bone(), w * 2.2, true)
-		for pt in pts:
-			draw_circle(pt, w, _joint())
-	# Запястье — крупнее: главный «якорь» руки.
-	draw_circle(pose["wrist"], w * 1.6, _joint())
+	# Ходы: тап гонит палец к центру клавиши по полусинусу хода
+	# (нажал-вернулся) — тот же механизм, что у подсказок в игре.
+	var presses := {}
+	if press_t > 0.0 and press_hand >= 0:
+		var t01 := 1.0 - press_t / float(PRESS_TIME)
+		var depth := sin(clampf(t01, 0.0, 1.0) * PI)
+		presses = {press_hand: {press_finger: [press_point, depth]}}
+	Hands.draw_both(self, _rest, presses, _pitch, _bone(), _joint())
 
-
-## Штрих скелета — ОТ ПИТЧА (кегль кеглю не штрих): доска на телефоне
-## мельче, а палец читаться обязан на любой геометрии.
-func _stroke() -> float:
-	return clampf(_pitch * 0.11, 2.6, 5.0)
 
 
 func _bone() -> Color:

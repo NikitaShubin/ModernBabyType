@@ -53,6 +53,7 @@ func _hands_test() -> void:
 	_ik_invariants(bs)
 	_rest_pose_checks(bs)
 	_mirror_checks(bs)
+	_hint_checks(bs)
 
 
 ## Каждая клавиша ДОСКИ имеет палец: карта не может отстать от
@@ -172,3 +173,52 @@ func _mirror_checks(bs: Array) -> void:
 		var rx := (rtip.x - axis) - (-dx)
 		_check(dy < 0.4 * pitch, "finger %d tips at one height in both hands" % f)
 		_check(absf(rx) < 0.4 * pitch, "finger %d tips mirror across the hand axis" % f)
+
+
+## Подсказка ведёт руки: сигнатура из _hint_keys → [рука, палец] и
+## точка нажатия. Шифты — мизинцы, «←»/«↵» — правый мизинец, пробел —
+## половиной своего бока, легенда — своим пальцем.
+func _hint_checks(bs: Array) -> void:
+	_check(Hands.hint_finger("Shift") == [Hands.LEFT, Hands.PINKY],
+		"hint Shift is the left pinky")
+	_check(Hands.hint_finger("ShiftR") == [Hands.RIGHT, Hands.PINKY],
+		"hint ShiftR is the right pinky")
+	_check(Hands.hint_finger("←") == [Hands.RIGHT, Hands.PINKY],
+		"hint backspace is the right pinky")
+	_check(Hands.hint_finger("↵") == [Hands.RIGHT, Hands.PINKY],
+		"hint enter is the right pinky")
+	_check(Hands.hint_finger("в") == [Hands.LEFT, Hands.MIDDLE],
+		"hint letter uses its mapped finger")
+	_check(Hands.hint_finger("чужое") == [-1, -1],
+		"hint of a foreign sig does not move a hand")
+	var pitch := Hands.pitch_of(bs)
+	# Шрифт+буква — ДВЕ руки: обе подсказки дают пальцы (author 18.10).
+	var shift_f := Hands.hint_finger("Shift")
+	var key_f := Hands.hint_finger("о")
+	_check(shift_f[0] != key_f[0],
+		"hint Shift+letter goes to two different hands")
+	# Точки: центр клавиши; половины пробела — по своей стороне.
+	var vo := Hands.key_rect(bs, "о")
+	_check((Hands.hint_point(bs, "о") as Vector2).distance_to(
+		vo.get_center()) < 0.001, "hint point is the key center")
+	var sp := Hands.key_rect(bs, "пробел")
+	var pl := Hands.hint_point(bs, "пробел:Л") as Vector2
+	var pr := Hands.hint_point(bs, "пробел:П") as Vector2
+	_check(pl.x < sp.get_center().x and pr.x > sp.get_center().x,
+		"space halves hint by opposite hand on its own side")
+	_check(absf(pl.y - sp.get_center().y) < 0.001 * pitch
+		and absf(pr.y - sp.get_center().y) < 0.001 * pitch,
+		"space halves hint at the row height")
+	# Точка отсутствующей клавиши — ноль: рука не реагирует.
+	_check(Hands.hint_point(bs, "чужое") == Vector2.ZERO,
+		"foreign hint point is ZERO")
+	# Ход рисуем в presses только с ненулевым ходом: покой не красят
+	# поверх той же геометрии повторно (мера живая).
+	# Пол/потолок штриха меряются НА КРИВОЙ: доска бывает мельче
+	# тестовой (альбом с k~0.9), на 25.8 пикс проверка слепа.
+	_check(Hands.stroke_of(20.0) >= 2.6,
+		"stroke floor holds on a small board")
+	_check(Hands.stroke_of(pitch) >= 2.6,
+		"stroke has the small-board floor")
+	_check(Hands.stroke_of(400.0) <= 5.0,
+		"stroke has the big-board ceiling")

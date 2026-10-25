@@ -286,3 +286,68 @@ static func press_finger(bs: Array, s: String) -> Array:
 		# (у него есть текущая буква); без контекста — правый большой.
 		return [RIGHT, THUMB]
 	return finger_of(s)
+
+
+## Куда идёт палец по ПОДСКАЗКЕ (сигнатура из _hint_keys игры):
+## «Shift»/«ShiftR» — мизинцы, «↵»/«←» — правый мизинец, легенда
+## клавиши — её палец, «пробел:Л/П» — большой той руки. [-1, -1] —
+## рука не реагирует (клавиша вне карты).
+static func hint_finger(sig: String) -> Array:
+	if sig == "Shift":
+		return [LEFT, PINKY]
+	if sig == "ShiftR":
+		return [RIGHT, PINKY]
+	return finger_of(sig)
+
+
+## Точка нажатия по сигнатуре подсказки: центр ПЛОЩАДИ клавиши у
+## обычных; «пробел:Л» — левая четверть ширины пробела, «пробел:П» —
+## правая (палец противоположной руки, как рисует подсказка половин).
+## ZERO — клавиши нет: рука не реагирует.
+static func hint_point(bs: Array, sig: String) -> Vector2:
+	var r := key_rect(bs, sig)
+	if r.size != Vector2.ZERO:
+		return r.get_center()
+	if sig == "пробел:Л" or sig == "пробел:П":
+		var sp := key_rect(bs, "пробел")
+		if sp.size != Vector2.ZERO:
+			var side := 0.25 if sig == "пробел:Л" else 0.75
+			return Vector2(sp.position.x + sp.size.x * side,
+				sp.position.y + sp.size.y * 0.5)
+	return Vector2.ZERO
+
+
+## Скелет обеих кистей рисует вызвавший CanvasItem (ни сцены, ни
+## состояния). rests — {рука: поза rest_pose}; presses —
+## {рука: {палец: [точка, ход 0..1]}} — пальцы со ludzi ходом тянутся
+## к точке (0 — чистый покой). Штрих — от питча доски.
+static func draw_both(ci: CanvasItem, rests: Dictionary,
+		presses: Dictionary, pitch: float, bone_base: Color,
+		joint_base: Color) -> void:
+	var w := stroke_of(pitch)
+	for h in rests.keys():
+		var pose: Dictionary = rests[h]
+		if not pose.has("wrist"):
+			continue
+		var chains: Dictionary = pose.get("fingers", {})
+		var pv: Dictionary = presses.get(h, {})
+		for f in chains.keys():
+			var chain: Array = chains[f]
+			if pv.has(f):
+				var info: Array = pv[f]
+				var tgt := (pose["targets"][f] as Vector2).lerp(
+					info[0], clampf(info[1], 0.0, 1.0))
+				chain = ik_chain(chain[0], bones_px(f, pitch), tgt)
+			if chain.size() < 2:
+				continue
+			for i in chain.size() - 1:
+				ci.draw_line(chain[i], chain[i + 1], bone_base,
+					w * 2.2, true)
+			for pt in chain:
+				ci.draw_circle(pt, w, joint_base)
+		ci.draw_circle(pose["wrist"], w * 1.6, joint_base)
+
+
+## Полтолщины костей: от питча — доска мельче, а палец читаться обязан.
+static func stroke_of(pitch: float) -> float:
+	return clampf(pitch * 0.11, 2.6, 5.0)
