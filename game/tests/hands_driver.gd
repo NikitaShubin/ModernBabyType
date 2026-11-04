@@ -1,10 +1,12 @@
 extends SceneTree
 ## Визуальный драйвер песочницы кистей: поднимает scenes/hands.tscn в
 ## окне телефона (портрет) и альбомном окне, снимает:
-##   01/02 — покой обеих кистей (день);
-##   03    — тап по букве левой руки (палец согнулся к клавише);
-##   04    — хвост того же тапа (палец вернулся);
-##   05    — ночь: те же руки на ночном фоне.
+##   01      — покой обеих кистей (день);
+##   03/04   — тап по букве левой руки и его хвост;
+##   05/06   — тап по нижнему ряду (ход кисти) и хвост;
+##   07..12  — служебные: пробел (большой и оппозиция), шифт, бе-
+##             кспейс, глобус — каждое нажатие ставит палец в позу;
+##   13      — альбом: те же кисти при другом окне.
 ## Кадры /tmp/opencode/vis-hands-*.png. Рендер живой (не headless).
 ## Запуск: tools/docker/build-game.sh --visual
 
@@ -25,6 +27,8 @@ func _initialize() -> void:
 
 ## Окно — И через DisplayServer, И у корня (как в прочих драйверах).
 func _win(wh: Vector2i) -> void:
+	# Полноэкранный проект держит размер экрана Xvfb — см. visual_driver.
+	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
 	DisplayServer.window_set_size(wh)
 	root.size = wh
 	_hands.call("_relayout")
@@ -66,14 +70,39 @@ func _process(_dt: float) -> bool:
 		_snap("tap-v")
 	elif _frame == 66:
 		_snap("tap-up")
-	elif _frame == 75:
-		_tap_key("о")
-	elif _frame == 84:
-		_snap("tap-o")
+	# Тап по нижнему ряду: кисть ходит к работе целиком (shift_goal).
+	elif _frame == 70:
+		_tap_key("я")
+	elif _frame == 79:
+		_snap("tap-ya-shift")
+	elif _frame == 96:
+		_snap("tap-ya-up")
 	elif _frame == 100:
+		_tap_key("о")
+	elif _frame == 109:
+		_snap("tap-o")
+	# Служебные: каждое нажатие — свой палец в позе (пресс этих клавиш
+	# в тестах и диагностике меряется, кадр — как он ВЫГЛЯДИТ).
+	elif _frame == 122:
+		_tap_key("пробел")
+	elif _frame == 131:
+		_snap("tap-space")
+	elif _frame == 146:
+		_tap_key("Shift")  # ключ клавиши, не действие hit («шифт»)
+	elif _frame == 155:
+		_snap("tap-shift")
+	elif _frame == 170:
+		_tap_key("←")  # бекспейс: у кнопки ключ «←», hit зовёт его «стереть»
+	elif _frame == 179:
+		_snap("tap-bksp")
+	elif _frame == 194:
+		_tap_key("глобус")
+	elif _frame == 203:
+		_snap("tap-globe")
+	elif _frame == 218:
 		# Альбом: те же кисти при другом окне.
 		_win(Vector2i(1140, 540))
-	elif _frame == 130:
+	elif _frame == 248:
 		_snap("landscape")
 		return true  # true в SceneTree._process = закончить прогон
 	return false

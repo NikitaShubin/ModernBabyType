@@ -1289,8 +1289,10 @@ func _case_touch_echo_first() -> void:
 		_main.typed_ok == ok0 + 1,
 		"%s: one tap typed twice? (%d → %d)" % [tag, ok0, _main.typed_ok]
 	)
-	_check(_main.errors.is_empty(), "%s: the tap left a typo mark" % tag)
-	_check(_main.cursor_pos == 1, "%s: the cursor did not advance once" % tag)
+	_check(_main.errors.is_empty(), "%s: the tap left a typo mark (marks %s)"
+		% [tag, str(_main.errors.keys())])
+	_check(_main.cursor_pos == 1, "%s: the cursor did not advance once (%d:%d)"
+		% [tag, int(_main.cursor_line), int(_main.cursor_pos)])
 	_main.call("_input", _touch(0, p, false))
 	_main.call("_input", _release(p))
 	_tick(tag)
@@ -3017,6 +3019,91 @@ func _case_press_flash() -> void:
 	_check(not bool(_main.kb_shift), "%s: the physical shift stayed armed after release" % tag)
 
 
+## Фаза пальца, держащего действие: [нашёлся, фаза, ход 0..1].
+## Пусто [false, −1, 0] — палец в покое (импульс кончился).
+func _hand_state(act: String) -> Array:
+	for h in _main._hands_curs.keys():
+		var curs: Dictionary = _main._hands_curs[h]
+		for f in curs.keys():
+			var a: Array = curs[f] as Array
+			if a.size() > 3 and String(a[3]) == act:
+				return [true, int(a[2]), float(a[1])]
+	return [false, -1, 0.0]
+
+
+## 45а. Зажатая клавиша держит палец кисти на ней, а отпущенная
+## возвращает его в покой (автор 26.10.2026: «зажатие шифта должно
+## удерживать палец на кнопке. Да и с другими кнопками должно быть
+## так же»). Плюс физический пробел: у служебной клавиши легенд нет,
+## combo_for для него пуст — раньше рука на нём не анимировалась
+## вовсе («Пробел не анимируется тоже»).
+func _case_hands_hold() -> void:
+	_fresh(0, 1)
+	_kbd_on()
+	var tag := "hands hold"
+	var btns := _kbd_buttons()
+	# Шифт зажат пальцем/мышью: живое нажатие ставит удержание.
+	_main.call("_own_press", btns["Shift"], true)
+	_check(_main._hands_held.has("шифт"), "%s: the pressed shift is not held" % tag)
+	# Влёт — HANDS_RISE_T (0.06 с), кадров хватает с запасом.
+	for _i in 8:
+		_tick(tag)
+	var st := _hand_state("шифт")
+	_check(
+		st[0] and int(st[1]) == 0,
+		"%s: the finger does not stay on the held shift (%s)" % [tag, str(st)]
+	)
+	# Пока держим — палец НЕ уходит в покой, сколько ни жди.
+	for _i in 40:
+		_tick(tag)
+	st = _hand_state("шифт")
+	_check(
+		st[0] and int(st[1]) == 0 and is_equal_approx(float(st[2]), 1.0),
+		"%s: the finger slipped off the still-held shift (%s)" % [tag, str(st)]
+	)
+	# Отпустили — палец возвращается в покой.
+	_main.call("_release_held")
+	_check(
+		not _main._hands_held.has("шифт"),
+		"%s: the release did not clear the hold" % tag
+	)
+	for _i in 30:
+		_tick(tag)
+	st = _hand_state("шифт")
+	_check(
+		not st[0],
+		"%s: the finger did not come back after the release (%s)" % [tag, str(st)]
+	)
+	# Физический пробел: вспышка на доске и удержание большого пальца.
+	_main.call("_unhandled_key_input", _key(KEY_SPACE, 32))
+	_check(
+		String(_main.kb_press) == "пробел",
+		"%s: the physical space does not light up («%s»)" % [tag, _main.kb_press]
+	)
+	_check(_main._hands_held.has("пробел"), "%s: the physical space is not held" % tag)
+	for _i in 8:
+		_tick(tag)
+	st = _hand_state("пробел")
+	_check(
+		st[0] and int(st[1]) == 0,
+		"%s: the thumb does not stay on the held space (%s)" % [tag, str(st)]
+	)
+	# Отпускание пробела уводит палец.
+	_main.call("_unhandled_key_input", _release_key(KEY_SPACE))
+	_check(
+		not _main._hands_held.has("пробел"),
+		"%s: the space release did not clear the hold" % tag
+	)
+	for _i in 30:
+		_tick(tag)
+	st = _hand_state("пробел")
+	_check(
+		not st[0],
+		"%s: the thumb did not come back after the space release (%s)" % [tag, str(st)]
+	)
+	_common(tag)
+
+
 ## 43а. Автоповтор зажатой клавиши (как в текстовых редакторах):
 ## буква, пробел и стереть повторяются, шифт и глобус — нет; физическое
 ## эхо повторяет ввод в партии, но не листает уровни (автор 10.2026).
@@ -3577,6 +3664,7 @@ func _fill_cases() -> void:
 	_cases_list.append(["_case_hills_free_sky", Callable(self, "_case_hills_free_sky"), 0])
 	_cases_list.append(["_case_stars_sky", Callable(self, "_case_stars_sky"), 0])
 	_cases_list.append(["_case_win_celebration", Callable(self, "_case_win_celebration"), 0])
+	_cases_list.append(["_case_hands_hold", Callable(self, "_case_hands_hold"), 0])
 # (конец списка кейсов)
 ## Холмы по рецепту автора (18.10.2026 после релиза: «не уменьшать
 ## радиусы, а опустить вниз центры, радиусы вернуть большими»): при

@@ -1451,6 +1451,12 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		return
 	if ke.keycode == KEY_SHIFT and not ke.pressed:
 		_set_kb_shift(false)
+		# Физический шифт отпущен: палец кисти уходит с клавиши.
+		_hands_held.erase("шифт")
+		return
+	if not ke.pressed and (ke.keycode == KEY_SPACE or ke.unicode == 32):
+		# Отпускание физического пробела: палец большой уходит с клавиши.
+		_hands_held.erase("пробел")
 		return
 	if ke.echo:
 		# Автоповтор зажатой клавиши (как в редакторах): только ввод
@@ -1460,6 +1466,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			return
 		_poke_idle()
 		if ke.keycode == KEY_BACKSPACE or ke.unicode == 8:
+			_flash("стереть")
 			_backspace()
 			return
 		if ke.unicode < 32:
@@ -1489,6 +1496,13 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		if not ke.pressed:
 			kb_press = ""
 			kb_press_t = 0.0
+		else:
+			# Физический шифт тоже нажатие: вспышка на доске и импульс
+			# кистей (анимация решает ВКАЗ все нажатия; сторона у
+			# InputEventKey одна — берём левую, как для кисти). Зажатие
+			# держит палец на клавише, пока шифт не отпустят.
+			_flash("шифт")
+			_hands_held["шифт"] = true
 		return
 	_poke_idle()
 	if ke.keycode == KEY_ESCAPE:
@@ -1551,6 +1565,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	# мы расстались (решение 10.2026, жалобы на сбитый курсор и подсказку
 	# «Стереть», которая ничего не стирала).
 	if ke.keycode == KEY_BACKSPACE or ke.unicode == 8:
+		_flash("стереть")
 		_backspace()
 		return
 	# ↵ с физической клавиатуры — тот же перенос строки, что и с доски
@@ -1571,6 +1586,14 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if _exact():
 		_caps_check(ke)
 	var typed2 := String.chr(ke.unicode)
+	# Физический пробел: у служебной клавиши легенд нет, combo_for для
+	# него пуст — рука и вспышка молчали (автор 26.10.2026: «Пробел не
+	# анимируется тоже»). Зажатие держит большой палец на клавише.
+	if typed2 == " ":
+		_flash("пробел", _verdict(typed2))
+		_hands_held["пробел"] = true
+		_type_char(typed2)
+		return
 	# Та же клавиша на доске вспыхивает: человек видит, куда попал
 	# физический ввод (автор 10.2026: «нажатие верных клавиш на
 	# клавиатуре или мышью вспихивало на них зелёным»).
@@ -2060,6 +2083,11 @@ func _process(dt: float) -> void:
 		queue_redraw()
 	# Кисти едут к подсказке и возвращаются в покой — плавно: пока
 	# движение живо, держим собственный кадр (иначе палец прыгает).
+	if not _own_shown() and not _hands_held.is_empty():
+		# Доска ушла (меню, финал): зажатые клавиши гасим сразу —
+		# отпускание может и не прийти, а палец не должен вечно
+		# стоять на клавише невидимой доски.
+		_hands_held.clear()
 	if _own_shown() and _hands_tick(
 			dt, _own_rect(), _kb_enter_shown(), _hint_keys()):
 		queue_redraw()
@@ -2890,22 +2918,36 @@ func _draw_own_kb() -> void:
 	_draw_hands(area)
 
 
-## Кисти НАД доской (автор 18.10.2026): ребёнок и взрослый видят, каким
-## пальцем на какую клавишу нажимать, а подсказка ведёт руки — палец
-## (шифт — из другой руки) съезжает к своей клавише и ждёт там нажатия.
-## Покой/ходы пальцев — от Hands (FABRIK), плавность хода — здесь.
+## Кисти НАД доской (автор 18.10.2026): видно, каким пальцем нажимать.
+## Отладка 25.10.2026: пальцы анимируются по РЕАЛЬНЫМ нажатиям (автор:
+## «сделай пока для отладки анимацию реально нажимаемых, а не подлежа-
+## щих нажиманию клавишь») — импульс в _flash, спад по HANDS_FALL_T.
+## Кисть ЦЕЛИКОМ ходит за работой (shift_goal). Покой рисуется всегда.
 
-# Кэш позы покоя: геометрия доски между кадрами неизменна, FABRIK
-# пяти пальцев одной руки двигать каждый кадр лишний (~60 прямых).
+# Кэш позы покоя: геометрия доски между кадрами неизменна, IK пяти
+# пальцев одной руки двигать каждый кадр лишний (~60 прямых).
 var _hands_rest: Dictionary = {}
 var _hands_key := ""
 var _hands_bs: Array = []
 var _hands_pitch := 0.0
-# Текущий ход пальцев по подсказке: {рука: {палец: [точка, ход 0..1]}}.
-# Точка хранится ПРОТИХ ВСЕГО хода: подсказка спадает — палец едет
-# к покою из КОНЕЧНОЙ точкиfé, а не рвётся мгновенно в дом-клавишу.
+# Импульсы реальных нажатий: {рука: {палец: [точка, ход 0..1, фаза,
+# ключ удержания]}}. Фаза +1 — влёт к клавише, 0 — ДЕРЖИМСЯ на ней
+# (зажатая клавиша: палец стоит, пока не отпустят), −1 — спад к покою;
+# точка хранится на весь цикл: спад идёт из КОНЕЧНОЙ точки, а не
+# рвётся мгновенно в дом.
 var _hands_curs: Dictionary = {}
-const HANDS_CHASE := 12.0  # догон цели пальцем, сходно с зайцем (12/с)
+# Зажатые сейчас клавиши (действия): {act: true}. Ставится при нажатии
+# (экран/мышь live, физический шифт), гасится при отпускании. Палец
+# кисти держится на клавише, пока её действие здесь (автор 26.10.2026:
+# «зажатие шифта должно удерживать палец на кнопке. Да и с другими
+# кнопками должно быть так же»).
+var _hands_held: Dictionary = {}
+# Сдвиг КИСТИ ЦЕЛИКОМ: текущий и цель ({рука: Vector2}).
+var _hands_shifts: Dictionary = {}
+var _hands_shiftg: Dictionary = {}
+const HANDS_RISE_T := 0.06  # влёт пальца к клавише
+const HANDS_FALL_T := 0.18  # спад от клавиши к покою
+const HANDS_SHIFT := 9.0    # ход кисти за работой, питчей в секунду
 
 
 ## Поза покоя обеих кистей над ДАННОЙ доской. Пересчёт только на смену
@@ -2923,58 +2965,110 @@ func _hands_rest_ready(area: Rect2, enter: bool) -> Dictionary:
 	return _hands_rest
 
 
-## Подготовка хода пальцев (каждый кадр с доской): цели — из подсказки,
-## ход догоняет цель скоростью HANDS_CHASE. True — есть движение
-## (следующий кадр нужен). Цели ставятся МОМЕНТАЛЬНО по новой подсказке:
-## сменившаяся клавиша не дожидается недоездов старой. Кэш buttons()
-## живёт своей жизнью: этот кадр руками не дышит.
-func _hands_tick(dt: float, area: Rect2, enter: bool, hi: Array) -> bool:
+## Импульс реального нажатия: палец и кисть уезжают к нажатой клавише,
+## дальше цикл их возвращает в покой (_hands_tick). Действия «стереть/
+## язык/ввод/пробел» и подписи шифта разрешаются в клавиши доски;
+## «пробел» — большой СВОБОДНОЙ руки (тот же выбор, что у подсказки).
+## sig — и ключ клавиши, и ДЕЙСТВИЕ нажатия (пространство совпадает:
+## Kbd.hit и combo_for отдают подписи клавиш). Пока действие в
+## _hands_held, палец ДЕРЖИТСЯ на клавише после влёта (автор 26.10.2026:
+## «зажатие шифта должно удерживать палец на кнопке. Да и с другими
+## кнопками должно быть так же»).
+func _hands_hit(sig: String) -> void:
+	var rest := _hands_rest_ready(_own_rect(), _kb_enter_shown())
+	if rest.is_empty() or _hands_pitch <= 0.0:
+		return
+	var key := sig
+	if sig == "шифт":
+		# Обе подписи шифта дают одно действие; для кисти берём левую
+		# (правая демонстрируется в песочнице, действие неотличимо).
+		key = "Shift"
+	elif sig == "стереть":
+		key = "←"
+	elif sig == "язык":
+		key = "глобус"
+	elif sig == "ввод":
+		key = "↵"
+	elif sig == "пробел":
+		key = "пробел:Л" if last_hand == "П" else "пробел:П"
+	var hf := Hands.finger_of(key)
+	if hf[0] < 0:
+		return
+	var h: int = hf[0]
+	var f: int = hf[1]
+	var rt := Hands.rest_tip(rest, h, f)
+	var contact := Hands.press_point(_hands_bs, key, rt)
+	var pg := Hands.press_goal(_hands_bs, key, rt)
+	if pg == Vector2.ZERO or contact == Vector2.ZERO:
+		return
+	var curs: Dictionary = _hands_curs.get(h, {}) as Dictionary
+	_hands_curs[h] = curs
+	# Повторное нажатие в спаде продолжает с текущей фазы — палец
+	# «переезжает» на новую клавишу, а не телепортируется с места.
+	var prev: Array = curs.get(f, [pg, 0.0, 1]) as Array
+	# Четвёртый элемент — действие удержания: пока оно в _hands_held,
+	# фаза держится 0 (палец стоит на клавише), а не уходит в спад.
+	curs[f] = [pg, clampf(prev[1] as float, 0.0, 1.0), 1, sig]
+	# Кисть догоняет работу целиком (решение — по КОНТАКТУ: просадка
+	# поглощается распрямлением пальца, ход кисти от неё не зависит).
+	_hands_shiftg[h] = Hands.shift_goal(rest, h, f, contact,
+		_hands_pitch)
+
+
+## Цикл кистей: фазы импульсов (влёт/спад) и догон сдвига кисти.
+## True — есть движение (следующий кадр нужен). Подсказка НЕ ведёт
+## руки в отладке: смотрим на реальные нажатия.
+func _hands_tick(dt: float, area: Rect2, enter: bool, _hi: Array) -> bool:
 	var rest := _hands_rest_ready(area, enter)
 	if rest.is_empty() or _hands_pitch <= 0.0:
 		return false
-	# Цели по подсказке: два пальца (шифт+буква — две руки,
-	# автор 18.10.2026) едут одновременно.
-	var goals := {}
-	for sig_v in hi:
-		var sig := str(sig_v)
-		var hf := Hands.hint_finger(sig)
-		if hf[0] < 0:
-			continue
-		var p := Hands.hint_point(_hands_bs, sig)
-		if p == Vector2.ZERO:
-			continue
-		if not goals.has(hf[0]):
-			goals[hf[0]] = {}
-		(goals[hf[0]] as Dictionary)[hf[1]] = p
 	var moved := false
-	var step := clampf(dt * HANDS_CHASE, 0.0, 1.0)
 	for h in [Hands.LEFT, Hands.RIGHT]:
-		if not _hands_curs.has(h):
-			_hands_curs[h] = {}
-		var curs: Dictionary = _hands_curs[h]
-		var ggen: Dictionary = goals.get(h, {})
-		for f in [Hands.THUMB, Hands.INDEX, Hands.MIDDLE, Hands.RING,
-				Hands.PINKY]:
-			var goal := 1.0 if ggen.has(f) else 0.0
-			var info: Array = curs[f] if curs.has(f) else [Vector2.ZERO, 0.0]
-			var pt: Vector2 = info[0]
-			var cur: float = info[1]
-			# Точка цели обновляется сразу: подсказка могла сменить
-			# клавишу раньше, чем палец доехал до прежней.
-			if goal > 0.0:
-				pt = ggen[f]
-			var nxt := cur
-			if absf(nxt - goal) > 0.001:
-				nxt = maxf(0.0, nxt - step) if goal == 0.0 					else minf(1.0, nxt + step)
-				moved = true
-			# Состояние пальца живёт, пока есть ход; цифровой остаток
-			# ниже порога стирем — меньше мусора в каждом кадре.
-			if nxt > 0.005:
-				curs[f] = [pt, nxt]
-			elif curs.has(f):
-				curs.erase(f)
-		if curs.is_empty():
-			_hands_curs.erase(h)
+		if _hands_curs.has(h):
+			var curs: Dictionary = _hands_curs[h]
+			for f in curs.keys():
+				var a: Array = curs[f] as Array
+				var t: float = a[1]
+				var ph: int = a[2]
+				var act := ""
+				if a.size() > 3:
+					act = a[3] as String
+				var nt := t
+				var nph := ph
+				if ph > 0:
+					nt = t + dt / HANDS_RISE_T
+					if nt >= 1.0:
+						nt = 1.0
+						# Зажатая клавиша: фаза 0 — стоим на ней, пока
+						# действие не отпустят (автор 26.10.2026: «зажатие
+						# шифта должно удерживать палец на кнопке. Да и с
+						# другими кнопками должно быть так же»).
+						nph = 0 if (act != "" and _hands_held.has(act)) \
+							else -1
+				elif ph == 0:
+					# Держимся: отпустили — спад к покою.
+					if act == "" or not _hands_held.has(act):
+						nph = -1
+				else:
+					nt = t - dt / HANDS_FALL_T
+					if nt <= 0.0:
+						curs.erase(f)
+						moved = true
+						continue
+				if nt != t or nph != ph:
+					curs[f] = [a[0], nt, nph, act]
+					moved = true
+			if curs.is_empty():
+				_hands_curs.erase(h)
+				# Покой кисти, когда рука ничего не жмёт.
+				_hands_shiftg[h] = Vector2.ZERO
+		var sh: Vector2 = _hands_shifts.get(h, Vector2.ZERO)
+		var sgoal: Vector2 = _hands_shiftg.get(h, Vector2.ZERO)
+		if not sh.is_equal_approx(sgoal):
+			var nxt := sh.move_toward(sgoal,
+				dt * HANDS_SHIFT * _hands_pitch)
+			moved = true
+			_hands_shifts[h] = nxt
 	return moved
 
 
@@ -2985,9 +3079,9 @@ func _draw_hands(area: Rect2) -> void:
 	var rest := _hands_rest_ready(area, _kb_enter_shown())
 	if rest.is_empty() or _hands_pitch <= 0.0:
 		return
-	var bone := Ui.LINE_NIGHT if night else Ui.LINE_DAY
 	var ink := Ui.INK_NIGHT if night else Ui.INK_DAY
-	Hands.draw_both(self, rest, _hands_curs, _hands_pitch, bone, ink)
+	Hands.draw_both(self, rest, _hands_curs, _hands_pitch, ink,
+		_hands_shifts)
 
 
 
@@ -3009,6 +3103,8 @@ func _release_held() -> void:
 	var was := kb_held
 	kb_held = ""
 	kb_repeat_t = 0.0
+	# Палец кисти тоже отпускает клавишу (автор 26.10.2026).
+	_hands_held.erase(was)
 	# Дедуп живёт внутри одного жеста: отпустили — новое нажатие вправе
 	# напечатать ту же букву, хоть и сразу (быстрые «сс»).
 	_own_dedup_key = ""
@@ -3023,11 +3119,28 @@ func _release_held() -> void:
 ## Вспышка нажатой клавиши: человек должен видеть, что попал именно в неё
 ## (а если промахнулся — что не попал ни в одну). Гасится сама.
 ## verdict: "ok" — верный ввод (зелёный), "err" — опечатка (красный),
-## "" — обычная вспышка нажатия.
+## "" — обычная вспышка нажатия. Отладка рук 25.10.2026: импульс кистей
+## идёт отсюда — ЗДЕСЬ проходят все реальные нажатия (доска и физика).
 func _flash(key: String, verdict := "") -> void:
+	# Вызывают и с ДЕЙСТВИЕМ (hit отдаёт «шифт»/«стереть»/...), и с
+	# КЛЮЧОМ клавиши (подсказки, буквы). Заливка ищет КЛЮЧ кнопки
+	# (draw сравнивает подписи списка buttons), рука — действие:
+	# храним ключ, а в руку отдаём как есть.
+	var sig := key
+	if key == "шифт":
+		key = "Shift"
+	elif key == "стереть":
+		key = "←"
+	elif key == "язык":
+		key = "глобус"
+	elif key == "ввод":
+		key = "↵"
 	kb_press = key
 	kb_press_ok = verdict != "err"
 	kb_press_t = KB_PRESS_T
+	# В руку — ИСХОДНОЕ действие (пространство kb_held/_hands_held):
+	# «шифт»/«стереть»/«пробел» — те же имена, что у нажатия на доске.
+	_hands_hit(sig)
 	queue_redraw()
 
 
@@ -3139,12 +3252,17 @@ var home_chars: Array[String] = []
 ## на экране «Вии» вместо «Вид», красная поверх «д» (17.10.2026).
 ## Окно узкое нарочно: две ПОСЛЕДОВАТЕЛЬНЫХ буквы («сс», «папа») — это
 ## два жеста, между ними хоть 60 мс; эхо же приходит в ту же-следующую
-## пару кадров (~33 мс). Шифт не подводит: он идемпотентен.
+## пару кадров (~33 мс). Шифт не подводит: он идемпотентен. Подавляет
+## пара штампов — кадр И часы: на загруженной машине обработка хода
+## растягивала «те же 33 мс» за порог часов, и касание пролезало вторым
+## вводом (флот тестов, 25.10.2026); один и тот же кадр движка значит
+## «один жест», сколько ни тянется его обработка.
 const TOUCH_ECHO_T := 40
 
 ## Клавиша предыдущего принятого нажатия и чем оно было (палец/мышь).
 var _own_dedup_key := ""
 var _own_dedup_t := 0
+var _own_dedup_frame := -1  # штамп номера кадра: см. комментарий в _own_press
 var _own_dedup_finger := false
 
 
@@ -3155,18 +3273,25 @@ func _own_press(pos: Vector2, live := false, finger := false) -> bool:
 	var act := Kbd.hit(_own_rect(), kb_shift, _kb_enter_shown(), pos, finger)
 	if act == "":
 		return false
-	# Дедуп касания и мыши: одна и та же клавиша дважды меньше чем за
-	# TOUCH_ECHO_T от РАЗНЫХ источников — это эхо одного касания, второе
-	# ввода не делает (см. TOUCH_ECHO_T).
+	# Дедуп касания и мыши: одна и та же клавиша дважды от РАЗНЫХ
+	# источников — это эхо одного касания, второе ввода не делает
+	# (см. TOUCH_ECHO_T). Окно — по обоим штампам: номер кадра и часы.
+	# Оба события попадают в ДВИЖОК одним флёшем одного кадра; часы
+	# одни не вытягивают: обработка первого нажатия (вспышка рук с
+	# IK, обновление панелей) на загруженной машине превышает 40 мс,
+	# и касание пролезало вторым вводом (метка на 0:1, откат — ловил
+	# комбо-тест под параллельным флотом 25.10.2026).
 	var dnow := Time.get_ticks_msec()
+	var dframe: int = Engine.get_process_frames()
 	if (
 		_own_dedup_key == act
 		and _own_dedup_finger != finger
-		and dnow - _own_dedup_t <= TOUCH_ECHO_T
+		and (dframe == _own_dedup_frame or dnow - _own_dedup_t <= TOUCH_ECHO_T)
 	):
 		return true
 	_own_dedup_key = act
 	_own_dedup_t = dnow
+	_own_dedup_frame = dframe
 	_own_dedup_finger = finger
 	if live and _repeatable(act):
 		# Новую клавишу держим с паузой, повтор той же паузу не сносит.
@@ -3174,6 +3299,13 @@ func _own_press(pos: Vector2, live := false, finger := false) -> bool:
 			kb_repeat_t = KB_REPEAT_DELAY
 		kb_held = act
 		kb_held_pos = pos
+	# Живое нажатие пальцем/мышью: палец кисти ДЕРЖИТСЯ на клавише,
+	# пока её не отпустят (автор 26.10.2026: «зажатие шифта должно
+	# удерживать палец на кнопке. Да и с другими кнопками должно быть
+	# так же»). Снятие — _touch_up (палец) и _release_held (мышь);
+	# неживые прессы из тестов удержания не ставят.
+	if live and (_repeatable(act) or act == "шифт"):
+		_hands_held[act] = true
 	# Вспышка сразу на любую нажатую клавишу — человек видит, куда попал.
 	_flash(act)
 	if act == "шифт":
@@ -3368,6 +3500,10 @@ func _touch_up(finger: int) -> void:
 	_touch_keys.erase(finger)
 	if act == "":
 		return
+	# Палец кисти отпускает ТО свою клавишу — до любых ранних выходов
+	# (кисть не должна вечно стоять на зажатом шифте, отпущенном вторым
+	# пальцем, когда kb_held уже чужой).
+	_hands_held.erase(act)
 	if kb_held != act:
 		return
 	kb_held = ""

@@ -335,6 +335,11 @@ func _set_text(first: String, second: String, pos: int) -> void:
 
 
 func _win(wh: Vector2i) -> void:
+	# Полноэкранный проект (window/size/mode=3) игнорирует запрос
+	# размера: под ним окно держит размер экрана Xvfb (1280x800), и кадры
+	# приезжают в чужой геометрии — «k=0.676 игровой вид» вместо дет-
+	# ского портрета. Явный оконный режим делает window_set_size честным.
+	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
 	DisplayServer.window_set_size(wh)
 	root.size = wh
 	_main._relayout()

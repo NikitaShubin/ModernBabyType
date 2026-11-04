@@ -25,12 +25,18 @@ var kb_flash_ok: StyleBoxFlat
 
 var lang := "ru"
 var shift := false
+## Диагностический рендер БЕЗ ДОСКИ (зеркало кистей — глазами, автор
+## 26.10.2026: «отрендери их без клавиатуры и сам взгляни»). Ставится
+## драйвером; на обычном стенде доска рисуется всегда.
+var hide_kb := false
 var press_key := ""       # вспыхнувшая клавиша
 var press_t := 0.0        # таймер всего хода
 # Куда палец идёт при этой вспышке: [рука, палец, точка нажатия].
 var press_hand := -1
 var press_finger := -1
 var press_point := Vector2.ZERO
+var press_goal := Vector2.ZERO   # контакт плюс просадка в клавишу
+var _shift := Vector2.ZERO       # ход кисти под эту вспышку
 const FLASH_T := 0.28     # затухание заливки клавиши (как в игре)
 const PRESS_TIME := 0.34  # ход пальца: опустился и вернулся
 
@@ -83,6 +89,7 @@ func _process(dt: float) -> void:
 			press_key = ""
 			press_hand = -1
 			press_finger = -1
+			_shift = Vector2.ZERO  # палец вернулся — кисть тоже
 		queue_redraw()
 
 
@@ -99,17 +106,38 @@ func _tap(pos: Vector2) -> void:
 	var s := Kbd.hit(_area, shift, false, pos)
 	if s == "":
 		return
-	if s == "Shift" or s == "ShiftR":
+	# hit() отдаёт ДЕЙСТВИЕ («шифт»/«стереть»/«язык»/«ввод»/«пробел»),
+	# а кистям и вспышке нужен КЛЮЧ клавиши доски: та же карта, что у
+	# main._hands_hit. Раньше сверка шла с ключами («Shift») — тап по
+	# шифту в песочнице даже РЕГИСТР не флиповал, и служебные нажатия
+	# не анимировали ни палец, ни вспышку.
+	var key := s
+	if s == "шифт":
+		key = "Shift"
+	elif s == "стереть":
+		key = "←"
+	elif s == "язык":
+		key = "глобус"
+	elif s == "ввод":
+		key = "↵"
+	# АНИМИРУЮТСЯ ВСЕ нажатия, шифт — и ещё флипует регистр (обработка
+	# до пресс-пути раньше их разрывала: ранний return глушил и то и то).
+	if s == "шифт":
 		shift = not shift
-		_bs = Kbd.buttons(_area, shift, false)
-		queue_redraw()
-		return
-	press_key = s
+	_bs = Kbd.buttons(_area, shift, false)
+	press_key = key
 	press_t = maxf(FLASH_T, PRESS_TIME)
-	var pf := Hands.finger_of(s)
+	var pf := Hands.finger_of(key)
 	press_hand = pf[0]
 	press_finger = pf[1]
-	press_point = Hands.key_center(_bs, s)
+	# Пресс как в игре: КОНТАКТ на клавише; просадка В клавишу теперь
+	# по ВЫСОТЕ кончика (Z_PRESS в 3D), по экрану палец не проваливается.
+	var rt := Hands.rest_tip(_rest, press_hand, press_finger)
+	press_point = Hands.press_point(_bs, key, rt)
+	press_goal = press_point
+	_shift = Hands.shift_goal(_rest, press_hand, press_finger,
+		press_point, _pitch)
+	# Цель нажатия — МИРОВАЯ (draw_both сам снимает сдвиг кисти с цели).
 	queue_redraw()
 
 
@@ -118,9 +146,10 @@ func _draw() -> void:
 		return
 	# Фон и доска — как в игре.
 	draw_rect(Rect2(Vector2.ZERO, Vector2(view_w, view_h)), _bg)
-	Kbd.draw(self, _area, lang, shift, false, mono,
-		int(30.0 * k), kb_key_sb, kb_on_sb, Ui.INK_DAY,
-		[], null, Ui.DIM_DAY, 1.0, "", false, _flash_sb(), press_key)
+	if not hide_kb:
+		Kbd.draw(self, _area, lang, shift, false, mono,
+			int(30.0 * k), kb_key_sb, kb_on_sb, Ui.INK_DAY,
+			[], null, Ui.DIM_DAY, 1.0, "", false, _flash_sb(), press_key)
 	# Кисти ПОВЕРХ доски (полупрозрачно: подписи читаются).
 	_draw_hands()
 
@@ -138,24 +167,12 @@ func _flash_sb() -> StyleBox:
 func _draw_hands() -> void:
 	if _rest.is_empty():
 		return
-	# Ходы: тап гонит палец к центру клавиши по полусинусу хода
-	# (нажал-вернулся) — тот же механизм, что у подсказок в игре.
+	# Ходы: тап гонит палец к цели нажатия по полусинусу хода
+	# (нажал-вернулся), кисть ходит темже решением, что в игре.
 	var presses := {}
 	if press_t > 0.0 and press_hand >= 0:
 		var t01 := 1.0 - press_t / float(PRESS_TIME)
 		var depth := sin(clampf(t01, 0.0, 1.0) * PI)
-		presses = {press_hand: {press_finger: [press_point, depth]}}
-	Hands.draw_both(self, _rest, presses, _pitch, _bone(), _joint())
-
-
-
-func _bone() -> Color:
-	var c := Ui.LINE_DAY
-	c.a = 0.55
-	return c
-
-
-func _joint() -> Color:
-	var c := Ui.INK_DAY
-	c.a = 0.7
-	return c
+		presses = {press_hand: {press_finger: [press_goal, depth]}}
+	Hands.draw_both(self, _rest, presses, _pitch, Ui.INK_DAY,
+		{press_hand: _shift} if press_hand >= 0 else {})

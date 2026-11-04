@@ -265,6 +265,16 @@ func _press_sb() -> StyleBox:
 
 
 func _flash(key: String, ok := true) -> void:
+	# hit отдаёт ДЕЙСТВИЕ («шифт»/«стереть»/...), а заливка ищет КЛЮЧ
+	# кнопки списка buttons — переводим, как в main._flash.
+	if key == "шифт":
+		key = "Shift"
+	elif key == "стереть":
+		key = "←"
+	elif key == "язык":
+		key = "глобус"
+	elif key == "ввод":
+		key = "↵"
 	kb_press = key
 	kb_press_ok = ok
 	kb_press_t = KB_PRESS_T

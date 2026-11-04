@@ -36,6 +36,8 @@ func _initialize() -> void:
 ## Окно телефона: И через DisplayServer, И у корня (как в visual_driver) —
 ## под полноэкранным режимом один вызов не срабатывает.
 func _win(wh: Vector2i) -> void:
+	# Полноэкранный проект держит размер экрана Xvfb — см. visual_driver.
+	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
 	DisplayServer.window_set_size(wh)
 	root.size = wh
 	_menu.call("_relayout")
