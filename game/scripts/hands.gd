@@ -833,69 +833,200 @@ static func _solve_rest(bs: Array, f: int, h: int, pitch: float,
 ## палец решается из покоя к цели (кончик — НА ПЛОСКОСТИ клавиши,
 ## просадка в клавишу — по z), ход лерпит 3D-цепь от покоя к нажатию.
 ## shifts = {рука: Vector2} — кисть ЦЕЛИКОМ съезжает по плоскости.
+##
+## Кисть рисуется КОНТУРОМ (автор 27.10.2026: «не скелеты и не чистое
+## 3D, а только контуры рук»): одна замкнутая внешняя граница ладони и
+## пальцев — объединение их лент. Костей, суставов и внутренних швов
+## на экране нет; движение читается силуэтом (подсказка и реальное
+## нажатие), а подписи клавиш видны сквозь лёгкую заливку.
 static func draw_both(ci: CanvasItem, rest: Dictionary,
 		presses: Dictionary, pitch: float, ink: Color,
-		shifts: Dictionary = {}) -> void:
+		shifts: Dictionary = {}, cache: Variant = null) -> void:
 	if rest.is_empty() or pitch <= 0.0:
 		return
-	var w := widths_of(pitch)
-	var w0 := w[0] as float
-	var w1 := w[1] as float
-	var palm_col := ink
-	palm_col.a = 0.32
+	# Кэш контуров: в покое и позе без движения объединение Clipper'ом
+	# (две кисти — ~1.1 мс) не повторяется каждый кадр. Ключ — состояние
+	# позы; владелец кэша чистит его при смене доски (поза пересобрана).
+	var polys: Dictionary
+	if cache is Dictionary:
+		var cd: Dictionary = cache
+		var key := "%.3f|%s|%s" % [pitch, str(presses), str(shifts)]
+		if cd.has(key) and cd[key] is Dictionary:
+			polys = cd[key] as Dictionary
+		else:
+			polys = _outlines(rest, presses, pitch, shifts)
+			cd.clear()
+			cd[key] = polys
+	else:
+		polys = _outlines(rest, presses, pitch, shifts)
+	for h in polys.keys():
+		var poly: PackedVector2Array = polys[h]
+		if poly.size() >= 3:
+			_draw_contour(ci, poly, pitch, ink)
+
+
+## Контуры обеих кистей по позе: {рука: PackedVector2Array}.
+static func _outlines(rest: Dictionary, presses: Dictionary, pitch: float,
+		shifts: Dictionary) -> Dictionary:
+	var polys := {}
 	for h in [LEFT, RIGHT]:
 		if not rest.has(h):
 			continue
-		var pose: Dictionary = rest[h]
-		var fingers: Dictionary = pose["fingers"] as Dictionary
 		var off: Vector2 = shifts.get(h, Vector2.ZERO)
-		var press_f: Dictionary = {}
-		if presses.has(h) and (presses[h] is Dictionary):
-			press_f = presses[h] as Dictionary
-		var solved := {}
-		for f in fingers.keys():
-			var fd: Dictionary = fingers[f] as Dictionary
-			var chain0: Array = fd["chain"] as Array
-			var rest_ang: Array = fd.get("angles", []) as Array
-			var cpt: Array = []
-			var phase := 0.0
-			if press_f.has(f):
-				var info: Array = press_f[f] as Array
-				phase = clampf(info[1] as float, 0.0, 1.0)
-				# Цель — в МИРОВЫХ координатах; решаем из несдвинутого
-				# корня к цели СНИМКА сдвига (off после решения садит
-				# цепь в сдвинутую кисть, кончик — на мировой клавише).
-				var tgt := Vector3((info[0] as Vector2).x,
-					(info[0] as Vector2).y, Z_PRESS * pitch) \
-					- Vector3(off.x, off.y, 0.0)
-				var res := ik_chain(fd["root"] as Vector3,
-					bones_px(f, pitch), tgt, rest_ang, rest_ang,
-					f, side_of(h))
-				cpt = res[1] as Array
-			var pts: Array = []
-			var zi := 0.0
-			for i in chain0.size():
-				var a := chain0[i] as Vector3
-				var p := a
-				if phase > 0.0 and cpt.size() == chain0.size():
-					var b := cpt[i] as Vector3
-					p = a.lerp(b, phase)
-				p = Vector3(p.x + off.x, p.y + off.y, p.z)
-				pts.append(Vector2(p.x, p.y))
-				zi += p.z
-			var col := ink
-			# Нажатый палец плотнее (лежит на клавише), покой — небо
-			# сквозь него: давление читается и сверху.
-			var zf := zi / chain0.size()
-			col.a = clampf(0.66 - 0.09 * zf / pitch + 0.20 * phase,
-				0.30, 0.85)
-			solved[f] = [pts, col]
-		_draw_palm(ci, pose, palm_col, pitch, off, solved)
-		# Пальцы от мизинца к большому: большой рисуется последним.
-		for f in [PINKY, RING, MIDDLE, INDEX, THUMB]:
-			if solved.has(f):
-				var sd: Array = solved[f] as Array
-				_draw_finger(ci, sd[0] as Array, w0, w1, sd[1] as Color)
+		polys[h] = hand_outline(rest, presses, pitch, h, off)
+	return polys
+
+
+## Контур ОДНОЙ кисти — ЧИСТАЯ МЕРА: ею же рисует draw_both, её же
+## меряют тесты (headless картинку не рисует, а геометрию проверяет
+## числом). rest — обе руки, presses — как у draw_both, off — сдвиг
+## кисти. Одна замкнутая граница: ладонь + все пять лент, объединённые
+## Clipper'ом (Geometry2D.merge_polygons).
+static func hand_outline(rest: Dictionary, presses: Dictionary,
+		pitch: float, h: int,
+		off: Vector2 = Vector2.ZERO) -> PackedVector2Array:
+	if not rest.has(h) or pitch <= 0.0:
+		return PackedVector2Array()
+	var pose: Dictionary = rest[h] as Dictionary
+	var solved := _solve_hand(pose, presses, pitch, h, off)
+	return outline_of(pose, solved, pitch, off)
+
+
+## Контур по УЖЕ решённым цепям: рисование решает цепи один раз на
+## кадр (IK не дёргается дважды), тесты — своей пробой.
+static func outline_of(pose: Dictionary, solved: Dictionary,
+		pitch: float, off: Vector2) -> PackedVector2Array:
+	var w := widths_of(pitch)
+	var parts: Array = []
+	var palm := _palm_poly(pose, pitch, off, solved)
+	if palm.size() >= 3:
+		parts.append(palm)
+	for f in [THUMB, INDEX, MIDDLE, RING, PINKY]:
+		if not solved.has(f):
+			continue
+		var chain: Array = (solved[f] as Array)[0] as Array
+		var band := _finger_poly(chain, w[0] as float, w[1] as float)
+		if band.size() >= 3:
+			parts.append(band)
+	return _union_parts(parts)
+
+
+## Решённые цепи кисти: {палец: [точки 2D, ход 0..1]}. Нажатие решается
+## из покоя к цели, снятой на сдвиг кисти: кончик ложится на МИРОВУЮ
+## клавишу после сдвига.
+static func _solve_hand(pose: Dictionary, presses: Dictionary,
+		pitch: float, h: int, off: Vector2) -> Dictionary:
+	var fingers: Dictionary = pose["fingers"] as Dictionary
+	var press_f: Dictionary = {}
+	if presses.has(h) and (presses[h] is Dictionary):
+		press_f = presses[h] as Dictionary
+	var solved := {}
+	for f in fingers.keys():
+		var fd: Dictionary = fingers[f] as Dictionary
+		var chain0: Array = fd["chain"] as Array
+		var rest_ang: Array = fd.get("angles", []) as Array
+		var cpt: Array = []
+		var phase := 0.0
+		if press_f.has(f):
+			var info: Array = press_f[f] as Array
+			phase = clampf(info[1] as float, 0.0, 1.0)
+			var tgt := Vector3((info[0] as Vector2).x,
+				(info[0] as Vector2).y, Z_PRESS * pitch) \
+				- Vector3(off.x, off.y, 0.0)
+			var res := ik_chain(fd["root"] as Vector3,
+				bones_px(f, pitch), tgt, rest_ang, rest_ang,
+				f, side_of(h))
+			cpt = res[1] as Array
+		var pts: Array = []
+		for i in chain0.size():
+			var a := chain0[i] as Vector3
+			var p := a
+			if phase > 0.0 and cpt.size() == chain0.size():
+				var b := cpt[i] as Vector3
+				p = a.lerp(b, phase)
+			p = Vector3(p.x + off.x, p.y + off.y, p.z)
+			pts.append(Vector2(p.x, p.y))
+		solved[f] = [pts, phase]
+	return solved
+
+
+## Объединение частей кисти в ОДИН внешний контур. Части перекрываются
+## (палец растёт из вершины ладони), поэтому каждая пара сливается в
+## один полигон; из ответа берётся САМАЯ БОЛЬШАЯ площадь — дыр в руке
+## нет, а у merge_polygons дырка вернулась бы отдельным (обратным)
+## контуром. Если слияние не удалось, часть отбрасывается: контур
+## остаётся замкнутым (потеря пальца ловится тестом «все подушечки
+## внутри»).
+static func _union_parts(parts: Array) -> PackedVector2Array:
+	var acc := PackedVector2Array()
+	for part in parts:
+		var p: PackedVector2Array = part
+		if p.size() < 3:
+			continue
+		if acc.is_empty():
+			acc = p
+			continue
+		var merged := Geometry2D.merge_polygons(acc, p)
+		var best := acc
+		var best_a := absf(_poly_area(acc))
+		for q in merged:
+			var qq: PackedVector2Array = q
+			var a := absf(_poly_area(qq))
+			if a > best_a:
+				best = qq
+				best_a = a
+		acc = best
+	return acc
+
+
+## Площадь полигона (шнурок) — мера выбора внешнего контура.
+static func _poly_area(p: PackedVector2Array) -> float:
+	var a := 0.0
+	var n := p.size()
+	for i in n:
+		var q := p[(i + 1) % n]
+		a += p[i].x * q.y - q.x * p[i].y
+	return a * 0.5
+
+
+## Контур руки: замкнутая линия и ЛЁГКАЯ заливка (автор 27.10.2026:
+## «только контуры рук», не скелет и не 3D). Заливка не для объёма —
+## без неё узкий палец читается двумя чёрточками, а не пальцем; alpha
+## низкая, чтобы подписи клавиш оставались видны. Толщина линии — от
+## питча (на мелкой доске не игла, на крупной не жирная).
+static func _draw_contour(ci: CanvasItem, poly: PackedVector2Array,
+		pitch: float, ink: Color) -> void:
+	var fill := ink
+	fill.a = 0.10
+	var line := ink
+	line.a = 0.75
+	var loop := PackedVector2Array(poly)
+	loop.append(poly[0])
+	ci.draw_colored_polygon(poly, fill)
+	ci.draw_polyline(loop, line, clampf(pitch * 0.07, 2.0, 5.0), true)
+
+
+## Демонстрация подсказки: палец идёт к клавише, стоит на ней и
+## возвращается в покой. Тайминги одного цикла, секунды.
+const HINT_RISE_T := 0.34
+const HINT_HOLD_T := 0.42
+const HINT_FALL_T := 0.34
+const HINT_GAP_T := 0.90
+const HINT_CYCLE_T := HINT_RISE_T + HINT_HOLD_T + HINT_FALL_T + HINT_GAP_T
+
+## Ход демонстрации в фазе t: подъём — стоим — спад — пауза, дальше
+## цикл заново. ЧИСТАЯ МЕРА: ею ведёт руку main, её меряет hands_test
+## (симметрия подъёма/спада, период, покой в паузе).
+static func hint_depth(t: float) -> float:
+	var x := fposmod(t, HINT_CYCLE_T)
+	if x < HINT_RISE_T:
+		return smoothstep(0.0, 1.0, x / HINT_RISE_T)
+	if x < HINT_RISE_T + HINT_HOLD_T:
+		return 1.0
+	if x < HINT_RISE_T + HINT_HOLD_T + HINT_FALL_T:
+		return 1.0 - smoothstep(0.0, 1.0,
+			(x - HINT_RISE_T - HINT_HOLD_T) / HINT_FALL_T)
+	return 0.0
 
 
 ## Одна лента: вдоль хорды «корень→кончик» со СЖАТЫМИ поперечными
@@ -905,17 +1036,17 @@ static func draw_both(ci: CanvasItem, rest: Dictionary,
 ## снимком dbg-strip). Каркас — хорда, поперечные смещения точек цепи
 ## зажаты в ±0.35 длины: мягкая дуга остаётся, радиус всюду сильно
 ## больше полширины — самопересечений нет.
-static func _draw_finger(ci: CanvasItem, chain: Array, w0: float,
-		w1: float, col: Color) -> void:
+static func _finger_poly(chain: Array, w0: float,
+		w1: float) -> PackedVector2Array:
 	var n := chain.size()
 	if n < 2:
-		return
+		return PackedVector2Array()
 	var root := chain[0] as Vector2
 	var tip := chain[n - 1] as Vector2
 	var axis := tip - root
 	var alen := axis.length()
 	if alen < 1e-3:
-		return
+		return PackedVector2Array()
 	var axis_u := axis / alen
 	var perp := Vector2(-axis_u.y, axis_u.x)
 	var pts: Array = []
@@ -951,14 +1082,14 @@ static func _draw_finger(ci: CanvasItem, chain: Array, w0: float,
 	for kk2 in [1, 2, 3, 4]:
 		var phi0: float = nr0.angle() + PI * (kk2 as float) / 5.0
 		out.append(root2 + (w0 * 0.5) * Vector2(cos(phi0), sin(phi0)))
-	ci.draw_colored_polygon(out, col)
+	return out
 
 
 ## Ладонь: полигон по корням пальцев решённой позы (+ сдвиг кисти) и
 ## двум углам пятки, сглаженный Catmull-Rom замкнуто. Порядок точек —
 ## по углу вокруг центроида: звёздчатый полигон не самопересекается.
-static func _draw_palm(ci: CanvasItem, pose: Dictionary, col: Color,
-		pitch: float, off: Vector2, solved: Dictionary) -> void:
+static func _palm_poly(pose: Dictionary, pitch: float, off: Vector2,
+		solved: Dictionary) -> PackedVector2Array:
 	var pts := PackedVector2Array()
 	for f in [PINKY, RING, MIDDLE, INDEX, THUMB]:
 		if solved.has(f):
@@ -968,7 +1099,7 @@ static func _draw_palm(ci: CanvasItem, pose: Dictionary, col: Color,
 				continue
 			pts.append(ch[0] as Vector2)
 	if pts.size() < 3:
-		return
+		return PackedVector2Array()
 	var x_min := (pts[0] as Vector2).x
 	var x_max := (pts[0] as Vector2).x
 	for p in pts:
@@ -996,7 +1127,7 @@ static func _draw_palm(ci: CanvasItem, pose: Dictionary, col: Color,
 	var arr: Array = []
 	for p in ordered:
 		arr.append(p)
-	ci.draw_colored_polygon(PackedVector2Array(_smooth_closed(arr)), col)
+	return PackedVector2Array(_smooth_closed(arr))
 
 
 ## Замкнутый Catmull-Rom: 4 сэмпла на звено, кольцо замыкается.

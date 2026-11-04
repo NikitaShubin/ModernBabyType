@@ -43,6 +43,7 @@ const PRESS_TIME := 0.34  # ход пальца: опустился и верн�
 # Позы покоя: {рука: поза из Hands.rest_pose}. Пересчитываются на
 # релэйауте: геометрия доски меняется — пальцы садятся заново.
 var _rest: Dictionary = {}
+var _cache: Dictionary = {}
 var _bs: Array = []
 var _area := Rect2()
 var _pitch := 0.0
@@ -79,6 +80,7 @@ func _relayout() -> void:
 	_bs = Kbd.buttons(_area, shift, false)
 	_pitch = Hands.pitch_of(_bs)
 	_rest = Hands.rest_both(_bs)
+	_cache.clear()
 	queue_redraw()
 
 
@@ -175,4 +177,4 @@ func _draw_hands() -> void:
 		var depth := sin(clampf(t01, 0.0, 1.0) * PI)
 		presses = {press_hand: {press_finger: [press_goal, depth]}}
 	Hands.draw_both(self, _rest, presses, _pitch, Ui.INK_DAY,
-		{press_hand: _shift} if press_hand >= 0 else {})
+		{press_hand: _shift} if press_hand >= 0 else {}, _cache)

@@ -22,6 +22,7 @@ const S := preload("res://scripts/save.gd")
 const Kbd := preload("res://scripts/kbd.gd")
 const B := preload("res://scripts/balance.gd")
 const U := preload("res://scripts/ui.gd")
+const Hands := preload("res://scripts/hands.gd")
 ## Пять заведомо неверных букв для пачки от IME. Разные — иначе это
 ## машинный дубль клавиши, который фильтр DUP_MS глотает по замыслу.
 const IME_WRONG := ["ы", "ж", "ц", "щ", "э"]
@@ -3665,6 +3666,7 @@ func _fill_cases() -> void:
 	_cases_list.append(["_case_stars_sky", Callable(self, "_case_stars_sky"), 0])
 	_cases_list.append(["_case_win_celebration", Callable(self, "_case_win_celebration"), 0])
 	_cases_list.append(["_case_hands_hold", Callable(self, "_case_hands_hold"), 0])
+	_cases_list.append(["_case_hands_hint_demo", Callable(self, "_case_hands_hint_demo"), 0])
 # (конец списка кейсов)
 ## Холмы по рецепту автора (18.10.2026 после релиза: «не уменьшать
 ## радиусы, а опустить вниз центры, радиусы вернуть большими»): при
@@ -3848,6 +3850,143 @@ func _case_hare_recovers() -> void:
 		ht < 0.001,
 		"%s: the hop phase did not settle (ht=%.4f)" % [tag, ht]
 	)
+
+
+## 45б. Демонстрация подсказки в кистях (автор 27.10.2026: «пусть они
+## анимируют движение во время подсказок и реальных нажатий»): пока
+## подсветка висит, палец ходит к клавише и обратно циклом, кисть едет
+## за ним (ход гаснет вместе с фазой), а реальное нажатие перекрывает
+## подсказку на СВОЁМ пальце.
+func _case_hands_hint_demo() -> void:
+	_fresh(0, 1)
+	_kbd_on()
+	var tag := "hands hint"
+	# Фиксированный уровень: подсказка — заглавная «М», то есть ДВЕ
+	# клавиши (шифт и буква). На них видно и перекрытие одного пальца
+	# реальным нажатием, и живую подсказку на другом.
+	_set_level_text(["Мама мыла раму"], [false])
+	_main.active.clear()
+	for line in _main.display_lines:
+		for i in String(line).length():
+			_main.active[String(line).substr(i, 1).to_lower()] = true
+	_main._refresh()
+	_main.grace_t = 9999.0
+	_main.press_ema = 0.6
+	_main.idle_t = _main._hint_delay() + 0.1
+	var hi: Array = _main._hint_keys()
+	_check(hi.size() == 2, "%s: expected shift+letter, got %s" % [tag, str(hi)])
+	_tick(tag)
+	_check(
+		not _main._hands_hint.is_empty(),
+		"%s: the hint targets were not built" % tag
+	)
+	# Цели — ровно на подсвеченных клавишах: палец тот и точка на клавише.
+	for s in hi:
+		var hf := Hands.finger_of(String(s))
+		var h: int = hf[0]
+		var f: int = hf[1]
+		var per: Dictionary = _main._hands_hint.get(h, {}) as Dictionary
+		_check(
+			per.has(f),
+			"%s: the hinted «%s» has no finger target" % [tag, s]
+		)
+		if per.has(f):
+			var want := Hands.press_point(
+				_main._hands_bs, String(s),
+				Hands.rest_tip(_main._hands_rest, h, f)
+			)
+			_check(
+				(per[f] as Vector2).distance_to(want) < 0.5,
+				"%s: the target for «%s» is off its key" % [tag, s]
+			)
+	# Цикл демонстрации: за полный период палец доходит до клавиши
+	# (глубина 1) и возвращается в покой (0). Считаем крайние значения.
+	var maxd := 0.0
+	var mind := 1.0
+	for _i in 150:
+		_tick(tag)
+		var d: float = Hands.hint_depth(_main._hands_hint_t)
+		maxd = maxf(maxd, d)
+		mind = minf(mind, d)
+	_check(
+		maxd > 0.99 and mind < 0.01,
+		"%s: the hint cycle does not rise and fall (%.2f..%.2f)" % [tag, mind, maxd]
+	)
+	# Ход кисти гаснет вместе с фазой: на середине подъёма цель сдвига —
+	# ровно доля полной. При глубине 1 умножение на неё неотличимо от
+	# его отсутствия, поэтому меряем в середине подъёма.
+	_main._hands_hint_t = Hands.HINT_RISE_T * 0.5
+	_main.call("_hands_tick", 0.0, _main._own_rect(), _main._kb_enter_shown(), hi)
+	var midd: float = Hands.hint_depth(_main._hands_hint_t)
+	_check(
+		midd > 0.3 and midd < 0.7,
+		"%s: the middle of the rise is not half depth (%.2f)" % [tag, midd]
+	)
+	for h in _main._hands_hint_sh.keys():
+		var full: Vector2 = _main._hands_hint_sh[h] as Vector2
+		var want_sh: Vector2 = full * midd
+		var got_sh: Vector2 = _main._hands_shiftg.get(h, Vector2.ZERO) as Vector2
+		_check(
+			got_sh.distance_to(want_sh) < 0.01,
+			"%s: the hand shift is not scaled by the hint depth (%s vs %s)" % [
+				tag, str(got_sh), str(want_sh)
+			]
+		)
+		# Сама цель не нулевая у шифта (рука тянется), и в середине хода
+		# кисть ещё не доехала до полной.
+		if full.length() > 1.0:
+			_check(
+				got_sh.length() < full.length() - 1.0,
+				"%s: the hand shift does not fade with the phase (%.1f of %.1f)" % [
+					tag, got_sh.length(), full.length()
+				]
+			)
+	# Возвращаем цикл на площадку: реальное нажатие проверяем на глубине 1.
+	_main._hands_hint_t = Hands.HINT_RISE_T + Hands.HINT_HOLD_T * 0.5
+	_main.call("_hands_tick", 0.0, _main._own_rect(), _main._kb_enter_shown(), hi)
+	# Реальное нажатие буквы: её палец перекрывает подсказку (поза
+	# нажатия, а не демонстрация), а на шифте подсказка остаётся живой.
+	var btns := _kbd_buttons()
+	var letter := String(hi[hi.size() - 1])
+	var lh := Hands.finger_of(letter)
+	var lhand: int = lh[0]
+	var lfing: int = lh[1]
+	_main.call("_own_press", btns[letter], true)
+	var pressed := _main.call("_hands_presses") as Dictionary
+	var lper: Dictionary = pressed.get(lhand, {}) as Dictionary
+	_check(
+		lper.has(lfing) and (lper[lfing] as Array).size() == 4,
+		"%s: the real press did not take over its finger" % tag
+	)
+	var other := String(hi[0])
+	var oh := Hands.finger_of(other)
+	var oper: Dictionary = pressed.get(oh[0], {}) as Dictionary
+	_check(
+		oper.has(oh[1]) and (oper[oh[1]] as Array).size() == 2,
+		"%s: the real press killed the hint on another finger" % tag
+	)
+	# Влёт и удержание: зажатая клавиша держит палец на ней.
+	for _i in 8:
+		_tick(tag)
+	var st := _hand_state(letter)
+	_check(
+		st[0] and int(st[1]) == 0,
+		"%s: the pressed finger does not stay on the key (%s)" % [tag, str(st)]
+	)
+	# Подсказка гаснет на любом вводе — цели снимаются, палец остаётся.
+	_check(
+		_main._hands_hint.is_empty(),
+		"%s: the hint survived a keypress" % tag
+	)
+	_main.call("_release_held")
+	for _i in 45:
+		_tick(tag)
+	st = _hand_state(letter)
+	_check(
+		not st[0],
+		"%s: the finger did not come back after the release (%s)" % [tag, str(st)]
+	)
+	_common(tag)
 
 
 func _fit_window() -> void:

@@ -62,6 +62,7 @@ func _hands_test() -> void:
 	_press_checks(bs)
 	_z_checks(bs)
 	_hint_checks(bs)
+	_contour_checks(bs)
 
 
 ## Каждая клавиша ДОСКИ имеет палец: карта не может отстать от
@@ -706,3 +707,131 @@ func _hint_checks(bs: Array) -> void:
 		and (Hands.widths_of(400.0)[1] as float) <= 12.0,
 		"width ceiling holds on a big board")
 	_check((wb[0] as float) > (wb[1] as float), "finger is tapered")
+
+
+## КОНТУР (автор 27.10.2026): кисть на экране — ОДНА замкнутая внешняя
+## граница (объединение ладони и пальцев), а не скелет. Держит: все
+## суставы внутри контура (палец не оторвался), нажатие не рвёт контур
+## и ставит палец на клавишу, контур не уезжает от доски, демонстрация
+## подсказки поднимает палец и возвращается ровно в покой.
+func _contour_checks(bs: Array) -> void:
+	var pitch := Hands.pitch_of(bs)
+	var rest := Hands.rest_both(bs)
+	_check(not rest.is_empty(), "contour: rest pose is built")
+	if rest.is_empty():
+		return
+	# Рамка доски — по самим клавишам (buttons — единственный источник).
+	var br := Rect2()
+	var first := true
+	for b in bs:
+		var r := b["r"] as Rect2
+		if first:
+			br = r
+			first = false
+		else:
+			br = br.merge(r)
+	for h in [Hands.LEFT, Hands.RIGHT]:
+		var poly := Hands.hand_outline(rest, {}, pitch, h)
+		_check(poly.size() >= 12,
+			"hand %d contour is built (%d points)" % [h, poly.size()])
+		_check(absf(Hands._poly_area(poly)) > pitch * pitch,
+			"hand %d contour has positive area" % h)
+		var fingers: Dictionary = (rest[h] as Dictionary)["fingers"] as Dictionary
+		for f in fingers.keys():
+			var ch: Array = (fingers[f] as Dictionary)["chain"] as Array
+			for i in [0, ch.size() - 1]:
+				var p3: Vector3 = ch[i] as Vector3
+				_check(Geometry2D.is_point_in_polygon(
+					Vector2(p3.x, p3.y), poly),
+					"hand %d finger %d joint %d is inside the contour"
+					% [h, f, i])
+		# Ладонь уходит за нижний ряд (пятка), пальцы — вглубь доски:
+		# дальше двух питчей в стороны и трёх с половиной вниз рука не
+		# живёт. Выезд за эти поля — сломанная геометрия, а не поза.
+		var lo := Vector2(br.position.x - 2.0 * pitch,
+			br.position.y - 3.5 * pitch)
+		var hi := Vector2(br.end.x + 2.0 * pitch,
+			br.end.y + 3.5 * pitch)
+		var out := 0
+		for p in poly:
+			if p.x < lo.x or p.x > hi.x or p.y < lo.y or p.y > hi.y:
+				out += 1
+		_check(out == 0,
+			"hand %d contour stays near the board (%d points out)"
+			% [h, out])
+		# Нажатие: контур цел, точка контакта внутри, форма изменилась.
+		for s in ["а", "о", "в", "л", "ы", "д", "ф", "ж", "я", "ъ",
+				"1", "0", "пробел:Л", "пробел:П", "Shift", "ShiftR",
+				"←", "↵", "глобус"]:
+			var hf := Hands.finger_of(s)
+			if (hf[0] as int) != h:
+				continue
+			var rt := Hands.rest_tip(rest, h, hf[1] as int)
+			var c := Hands.press_point(bs, s, rt)
+			if c == Vector2.ZERO:
+				continue
+			# Кисть ходит за работой — как в игре (_hands_hit считает
+			# shift_goal); дальняя клавиша без хода недостижима.
+			var sh := Hands.shift_goal(rest, h, hf[1] as int, c, pitch)
+			var pressed := Hands.hand_outline(rest,
+				{h: {(hf[1] as int): [c, 1.0]}}, pitch, h, sh)
+			_check(pressed.size() >= 12,
+				"pressed '%s' keeps one contour" % s)
+			# Кончик решателя может не дотянуться до центра клавиши на
+			# пиксели (это пресс, а не телепорт); контур обязан быть РЯДОМ
+			# с клавишей — не дальше трети питча.
+			_check(_dist_to_poly(c, pressed) <= 0.35 * pitch,
+				"pressed '%s' contour reaches the key (%.1f px)"
+				% [s, _dist_to_poly(c, pressed)])
+			_check(not _same_poly(pressed, poly),
+				"pressing '%s' moves the contour" % s)
+	# Демонстрация подсказки — чистая фаза: покой, выдержка, пауза,
+	# симметрия подъёма/спада, период.
+	_check(Hands.hint_depth(0.0) == 0.0, "hint demo starts at rest")
+	_check(Hands.hint_depth(Hands.HINT_RISE_T
+		+ Hands.HINT_HOLD_T * 0.5) == 1.0, "hint demo holds the key")
+	_check(Hands.hint_depth(Hands.HINT_CYCLE_T
+		- Hands.HINT_GAP_T * 0.5) == 0.0, "hint demo rests between cycles")
+	_check(absf(Hands.hint_depth(Hands.HINT_RISE_T * 0.5)
+		- Hands.hint_depth(Hands.HINT_CYCLE_T - Hands.HINT_GAP_T
+		- Hands.HINT_FALL_T * 0.5)) < 0.02,
+		"hint demo rise and fall are symmetric")
+	_check(absf(Hands.hint_depth(0.3)
+		- Hands.hint_depth(0.3 + Hands.HINT_CYCLE_T)) < 1e-5,
+		"hint demo repeats every cycle")
+	var mono := true
+	var prev := -1.0
+	for i in 21:
+		var d := Hands.hint_depth(Hands.HINT_RISE_T * (float(i) / 20.0))
+		if d < prev - 1e-6:
+			mono = false
+		prev = d
+	_check(mono, "hint demo rises monotonically")
+
+
+## Одинаковы ли контуры (порядок вершин у Clipper устойчив: изменилась
+## поза — изменились и точки).
+func _same_poly(a: PackedVector2Array, b: PackedVector2Array) -> bool:
+	if a.size() != b.size():
+		return false
+	for i in a.size():
+		if a[i].distance_to(b[i]) > 0.01:
+			return false
+	return true
+
+
+## Расстояние от точки до контура (0 — внутри). Мера «контур дошёл до
+## клавиши»: кончик решателя прощает пиксели, поэтому сравниваем не
+## попадание, а близость.
+func _dist_to_poly(p: Vector2, poly: PackedVector2Array) -> float:
+	if poly.size() < 3:
+		return INF
+	if Geometry2D.is_point_in_polygon(p, poly):
+		return 0.0
+	var best := INF
+	var n := poly.size()
+	for i in n:
+		var q := Geometry2D.get_closest_point_to_segment(
+			p, poly[i], poly[(i + 1) % n])
+		best = minf(best, p.distance_to(q))
+	return best
