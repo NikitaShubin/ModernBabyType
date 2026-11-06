@@ -393,17 +393,18 @@ static func pad_target(bs: Array, r: Rect2, at: Vector2,
 
 ## ---------- РИСОВАНИЕ ----------
 
-## Обе кисти на доске. presses — как у pose_of.
+## Обе кисти на доске. presses — как у pose_of. Кисть рисуется ОДНИМ
+## замкнутым контуром (объединение запечённой ладони, четырёх пальцев и
+## большого), линией и лёгкой заливкой. Кэш — по состоянию позы: в покое
+## контур не пересобирается.
 ##
-## Заливка — ОДИН раз по объединённому силуэту, а линия — по КАЖДОЙ
-## части (ладонь, каждый палец, большой). Контур объединения знает
-## только внешнюю границу руки: между соседними пальцами её нет, потому
-## что там рука ещё продолжается, и шов пропадал (автор 06.11.2026:
-## «между средним и безымянным пальцами нет линии»). А ребро между
-## двумя частями — это граница, которую глаз и ждёт увидеть. Контуры
-## частей лежат ВНУТРИ объединения, поэтому обрезка не нужна: одна
-## заливка, линии частей. Кэш — по состоянию позы: в покое Clipper не
-## гоняем.
+## ПОЧЕМУ ОДИН контур, а не линии каждой части (автор 06.11.2026:
+## «пальцы физически отделены от остальной части кисти? В результате в
+## кадре куча лишних линий… надо объединить все объекты каждой из кистей
+## в один объект»): ладонь и пальцы в модели — РАЗНЫЕ тела, и линия их
+## стыка ложится внутрь кисти кругами у оснований. Кисть — один объект,
+## как её и видит глаз: внешняя граница руки. Пальцы при этом читаются
+## выемками силуэта (они в проекции идут вплотную, 1–6 px щели).
 static func draw_both(ci: CanvasItem, bs: Array, rest: Dictionary,
 		presses: Dictionary, ink: Color, cache: Variant = null) -> void:
 	if rest.is_empty():
@@ -411,48 +412,37 @@ static func draw_both(ci: CanvasItem, bs: Array, rest: Dictionary,
 	var pitch := pitch_of(bs)
 	if pitch <= 0.0:
 		return
-	var sets: Dictionary
+	var polys: Dictionary
 	var key := "%.3f|%s" % [pitch, str(presses)]
 	if cache is Dictionary:
 		var cd: Dictionary = cache
 		if cd.has(key) and cd[key] is Dictionary:
-			sets = cd[key] as Dictionary
+			polys = cd[key] as Dictionary
 		else:
-			sets = _part_sets(bs, rest, presses)
+			polys = _outlines(bs, rest, presses)
 			cd.clear()
-			cd[key] = sets
+			cd[key] = polys
 	else:
-		sets = _part_sets(bs, rest, presses)
-	for h in sets.keys():
-		var parts: Dictionary = sets[h] as Dictionary
-		_draw_parts(ci, parts, pitch, ink)
+		polys = _outlines(bs, rest, presses)
+	for h in polys.keys():
+		var poly: PackedVector2Array = polys[h]
+		if poly.size() >= 3:
+			_draw_contour(ci, poly, pitch, ink)
 
 
-## Части обеих кистей: {рука: hand_parts()}.
-static func _part_sets(bs: Array, rest: Dictionary,
+## Контуры обеих кистей: {рука: PackedVector2Array}.
+static func _outlines(bs: Array, rest: Dictionary,
 		presses: Dictionary) -> Dictionary:
-	var sets := {}
+	var polys := {}
 	for h in [LEFT, RIGHT]:
-		var parts := hand_parts(bs, rest, presses, h)
-		var merged: PackedVector2Array = parts.get("merged",
-			PackedVector2Array()) as PackedVector2Array
-		if merged.size() >= 3:
-			sets[h] = parts
-	return sets
+		var poly := hand_outline(bs, rest, presses, h)
+		if poly.size() >= 3:
+			polys[h] = poly
+	return polys
 
 
-## Контур ОДНОЙ кисти — ЧИСТАЯ МЕРА: ею меряют тесты (headless картинку
-## не рисует, а геометрию проверяет числом). Это ОБЪЕДИНЕНИЕ частей:
-## внешняя граница руки.
-static func hand_outline(bs: Array, rest: Dictionary, presses: Dictionary,
-		h: int) -> PackedVector2Array:
-	var parts := hand_parts(bs, rest, presses, h)
-	return parts.get("merged", PackedVector2Array()) as PackedVector2Array
-
-
-## Части кисти на кадр: {"merged": объединение, "order": [контуры
-## частей], "palm": ладонь}. merged — заливка, order — линии (ладонь,
-## четыре пальца, большой; шов между соседями виден).
+## Контур ОДНОЙ кисти — ЧИСТАЯ МЕРА: ею рисует draw_both, её же меряют
+## тесты (headless картинку не рисует, а геометрию проверяет числом).
 ##
 ## Силуэт НЕ собирается в игре: он запечён с ПОЛЯ 3D-модели
 ## (tools/hand3d/bake_outline.gd → hands_shape.gd) вдоль локальной z, то
@@ -463,11 +453,56 @@ static func hand_outline(bs: Array, rest: Dictionary, presses: Dictionary,
 ## проекция объединения. Сглаживание smin выносит настоящую поверхность
 ## на 5.8 мм наружу, и объединение теней этого не знает — на контуре
 ## появлялись ступеньки и «шишах» у большого пальца (автор 05.11.2026).
-static func hand_parts(bs: Array, rest: Dictionary, presses: Dictionary,
-		h: int) -> Dictionary:
+static func hand_outline(bs: Array, rest: Dictionary, presses: Dictionary,
+		h: int) -> PackedVector2Array:
 	var st := pose_of(bs, h, rest, presses)
 	if st.is_empty():
-		return {}
+		return PackedVector2Array()
+	var side := side_name(h)
+	var root_x := float(HandsPoses.ROOT_MM[side])
+	var map: Dictionary = st["map"] as Dictionary
+	var off: Vector2 = st["shift"] as Vector2
+	var flat: Array = st["flat"] as Array
+	var palm := _palm_px(st, h, presses)
+	if palm.is_empty():
+		return PackedVector2Array()
+	var xf := Hands3D.hand_xf(Hands3D.arm_of(flat))
+	# Пальцы в полярную меру не влезают (они торчат от ладони радиально,
+	# каждый занимает ~10°, и щели между ними становятся широкими
+	# клиньями), поэтому ладонь запечена ОТДЕЛЬНО, а каждый палец —
+	# лента из своей цепи и своих радиусов кожи (SKIN_R / THUMB_R).
+	var acc := palm
+	for ray in Hands3D.FINGERS:
+		var band := finger_band(flat, side, root_x, ray, map, xf, off)
+		if band.size() < 3:
+			continue
+		acc = _biggest(Geometry2D.merge_polygons(acc, band))
+	var th := thumb_band(flat, side, root_x, map, xf, off)
+	if th.size() >= 3:
+		acc = _biggest(Geometry2D.merge_polygons(acc, th))
+	# Кисть — ОДИН объект (автор 06.11.2026: «надо объединить все объекты
+	# каждой из кистей в один объект»): ладонь и пальцы в модели — разные
+	# тела, и линия их стыка ложилась внутрь кисти мусором. Сглаживание
+	# замыканием пробовано и отвергнуто: на пальце шириной 10–30 px оно
+	# рвёт кончик (проверено кадром), а выемки силуэта и так скруглены.
+	return acc
+
+
+## Ладонь с предплечьем в пикселях доски — ЧИСТАЯ МЕРА без пальцев.
+## Запечена с ПОЛЯ 3D-модели (`tools/hand3d/bake_outline.gd` →
+## `hands_shape.gd`) вдоль локальной z, то есть ровно той осью, которой
+## смотрит игра. Отдаётся и `hand_outline`, и тестам: те меряют, что
+## силуэт кисти — ОДИН объект, а ладонь лежит внутри него.
+static func hand_palm(bs: Array, rest: Dictionary, presses: Dictionary,
+		h: int) -> PackedVector2Array:
+	var st := pose_of(bs, h, rest, presses)
+	if st.is_empty():
+		return PackedVector2Array()
+	return _palm_px(st, h, presses)
+
+
+## Ладонь по уже посчитанной позе (позу на кадр берут один раз).
+static func _palm_px(st: Dictionary, h: int, presses: Dictionary) -> PackedVector2Array:
 	var side := side_name(h)
 	var root_x := float(HandsPoses.ROOT_MM[side])
 	var map: Dictionary = st["map"] as Dictionary
@@ -475,7 +510,7 @@ static func hand_parts(bs: Array, rest: Dictionary, presses: Dictionary,
 	var flat: Array = st["flat"] as Array
 	var radii := shape_radii(h, presses)
 	if radii.is_empty():
-		return {}
+		return PackedVector2Array()
 	var xf := Hands3D.hand_xf(Hands3D.arm_of(flat))
 	var c: Vector2 = Shape.CENTER
 	var n := radii.size()
@@ -486,23 +521,7 @@ static func hand_parts(bs: Array, rest: Dictionary, presses: Dictionary,
 		var q := c + Vector2(cos(a), sin(a)) * float(radii[k])
 		palm[k] = to_px(map, Hands3D.to_world(side, root_x,
 			xf * Vector3(q.x, q.y, 0.0))) + off
-	# Пальцы в полярную меру не влезают (они торчат от ладони радиально,
-	# каждый занимает ~10°, и щели между ними становятся широкими
-	# клиньями), поэтому ладонь запечена ОТДЕЛЬНО, а каждый палец —
-	# лента из своей цепи и своих радиусов кожи (SKIN_R / THUMB_R).
-	var acc := palm
-	var order: Array = [palm]
-	for ray in Hands3D.FINGERS:
-		var band := finger_band(flat, side, root_x, ray, map, xf, off)
-		if band.size() < 3:
-			continue
-		order.append(band)
-		acc = _biggest(Geometry2D.merge_polygons(acc, band))
-	var th := thumb_band(flat, side, root_x, map, xf, off)
-	if th.size() >= 3:
-		order.append(th)
-		acc = _biggest(Geometry2D.merge_polygons(acc, th))
-	return {"merged": acc, "order": order, "palm": palm}
+	return palm
 
 
 ## Лента ОДНОГО пальца: проекция его кожи — три усечённых конуса вдоль
@@ -620,41 +639,29 @@ static func _poly_area(p: PackedVector2Array) -> float:
 	return a * 0.5
 
 
-## Кисть: заливка по объединённому силуэту и линии по КАЖДОЙ части
-## (ладонь, четыре пальца, большой). Швы между частями — это и есть
-## границы, которые глаз ждёт: между соседними пальцами внешнего
-## контура нет, рука там продолжается, а ребро между частями есть.
-## Контуры частей лежат внутри объединения, поэтому обрезка не нужна.
+## Контур руки: замкнутая линия и ЛЁГКАЯ заливка (автор 27.10.2026:
+## «только контуры рук», не скелет и не 3D). Заливка не для объёма —
+## без неё узкий палец читается двумя чёрточками, а не пальцем; alpha
+## низкая, чтобы подписи клавиш оставались видны. Толщина линии — от
+## питча (на мелкой доске не игла, на крупной не жирная).
 ##
-## Заливка не для объёма — без неё узкий палец читается двумя чёрточками,
-## а не пальцем; alpha низкая, чтобы подписи клавиш оставались видны.
-## Толщина линии — от питча (на мелкой доске не игла, на крупной не
-## жирная). alpha 0.14, а не 0.10: на 0.10 кисть на живой доске читалась
-## ОДНИМИ ЛИНИЯМИ (кадр vis-26: внутри ладони цвет не отличался от фона).
+## alpha 0.14, а не 0.10: на 0.10 кисть на живой доске читалась ОДНИМИ
+## ЛИНИЯМИ (кадр vis-26: внутри ладони цвет не отличался от фона).
 static var fill_a := 0.14
 static var line_a := 0.75
 static var line_w := 0.07
 
 
-static func _draw_parts(ci: CanvasItem, parts: Dictionary,
+static func _draw_contour(ci: CanvasItem, poly: PackedVector2Array,
 		pitch: float, ink: Color) -> void:
-	var merged: PackedVector2Array = parts.get("merged",
-		PackedVector2Array()) as PackedVector2Array
-	if merged.size() < 3:
-		return
 	var fill := ink
 	fill.a = fill_a
-	ci.draw_colored_polygon(merged, fill)
 	var line := ink
 	line.a = line_a
-	var w := clampf(pitch * line_w, 2.0, 5.0)
-	for p in parts.get("order", []) as Array:
-		var poly: PackedVector2Array = p
-		if poly.size() < 3:
-			continue
-		var loop := PackedVector2Array(poly)
-		loop.append(poly[0])
-		ci.draw_polyline(loop, line, w, true)
+	var loop := PackedVector2Array(poly)
+	loop.append(poly[0])
+	ci.draw_colored_polygon(poly, fill)
+	ci.draw_polyline(loop, line, clampf(pitch * line_w, 2.0, 5.0), true)
 
 
 ## Демонстрация подсказки: палец идёт к клавише, стоит на ней и
