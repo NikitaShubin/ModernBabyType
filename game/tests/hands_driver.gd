@@ -17,6 +17,7 @@ var _frame := 0
 var _shot_i := 0
 var _wait := 0
 var _tag := ""
+var _pending := ""
 
 
 func _initialize() -> void:
@@ -34,7 +35,17 @@ func _win(wh: Vector2i) -> void:
 	_hands.call("_relayout")
 
 
+## Снимок ОТЛОЖЕН на кадр: root.get_texture() держит ПРЕДЫДУЩИЙ
+## нарисованный кадр, поэтому снятое в том же _process состояние (фаза
+## нажатия, вспышка) в картинку не попадало — все кадры выходили байт в
+## байт одинаковыми (поймано 05.11.2026: семь снимков с одним md5).
+## _snap только ЗАКАЗЫВАЕТ кадр, а снимает следующий _process — уже после
+## того, как сцена нарисовала поставленное состояние.
 func _snap(tag: String) -> void:
+	_pending = tag
+
+
+func _capture(tag: String) -> bool:
 	_shot_i += 1
 	_tag = tag
 	var img := root.get_texture().get_image()
@@ -46,6 +57,7 @@ func _snap(tag: String) -> void:
 	])
 	img.save_png(SAVE_DIR + name + ".png")
 	print("КАДР ", SAVE_DIR + name + ".png")
+	return tag == "landscape"  # последний кадр — конец прогона
 
 
 func _tap_key(s: String) -> void:
@@ -57,7 +69,21 @@ func _tap_key(s: String) -> void:
 	_hands.call("_tap", r.get_center())
 
 
+## Фаза нажатия ДЛЯ КАДРА: под llvmpipe между кадрами проходит больше
+## времени, чем длится само нажатие (PRESS_TIME 0.34 с), и снимок
+## «палец на клавише» приезжал уже после возврата — кадры 01–07 выходили
+## байт в байт одинаковыми, то есть не показывали ничего. Драйвер ставит
+## фазу руками (0.5 — палец на клавише, 1.0 — вернулся) и замораживает
+## спад на время снимка.
+func _phase(at: float) -> void:
+	_hands.call("set_press_phase", at)
+
+
 func _process(_dt: float) -> bool:
+	if _pending != "":
+		var tag := _pending
+		_pending = ""
+		return _capture(tag)
 	_frame += 1
 	if _frame == 2:
 		_win(Vector2i(540, 1140))
@@ -67,42 +93,51 @@ func _process(_dt: float) -> bool:
 	elif _frame == 40:
 		_tap_key("в")
 	elif _frame == 49:
+		_phase(0.5)
 		_snap("tap-v")
 	elif _frame == 66:
+		_phase(1.0)
 		_snap("tap-up")
-	# Тап по нижнему ряду: кисть ходит к работе целиком (shift_goal).
+	# Тап по нижнему ряду: кисть ставится на клавишу вместе с пальцем
+	# (посадку делает Hands.pose_of — отдельного хода кисти нет).
 	elif _frame == 70:
 		_tap_key("я")
 	elif _frame == 79:
+		_phase(0.5)
 		_snap("tap-ya-shift")
 	elif _frame == 96:
+		_phase(1.0)
 		_snap("tap-ya-up")
 	elif _frame == 100:
 		_tap_key("о")
 	elif _frame == 109:
+		_phase(0.5)
 		_snap("tap-o")
 	# Служебные: каждое нажатие — свой палец в позе (пресс этих клавиш
 	# в тестах и диагностике меряется, кадр — как он ВЫГЛЯДИТ).
 	elif _frame == 122:
 		_tap_key("пробел")
 	elif _frame == 131:
+		_phase(0.5)
 		_snap("tap-space")
 	elif _frame == 146:
 		_tap_key("Shift")  # ключ клавиши, не действие hit («шифт»)
 	elif _frame == 155:
+		_phase(0.5)
 		_snap("tap-shift")
 	elif _frame == 170:
 		_tap_key("←")  # бекспейс: у кнопки ключ «←», hit зовёт его «стереть»
 	elif _frame == 179:
+		_phase(0.5)
 		_snap("tap-bksp")
 	elif _frame == 194:
 		_tap_key("глобус")
 	elif _frame == 203:
+		_phase(0.5)
 		_snap("tap-globe")
 	elif _frame == 218:
 		# Альбом: те же кисти при другом окне.
 		_win(Vector2i(1140, 540))
 	elif _frame == 248:
 		_snap("landscape")
-		return true  # true в SceneTree._process = закончить прогон
 	return false

@@ -1,16 +1,19 @@
 extends SceneTree
 ## Рендер КИСТЕЙ БЕЗ ДОСКИ (зеркало глазами, автор 26.10.2026):
-## свой Node2D рисует только Hands.draw_both, доска не рисуется.
-## Кадр + зум на руки: /tmp/opencode/hands-mirror-*.png.
+## свой Node2D рисует только Hands.draw_both, доска не рисуется (только
+## сетка прямоугольников клавиш, чтобы видеть посадку).
+## Кадры: /tmp/opencode/hands-mirror-*.png.
 
 const SAVE_DIR := "/tmp/opencode/"
+
 
 class Hander extends Node2D:
 	var rest := {}
 	var pitch := 0.0
 	var area := Rect2()
+	var bs: Array = []
 
-	func _ready() -> void:
+	func layout() -> void:
 		var s: Vector2 = get_viewport_rect().size
 		var m := 16.0 + Ui.bottom_inset(s.y)
 		var hmax := maxf(160.0, (s.y - m) * 0.46)
@@ -20,16 +23,19 @@ class Hander extends Node2D:
 			w = clampf(Kbd.width_for(hmax), 240.0, s.x - 32.0)
 			h = Kbd.height_for(w)
 		area = Rect2((s.x - w) * 0.5, s.y - h - m, w, h)
-		var bs := Kbd.buttons(area, false, false)
+		bs = Kbd.buttons(area, false, false)
 		pitch = Hands.pitch_of(bs)
 		rest = Hands.rest_both(bs)
+		queue_redraw()
 
 	func _draw() -> void:
 		draw_rect(Rect2(Vector2.ZERO, get_viewport_rect().size),
 			Color(0.97, 0.95, 0.90))
 		if rest.is_empty():
 			return
-		Hands.draw_both(self, rest, {}, pitch, Color(0.10, 0.10, 0.10))
+		for b in bs:
+			draw_rect(b["r"] as Rect2, Color(0.55, 0.55, 0.55), false, 1.0)
+		Hands.draw_both(self, bs, rest, {}, Color(0.10, 0.10, 0.10))
 
 
 var _h: Hander = null
@@ -46,6 +52,7 @@ func _win(wh: Vector2i) -> void:
 	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
 	DisplayServer.window_set_size(wh)
 	root.size = wh
+	_h.layout()
 
 
 func _snap(tag: String, zoom: Rect2 = Rect2()) -> void:
@@ -64,11 +71,23 @@ func _snap(tag: String, zoom: Rect2 = Rect2()) -> void:
 
 func _process(_dt: float) -> bool:
 	_frame += 1
+	var ks := [1.0, 1.0, 1.0, 1.0]
+	var fa := [0.14, 0.20, 0.26, 0.34]
 	if _frame == 2:
-		_win(Vector2i(1080, 1080))
-		_h.queue_redraw()
-	elif _frame == 20:
-		_snap("rest-full")
-		_snap("rest-zoom", Rect2(120, 380, 840, 700))
-		return true
+		_win(Vector2i(540, 1140))
+	elif _frame >= 10:
+		var i := (_frame - 10) / 10
+		var ph := (_frame - 10) % 10
+		if i >= ks.size():
+			return true
+		if ph == 0:
+			Hands.depth_k = ks[i]
+			Hands.fill_a = fa[i]
+			Hands.line_a = 0.85
+			Hands.line_w = 0.08
+			_h.layout()
+		elif ph == 2:
+			_snap("phone-k%02d-f%02d" % [int(ks[i] * 100), int(fa[i] * 100)])
+			_snap("phone-k%02d-f%02d-zoom" % [int(ks[i] * 100), int(fa[i] * 100)],
+				Rect2(0, 900, 540, 240))
 	return false

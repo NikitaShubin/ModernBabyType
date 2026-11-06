@@ -2922,21 +2922,23 @@ func _draw_own_kb() -> void:
 ## Отладка 25.10.2026: пальцы анимируются по РЕАЛЬНЫМ нажатиям (автор:
 ## «сделай пока для отладки анимацию реально нажимаемых, а не подлежа-
 ## щих нажиманию клавишь») — импульс в _flash, спад по HANDS_FALL_T.
-## Кисть ЦЕЛИКОМ ходит за работой (shift_goal). Покой рисуется всегда.
+## Кисть ставится на клавишу внутри позы кадра (Hands.pose_of). Покой
+## рисуется всегда.
 
-# Кэш позы покоя: геометрия доски между кадрами неизменна, IK пяти
-# пальцев одной руки двигать каждый кадр лишний (~60 прямых).
+# Кэш позы покоя: геометрия доски между кадрами неизменна, а поза
+# покоя — запечённые данные плюс поправка на дом-клавиши; пересчитывать
+# её каждый кадр незачем.
 var _hands_rest: Dictionary = {}
 var _hands_key := ""
 # Кэш контуров (Hands.draw_both): поза не меняется — Clipper не гоняем.
 var _hands_cache: Dictionary = {}
 var _hands_bs: Array = []
 var _hands_pitch := 0.0
-# Импульсы реальных нажатий: {рука: {палец: [точка, ход 0..1, фаза,
-# ключ удержания]}}. Фаза +1 — влёт к клавише, 0 — ДЕРЖИМСЯ на ней
-# (зажатая клавиша: палец стоит, пока не отпустят), −1 — спад к покою;
-# точка хранится на весь цикл: спад идёт из КОНЕЧНОЙ точки, а не
-# рвётся мгновенно в дом.
+# Импульсы реальных нажатий: {рука: {палец: [подпись клавиши, ход 0..1,
+# фаза, ключ удержания]}}. Фаза +1 — влёт к клавише, 0 — ДЕРЖИМСЯ на
+# ней (зажатая клавиша: палец стоит, пока не отпустят), −1 — спад к
+# покою; подпись хранится на весь цикл — по ней берётся запечённая поза
+# и ею же кисть ставится на клавишу игры.
 var _hands_curs: Dictionary = {}
 # Зажатые сейчас клавиши (действия): {act: true}. Ставится при нажатии
 # (экран/мышь live, физический шифт), гасится при отпускании. Палец
@@ -2944,20 +2946,15 @@ var _hands_curs: Dictionary = {}
 # «зажатие шифта должно удерживать палец на кнопке. Да и с другими
 # кнопками должно быть так же»).
 var _hands_held: Dictionary = {}
-# Сдвиг КИСТИ ЦЕЛИКОМ: текущий и цель ({рука: Vector2}).
-var _hands_shifts: Dictionary = {}
-var _hands_shiftg: Dictionary = {}
 # Демонстрация подсказки: пока она висит, палец ходит к клавише и
 # обратно (автор 27.10.2026: «пусть они анимируют движение во время
-# подсказок и реальных нажатий»). Цели строятся ОДИН РАЗ на смену
-# набора (shift_goal решает IK), дальше каждый кадр едет только фаза.
-var _hands_hint: Dictionary = {}     # {рука: {палец: точка нажатия}}
-var _hands_hint_sh: Dictionary = {}  # {рука: Vector2} цель сдвига кисти
+# подсказок и реальных нажатий»). Цели — ПОДПИСИ клавиш, строятся ОДИН
+# РАЗ на смену набора; поза и посадка на клавишу считаются по ним.
+var _hands_hint: Dictionary = {}     # {рука: {палец: подпись клавиши}}
 var _hands_hint_sig := ""            # набор подсказки (подпись)
 var _hands_hint_t := 0.0             # фаза цикла демонстрации, с
 const HANDS_RISE_T := 0.06  # влёт пальца к клавише
 const HANDS_FALL_T := 0.18  # спад от клавиши к покою
-const HANDS_SHIFT := 9.0    # ход кисти за работой, питчей в секунду
 
 
 ## Поза покоя обеих кистей над ДАННОЙ доской. Пересчёт только на смену
@@ -3005,58 +3002,47 @@ func _hands_hit(sig: String) -> void:
 		key = "↵"
 	elif sig == "пробел":
 		key = "пробел:Л" if last_hand == "П" else "пробел:П"
+	key = Hands.key_label(key)
 	var hf := Hands.finger_of(key)
 	if hf[0] < 0:
 		return
 	var h: int = hf[0]
 	var f: int = hf[1]
-	var rt := Hands.rest_tip(rest, h, f)
-	var contact := Hands.press_point(_hands_bs, key, rt)
-	var pg := Hands.press_goal(_hands_bs, key, rt)
-	if pg == Vector2.ZERO or contact == Vector2.ZERO:
+	if not (HandsPoses.PRESS[Hands.side_name(h)] as Dictionary).has(key):
 		return
 	var curs: Dictionary = _hands_curs.get(h, {}) as Dictionary
 	_hands_curs[h] = curs
 	# Повторное нажатие в спаде продолжает с текущей фазы — палец
 	# «переезжает» на новую клавишу, а не телепортируется с места.
-	var prev: Array = curs.get(f, [pg, 0.0, 1]) as Array
+	var prev: Array = curs.get(f, [key, 0.0, 1]) as Array
 	# Четвёртый элемент — действие удержания: пока оно в _hands_held,
 	# фаза держится 0 (палец стоит на клавише), а не уходит в спад.
-	curs[f] = [pg, clampf(prev[1] as float, 0.0, 1.0), 1, sig]
-	# Кисть догоняет работу целиком (решение — по КОНТАКТУ: просадка
-	# поглощается распрямлением пальца, ход кисти от неё не зависит).
-	_hands_shiftg[h] = Hands.shift_goal(rest, h, f, contact,
-		_hands_pitch)
+	curs[f] = [key, clampf(prev[1] as float, 0.0, 1.0), 1, sig]
 
 
 ## Цели демонстрации подсказки: для каждой подсвеченной клавиши — её
-## палец, контакт на клавише и ход кисти. Строится на СМЕНУ набора:
-## press_point и shift_goal решают IK, каждый кадр их звать нельзя.
+## палец и подпись. Строится на СМЕНУ набора: поза нажатия берётся по
+## подписи, каждый кадр её искать нельзя.
 func _hands_hint_build(hi: Array) -> void:
 	_hands_hint.clear()
-	_hands_hint_sh.clear()
 	for s in hi:
-		var key := String(s)
+		var key := Hands.key_label(String(s))
 		var hf := Hands.finger_of(key)
 		if (hf[0] as int) < 0:
 			continue
 		var h: int = hf[0]
 		var f: int = hf[1]
-		var rt := Hands.rest_tip(_hands_rest, h, f)
-		var contact := Hands.press_point(_hands_bs, key, rt)
-		if contact == Vector2.ZERO:
+		if not (HandsPoses.PRESS[Hands.side_name(h)] as Dictionary).has(key):
 			continue
 		var per: Dictionary = _hands_hint.get(h, {}) as Dictionary
-		per[f] = contact
+		per[f] = key
 		_hands_hint[h] = per
-		_hands_hint_sh[h] = Hands.shift_goal(_hands_rest, h, f,
-			contact, _hands_pitch)
 
 
-## Цикл кистей: фазы импульсов (влёт/спад), демонстрация подсказки и
-## догон сдвига кисти. True — есть движение (следующий кадр нужен).
-## Подсказка ведёт руку только пока человек молчит; реальное нажатие
-## перекрывает её на своём пальце.
+## Цикл кистей: фазы импульсов (влёт/спад) и демонстрация подсказки.
+## True — есть движение (следующий кадр нужен). Подсказка ведёт руку
+## только пока человек молчит; реальное нажатие перекрывает её на своём
+## пальце.
 func _hands_tick(dt: float, area: Rect2, enter: bool, hi: Array) -> bool:
 	var rest := _hands_rest_ready(area, enter)
 	if rest.is_empty() or _hands_pitch <= 0.0:
@@ -3076,8 +3062,6 @@ func _hands_tick(dt: float, area: Rect2, enter: bool, hi: Array) -> bool:
 	if not _hands_hint.is_empty():
 		_hands_hint_t = fposmod(_hands_hint_t + dt, Hands.HINT_CYCLE_T)
 		moved = true
-	var hd := Hands.hint_depth(_hands_hint_t) \
-		if not _hands_hint.is_empty() else 0.0
 	for h in [Hands.LEFT, Hands.RIGHT]:
 		if _hands_curs.has(h):
 			var curs: Dictionary = _hands_curs[h]
@@ -3115,21 +3099,6 @@ func _hands_tick(dt: float, area: Rect2, enter: bool, hi: Array) -> bool:
 					moved = true
 			if curs.is_empty():
 				_hands_curs.erase(h)
-				# Рука свободна: ведёт подсказка (ход гаснет вместе с
-				# фазой), иначе — покой.
-				_hands_shiftg[h] = (_hands_hint_sh.get(h,
-					Vector2.ZERO) as Vector2) * hd
-		else:
-			# Рука ничего не жмёт, но подсказка может её вести.
-			_hands_shiftg[h] = (_hands_hint_sh.get(h,
-				Vector2.ZERO) as Vector2) * hd
-		var sh: Vector2 = _hands_shifts.get(h, Vector2.ZERO)
-		var sgoal: Vector2 = _hands_shiftg.get(h, Vector2.ZERO)
-		if not sh.is_equal_approx(sgoal):
-			var nxt := sh.move_toward(sgoal,
-				dt * HANDS_SHIFT * _hands_pitch)
-			moved = true
-			_hands_shifts[h] = nxt
 	return moved
 
 
@@ -3164,8 +3133,8 @@ func _draw_hands(area: Rect2) -> void:
 	if rest.is_empty() or _hands_pitch <= 0.0:
 		return
 	var ink := Ui.INK_NIGHT if night else Ui.INK_DAY
-	Hands.draw_both(self, rest, _hands_presses(), _hands_pitch, ink,
-		_hands_shifts, _hands_cache)
+	Hands.draw_both(self, _hands_bs, rest, _hands_presses(), ink,
+		_hands_cache)
 
 
 

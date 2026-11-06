@@ -1,25 +1,67 @@
 extends SceneTree
-## Скелет кистей — ЧИСТАЯ 3D-КИНЕМАТИКА (26.10.2026), headless не рисует:
-## карта палец↔клавиша покрывает ВСЮ доску; кости —антропометрия и НЕ
-## растягиваются в FK/IK; покой выведен ИЗ АНАТОМИИ — корни пястной дуги
-## НИЖЕ кончиков (пальцы растут от ладони), пястная дуга выпукла к клави-
-## шам и НЕ дотягивается до цифрового ряда; пресс — аргмин отклонений от
-## покоя, цели в 3D (z живёт в механике); обе кисти симметричны модельно.
-## Пробы каждого правила: правило ломается руками — тест краснеет со
-## своим сообщением (правило этого репозитория).
+## КИСТИ НАД ДОСКОЙ — ПРОЕКЦИЯ 3D-МОДЕЛИ ИССЛЕДОВАНИЯ (tools/hand3d).
 ##
-## Геометрия доски: живой узел не нужен — buttons() чистый. Окно
-## ставим (headless по умолчанию 64×64 — доска вырожденная).
+## Автор 04.11.2026: «это должны быть те самые руки из 3д», а 05.11.2026
+## назвал два дефекта проекции: короткие предплечья-обрубки и «шишах» на
+## стороне большого пальца у запястья. Оба чинились НА УРОВНЕ МОДЕЛИ,
+## поэтому тест держит именно унаследованное:
+##
+##   1. Ладонь с предплечьем — ЗАПЕЧЁННЫЙ полярный контур поля
+##      (hands_shape.gd), предплечье уходит ЗА КРАЙ ЭКРАНА в любой позе:
+##      контур пересекает границу экрана ровно дважды, а не заканчивается
+##      обрубком внутри. Радиусы гладкие (шишах — это скачок радиуса).
+##   2. Пальцы — ленты из FK модели: ширина ленты = 2·радиус кожи,
+##      все суставы внутри, соседние пальцы не слипаются в рукавицу,
+##      подушечки стоят на своих клавишах в КАЖДОЙ запечённой позе.
+##   3. Зеркало: правая кисть — отражение левой (ось — дом-группа «ф»↔«ж»).
+##   4. Демонстрация подсказки — чистая фаза (подъём/выдержка/спад/пауза).
+##
+## Каждая проверка сформулирована так, чтобы сломанное правило краснело
+## (правило репозитория: тест, который никогда не падает, бесполезен).
+##
+## Headless картинку не рисует — все меры ЧИСТЫЕ и меряются числом.
+## Окно ставим руками: по умолчанию 64×64, доска на нём вырожденная.
 
 const KB_FRAC := 0.46
+const Shape := preload("res://scripts/hands_shape.gd")
+
+## Экраны, на которых кисти обязаны вести себя одинаково: телефон
+## портретом, телефон альбомом и десктопное окно.
+const SCREENS := [[540.0, 1140.0], [1140.0, 540.0], [1600.0, 1000.0]]
 
 
 func _initialize() -> void:
 	main_window_setup()
 	_hands_test()
+	_painter = Painter.new()
+	_painter.bs = _board_at(540.0, 1140.0)
+	_painter.rest = Hands.rest_both(_painter.bs)
+	root.add_child(_painter)
+
+
+var _painter: Painter = null
+var _frame := 0
+
+
+## Рисование проверяется КАДРОМ (см. Painter): ждём его _draw и только
+## потом судим кэш.
+func _process(_dt: float) -> bool:
+	_frame += 1
+	if _painter == null or not _painter.done:
+		if _frame > 30:
+			_check(false, "draw_both draws within 30 frames")
+			quit(1)
+			return true
+		return false
+	_check(_painter.keys1.size() == 1, "draw_both fills the contour cache")
+	_check(_painter.keys1 == _painter.keys2,
+		"draw_both reuses the cache key")
+	_check(_painter.keys3.size() == 1,
+		"a new press replaces the cached pose")
 	if _fails == 0:
 		print("HANDS_TEST: PASS")
 	quit(0 if _fails == 0 else 1)
+	return true
 
 
 var _fails := 0
@@ -36,34 +78,41 @@ func _check(ok: bool, msg: String) -> void:
 		_fails += 1
 
 
-func _board() -> Array:
-	var wh := root.size
-	var m := 16.0 + Ui.bottom_inset(float(wh.y))
-	var hmax := maxf(160.0, (float(wh.y) - m) * KB_FRAC)
-	var w := float(wh.x) - 32.0
-	var h := Kbd.height_for(w)
-	if h > hmax:
-		w = clampf(Kbd.width_for(hmax), 240.0, float(wh.x) - 32.0)
-		h = Kbd.height_for(w)
-	return Kbd.buttons(Rect2((float(wh.x) - w) * 0.5, float(wh.y) - h - m, w, h), false, false)
+## Доска игры при данном окне: та же арифметика, что у main/hands_sandbox.
+func _board_at(w: float, h: float) -> Array:
+	var m := 16.0 + Ui.bottom_inset(h)
+	var hmax := maxf(160.0, (h - m) * KB_FRAC)
+	var bw := w - 32.0
+	var bh := Kbd.height_for(bw)
+	if bh > hmax:
+		bw = clampf(Kbd.width_for(hmax), 240.0, w - 32.0)
+		bh = Kbd.height_for(bw)
+	return Kbd.buttons(Rect2((w - bw) * 0.5, h - bh - m, bw, bh),
+		false, false)
 
 
 func _hands_test() -> void:
-	var bs: Array = _board()
+	var bs: Array = _board_at(540.0, 1140.0)
 	_check(Hands.pitch_of(bs) > 0.0, "pitch from buttons is positive")
 	_map_covers_board(bs)
 	_map_spot_checks(bs)
-	_ik_invariants(bs)
-	_fk_stability_checks(bs)
-	_rest_anatomy_checks(bs)
-	_energy_checks(bs)
-	_micro_checks(bs)
-	_mirror_checks(bs)
+	_shape_data_checks()
+	for s in SCREENS:
+		var sc: Array = s as Array
+		var w := float(sc[0])
+		var hh := float(sc[1])
+		var board := _board_at(w, hh)
+		var tag := "%dx%d" % [int(w), int(hh)]
+		_check(Hands.pitch_of(board) > 0.0, "pitch is positive at " + tag)
+		_palm_checks(board, Vector2(w, hh), tag)
+		_finger_checks(board, tag)
+		_mirror_checks(board, tag)
 	_press_checks(bs)
-	_z_checks(bs)
 	_hint_checks(bs)
-	_contour_checks(bs)
+	_outline_checks(bs)
 
+
+## ---------------------------------------------------------------- карта
 
 ## Каждая клавиша ДОСКИ имеет палец: карта не может отстать от
 ## раскладки — новая клавиша без пальца должна ломать тест.
@@ -88,705 +137,375 @@ func _map_spot_checks(bs: Array) -> void:
 	_check(Hands.finger_of("б") == [Hands.RIGHT, Hands.MIDDLE],
 		"б is right middle (key , is under the RIGHT palm)")
 	_check(Hands.finger_of("ъ") == [Hands.RIGHT, Hands.PINKY], "ъ is right pinky")
-	_check(Hands.finger_of("Shift") == [Hands.LEFT, Hands.PINKY], "left shift is left pinky")
-	_check(Hands.finger_of("ShiftR") == [Hands.RIGHT, Hands.PINKY], "right shift is right pinky")
-	_check(Hands.finger_of("↵") == [Hands.RIGHT, Hands.PINKY], "enter is right pinky")
-	_check(Hands.finger_of("←") == [Hands.RIGHT, Hands.PINKY], "backspace is right pinky")
+	_check(Hands.finger_of("Shift") == [Hands.LEFT, Hands.PINKY],
+		"left shift is left pinky")
+	_check(Hands.finger_of("ShiftR") == [Hands.RIGHT, Hands.PINKY],
+		"right shift is right pinky")
+	_check(Hands.finger_of("↵") == [Hands.RIGHT, Hands.PINKY],
+		"enter is right pinky")
+	_check(Hands.finger_of("←") == [Hands.RIGHT, Hands.PINKY],
+		"backspace is right pinky")
 	_check(Hands.finger_of("4") == [Hands.LEFT, Hands.INDEX], "4 is left index")
 	_check(Hands.finger_of("5") == [Hands.LEFT, Hands.INDEX], "5 is left index")
 	_check(Hands.finger_of("6") == [Hands.RIGHT, Hands.INDEX], "6 is right index")
 	_check(Hands.finger_of("7") == [Hands.RIGHT, Hands.INDEX], "7 is right index")
+	_check(Hands.finger_of("пробел:Л") == [Hands.LEFT, Hands.THUMB],
+		"left space half is the left thumb")
+	_check(Hands.finger_of("пробел:П") == [Hands.RIGHT, Hands.THUMB],
+		"right space half is the right thumb")
+	# key_label — подпись ДОСКИ. Кириллица остаётся собой (иначе
+	# двусторонняя RU_EN уводит «м» в латинскую «v», и поза нажатия
+	# ищется не там — ловил combo_test 05.11.2026).
+	_check(Hands.key_label("м") == "м", "key_label keeps a Cyrillic letter")
+	_check(Hands.key_label("М") == "м", "key_label lowercases a capital")
+	_check(Hands.key_label("v") == "м", "key_label maps a Latin key to its Russian pair")
+	_check(Hands.key_label("Shift") == "Shift", "key_label keeps a service label")
+	_check(Hands.key_label("пробел:Л") == "пробел:Л",
+		"key_label keeps the space half")
+	_check(Hands.key_label(" ") == " ", "key_label keeps the bare space")
 
 
-## FK/IK в 3D: кости НЕ растягиваются никогда (длина сегмента по Vector3);
-## достижимая цель достигается; недостижимая — цепь в струну ровно на Σbones.
-func _ik_invariants(bs: Array) -> void:
-	var pitch := Hands.pitch_of(bs)
-	_check(pitch > 0.0, "pitch positive before IK")
-	_check(Hands.BONES_MM.keys().size() == 5, "BONES_MM covers five fingers")
-	# DOF-карта: четыре пальца — 4 угла, большой — 5 (поворот CMC).
-	for f in [Hands.THUMB, Hands.INDEX, Hands.MIDDLE, Hands.RING, Hands.PINKY]:
-		_check(Hands._dof_count(f) == (5 if f == Hands.THUMB else 4),
-			"f=%d has the right DOF count (%d)" % [f, Hands._dof_count(f)])
-		_check((Hands.JOINT_LIMITS[f] as Array).size() == Hands._dof_count(f),
-			"f=%d JOINT_LIMITS cover every DOF" % f)
-		_check((Hands.REST_PRIOR[f] as Array).size() == Hands._dof_count(f),
-			"f=%d REST_PRIOR covers every DOF" % f)
-	_check((Hands.JOINT_W_THUMB as Array).size() == 5,
-		"thumb weights cover five DOF")
-	for f in [Hands.THUMB, Hands.INDEX, Hands.MIDDLE, Hands.RING, Hands.PINKY]:
-		var bones := Hands.bones_px(f, pitch)
-		_check(bones.size() == 3, "f=%d chain has three segments" % f)
-		var reach := 0.0
-		for b in bones:
-			reach += b as float
-		var root := Vector3(120.0, 800.0, reach * 0.3)
-		# Достижимо: цель ПОРОВДАНА ФК — берём суставы в середине диапа-
-		# зонов (анатомическая поза), ГК даёт честно достижимый кончик;
-		# решатель обязан найти его ИЗ покоя (легко: покой — тоже доез-
-		# жающая поза, в отличие от синтетической диагонали вне конуса,
-		# по пределам сустава недостижимой — ловлено 26.10.2026).
-		var probe: Array = [0.30, 0.0, 0.45, 0.35]
-		if f == Hands.THUMB:
-			probe = [0.30, 0.0, 1.20, 0.35, 0.30]
-		var fk: Array = Hands.fk_chain(root, bones, probe, f, 1.0)
-		var goals := [
-			["fk_target", fk[3]],
-		]
-		for case in goals:
-			var res: Array = Hands.ik_chain(root, bones,
-				case[1] as Vector3,
-				Hands.REST_PRIOR[f], Hands.REST_PRIOR[f], f, 1.0)
-			var pts: Array = res[1] as Array
-			_check(pts.size() == 4,
-				"%s f=%d chain is root+3 joints" % [case[0], f])
-			for i in 3:
-				var seg: float = (pts[i + 1] as Vector3).distance_to(
-					pts[i] as Vector3)
-				_check(absf(seg - (bones[i] as float)) < 0.002,
-					"%s f=%d bone %d keeps its length (%.4f vs %.4f)" % [
-						case[0], f, i, seg, bones[i]])
-			var tip: Vector3 = pts[3]
-			# Допуск = 2·σ решателя: энергия уравновешивает доезд с
-			# сгибом отклонения от покоя, и решатель даёт err ≤ ~2σ.
-			_check(tip.distance_to(case[1] as Vector3)
-				< 2.0 * Hands.SOLVE_SIG * reach,
-				"%s f=%d tip reaches the target (err %.4f, tol %.4f)" % [
-					case[0], f, tip.distance_to(case[1] as Vector3),
-					2.0 * Hands.SOLVE_SIG * reach])
-		# Недостижимо: кончик на Σbones в струну от корня.
-		var far := root + Vector3(reach * 2.4, 0.0, 0.0)
-		var res2: Array = Hands.ik_chain(root, bones, far,
-			Hands.REST_PRIOR[f], Hands.REST_PRIOR[f], f, 1.0)
-		var tip2: Vector3 = (res2[1] as Array)[3]
-		_check(absf(tip2.distance_to(root) - reach) < 0.012 * reach,
-			"f=%d unreachable target stops the chain at full stretch (dist %.3f vs reach %.3f)" %
-				[f, tip2.distance_to(root), reach])
+## ------------------------------------------------------- данные запекания
 
-
-## FK сходится с самим собой: длина цепи из костей неизменна И FK честно
-## строит интервалы (нет морфинга точек). И разбор позы не меняет длину.
-func _fk_stability_checks(bs: Array) -> void:
-	var pitch := Hands.pitch_of(bs)
-	for f in [Hands.INDEX, Hands.MIDDLE, Hands.RING, Hands.PINKY]:
-		var bones := Hands.bones_px(f, pitch)
-		var root := Vector3(50.0, 900.0, 60.0)
-		for ang in [[0.5, 0.1, 1.0, 0.6], [1.0, -0.3, 1.4, 0.9]]:
-			var pts: Array = Hands.fk_chain(root, bones, ang, f, 1.0)
-			for i in 3:
-				var seg: float = (pts[i + 1] as Vector3).distance_to(
-					pts[i] as Vector3)
-				_check(absf(seg - (bones[i] as float)) < 1e-4,
-					"f=%d FK bone %d keeps length at %s (%.5f vs %.5f)" % [
-						f, i, str(ang), seg, bones[i]])
-	# Большой — свои 5 углов ([CMC, отведение, поворот, MCP, IP]); FK
-	# остаётся честным по костям и при повёрнутой плоскости дистали.
-	var tb: Array = Hands.bones_px(Hands.THUMB, pitch)
-	var troot := Vector3(70.0, 880.0, 60.0)
-	for tang in [Hands.REST_PRIOR[Hands.THUMB],
-			[0.5, 0.1, 1.6, 1.2, 1.0]]:
-		var tp: Array = Hands.fk_chain(troot, tb, tang, Hands.THUMB, 1.0)
-		for i in 3:
-			var seg: float = (tp[i + 1] as Vector3).distance_to(
-				tp[i] as Vector3)
-			_check(absf(seg - (tb[i] as float)) < 1e-4,
-				"thumb FK bone %d keeps length at %s (%.5f vs %.5f)" % [
-					i, str(tang), seg, tb[i]])
-
-
-## Покой выведен ИЗ АНАТОМИИ (26.10.2026): пять пальцев; кончики hover
-## над своими дом-клавишами; КОРНИ НИЖЕ кончиков (пальцы растут от ла-
-## дони, не против неё); пястная дуга ВЫПУКЛА К КЛАВИШАМ (средний ко-
-## рень выше хорды указательный-мизинец); запястье ниже пясти; высоты
-## кончиков — hover из констант (пальцы ВИСЯТ, не лежат).
-func _rest_anatomy_checks(bs: Array) -> void:
-	var pitch := Hands.pitch_of(bs)
-	var pose := Hands.rest_both(bs)
-	_check(pose.has(Hands.LEFT) and pose.has(Hands.RIGHT), "both hands rest")
-	for h in [Hands.LEFT, Hands.RIGHT]:
-		var p: Dictionary = pose[h]
-		var fl: Dictionary = p["fingers"]
-		_check(fl.size() == 5, "hand %d rests with 5 fingers" % h)
-		var home_map: Dictionary = Hands.HOME_KEY[h]
-		for f in [Hands.INDEX, Hands.MIDDLE, Hands.RING, Hands.PINKY]:
-			var fd: Dictionary = fl[f]
-			var chain: Array = fd["chain"]
-			_check(chain.size() == 4, "hand %d f=%d chain has 4 joints" % [h, f])
-			var tip: Vector3 = chain[3]
-			var root: Vector3 = chain[0]
-			var kr := Hands.key_rect(bs, String(home_map[f]))
-			_check(kr.size.x > 0.0, "home key of hand %d f=%d on the board" % [h, f])
-			var contact := Hands.press_point(bs, String(home_map[f]),
-				Vector2.ZERO)
-			# Кончик НА клавише и у её центра (веер: не больше трети).
-			_check(kr.has_point(Vector2(tip.x, tip.y)),
-				"hand %d f=%d tip touches its home key" % [h, f])
-			_check(Vector2(tip.x, tip.y).distance_to(contact) < 0.35 * pitch,
-				"hand %d f=%d tip near its home key center (%.2f)" % [
-					h, f, Vector2(tip.x, tip.y).distance_to(contact)])
-			# Кончик ВИСИТ на hover-высоте из константы (не прилип).
-			var zt: float = Hands.Z_TIP
-			var want := absf(tip.z - zt * pitch)
-			_check(want < 0.05 * pitch,
-				"hand %d f=%d tip hovers at Z_TIP (%.2f vs %.2f)" % [
-					h, f, tip.z, zt * pitch])
-			# Корень НИЖЕ кончика по экрану (пальцы растут от ладони —
-			# жалоба автора 26.10.2026 на пальцы «наоборот»).
-			_check(root.y > tip.y + 0.9 * pitch,
-				"hand %d f=%d knuckle sits BELOW the tip (%.1f vs %.1f)" % [
-					h, f, root.y, tip.y])
-			# Пясть ВЫШЕ кончика по З (рука приподнята над доской).
-			_check(root.z > tip.z + 0.8 * pitch,
-				"hand %d f=%d knuckle is above the tip in z (%.2f vs %.2f)" % [
-					h, f, root.z, tip.z])
-		# Пястная дуга ВЫПУКЛА К КЛАВИШАМ: корень среднего ближе к клави-
-		# шам (меньше y), чем хорда указательный–мизинец в его точке.
-		for f_thr in [Hands.THUMB]:
-			var chain2: Array = (fl[f_thr] as Dictionary)["chain"]
-			var tip2: Vector3 = chain2[3]
-			var half := Hands.sig_rect(bs,
-				"пробел:Л" if h == Hands.LEFT else "пробел:П")
-			_check(half.has_point(Vector2(tip2.x, tip2.y)),
-				"hand %d thumb touches its space half" % h)
-			# Большой — 5 DOF; поворот (оппозиция) уже в покое ВКЛЮ-
-			# ЧЁН: дисталь смотрит в ладонь, иначе он не достаёт пробел.
-			var tang: Array = (fl[f_thr] as Dictionary)["angles"]
-			_check(tang.size() == 5,
-				"hand %d thumb rests with 5 DOF" % h)
-			_check((tang[2] as float) > 0.05,
-				"hand %d thumb rest keeps the opposition twist (%.3f)" % [
-					h, tang[2]])
-			# Подушечка большого почти ЛЕЖИТ на пробеле (0.08 питча);
-			# допуск щедрый на руки (2.3 vs 4.7 px у пары) — анимация
-			# лерп к нажатию всё равно ведёт в z = Z_PRESS.
-			_check(absf(tip2.z - Hands.Z_TIP_THUMB * pitch) < 0.15 * pitch,
-				"hand %d thumb rests near Z_TIP_THUMB (%.2f vs %.2f)" % [
-					h, tip2.z, Hands.Z_TIP_THUMB * pitch])
-		var roots: Dictionary = {}
-		for f2 in [Hands.INDEX, Hands.MIDDLE, Hands.RING, Hands.PINKY]:
-			roots[f2] = (((fl[f2] as Dictionary)["chain"]) as Array)[0]
-		var rp: Vector3 = roots[Hands.PINKY]
-		var rm: Vector3 = roots[Hands.MIDDLE]
-		var ri: Vector3 = roots[Hands.INDEX]
-		# Выпуклость в ПЛАНЕ (x, y): корень среднего ВЫШЕ хорды
-		# указательный–мизинец, взятой в его точке (меньше y — ближе
-		# к клавишам: средняя пястная точка кисти выдвинута вперёд).
-		var ab := Vector2(ri.x, ri.y) - Vector2(rp.x, rp.y)
-		var t := (Vector2(rm.x, rm.y) - Vector2(rp.x, rp.y)).dot(ab) / \
-			ab.length_squared()
-		var cy := Vector2(rp.x, rp.y) + ab * t
-		_check(rm.y < cy.y,
-			"hand %d palm arc is convex to the keys (middle above the index-pinky chord)" % h)
-		_check((p["wrist"] as Vector2).y > p["knuckle_y"],
-			"hand %d wrist sits below the knuckles" % h)
-
-
-## Энергетическая модель: покой — аргмин нулевой энергии (решатель,
-## получив кончик покоя, возвращает те же углы); прессы соседних кла-
-## виш доезжают точно и в пределах гибкости (мягкий штраф: допуск
-## 0.12 рад за границей).
-func _energy_checks(bs: Array) -> void:
-	var pitch := Hands.pitch_of(bs)
-	var pose := Hands.rest_both(bs)
-	for h in [Hands.LEFT, Hands.RIGHT]:
-		var fingers: Dictionary = (pose[h] as Dictionary)["fingers"]
-		for f in [Hands.THUMB, Hands.INDEX, Hands.MIDDLE, Hands.RING,
-				Hands.PINKY]:
-			var fd: Dictionary = fingers[f]
-			var chain: Array = fd["chain"]
-			var bones: Array = Hands.bones_px(f, pitch)
-			var r: Array = fd["angles"]
-			var tip: Vector3 = chain[3]
-			var root: Vector3 = chain[0]
-			# Покой — устойчивая точка решателя: цель = покойному кон-
-			# чику, кончик возвращается НА ТО ЖЕ МЕСТО, углы не убега-
-			# ют (пологая долина позволяет небольшой дрейф по углам —
-			# меряется потолком, скачок ловится).
-			var back: Array = Hands.ik_chain(root, bones, tip, r, r,
-				f, Hands.side_of(h))
-			var bangs: Array = back[0] as Array
-			var n: int = (r as Array).size()
-			var back_tip: Vector3 = (back[1] as Array)[3]
-			_check(back_tip.distance_to(tip) < 0.06 * pitch,
-				"hand %d f=%d rest re-solve keeps the tip in place (err %.2f px)" % [
-					h, f, back_tip.distance_to(tip)])
-			for i in n:
-				var dgl: float = absf(Hands._angdiff(
-					bangs[i] as float, r[i] as float))
-				# Потолок 0.6 рад — от замера: покой большого стоит на
-				# углах пределов, и re-solve гуляет по пологой долине
-				# (кончик при этом стоит — верхняя проверка). Ловит
-				# структурные скачки, а не естественный дрейф.
-				_check(dgl < 0.6,
-					"hand %d f=%d rest target does not wander the pose (dof %d drift %.4f)" % [
-						h, f, i, dgl])
-			# Свои прессы: карта решает, кто жмёт; ход кисти — как в игре.
-			var sigs: Array = []
-			if f == Hands.THUMB:
-				for s in ["пробел:Л", "пробел:П", "глобус"]:
-					if Hands.finger_of(String(s))[0] == h:
-						sigs.append(s)
-			else:
-				for key_id_v in _letter_sigs(bs):
-					var fs: Array = Hands.finger_of(String(key_id_v))
-					if fs[0] == h and fs[1] == f:
-						sigs.append(key_id_v)
-			var lim: Array = Hands.JOINT_LIMITS[f]
-			for key_id_v in sigs:
-				var key_id := String(key_id_v)
-				var c2: Vector2 = Hands.press_point(bs, key_id,
-					Vector2(tip.x, tip.y))
-				if c2 == Vector2.ZERO:
+## Запечённый контур обязан покрывать ВСЕ позы и все позы — целиком:
+## пропавшая поза иначе тихо откатывалась бы к покою.
+func _shape_data_checks() -> void:
+	_check(Shape.N == 256, "baked contour has 256 rays (%d)" % Shape.N)
+	_check((Shape.CENTER as Vector2).is_finite(), "baked centre is finite")
+	for side in ["L", "R"]:
+		var table: Dictionary = Shape.RADII[side] as Dictionary
+		var presses: Dictionary = HandsPoses.PRESS[side] as Dictionary
+		_check(table.size() == presses.size() + 1,
+			"%s: baked %d poses for %d presses + rest" % [side,
+				table.size(), presses.size()])
+		_check(table.has(""), "%s: rest pose is baked" % side)
+		var bad := 0
+		var bump := 0
+		var bump_pose := ""
+		var worst := 0.0
+		for k in table.keys():
+			var a: Array = table[k] as Array
+			if a.size() != Shape.N:
+				bad += 1
+				continue
+			for v in a:
+				var f := float(v)
+				if not is_finite(f) or f <= 0.0:
+					bad += 1
+				worst = maxf(worst, f)
+			# ШИШАХ (автор 05.11.2026) — ЛОКАЛЬНЫЙ выступ или вмятина на
+			# ладони: радиус вырос и тут же упал. Такого нет ни в одной
+			# запечённой позе — иначе дефект вернулся бы в большинстве
+			# поз, как и было до правки модели.
+			var b := 0
+			for i in Shape.N:
+				var x := float(a[(i - 1 + Shape.N) % Shape.N])
+				var y := float(a[i])
+				var z := float(a[(i + 1) % Shape.N])
+				if maxf(maxf(x, y), z) >= 95.0:
 					continue
-				var shift: Vector2 = Hands.shift_goal(pose, h, f, c2,
-					pitch)
-				var sroot: Vector3 = root + Vector3(shift.x, shift.y, 0.0)
-				var tgt: Vector3 = Vector3(c2.x, c2.y,
-					Hands.Z_PRESS * pitch)
-				var res: Array = Hands.ik_chain(sroot, bones, tgt, r, r,
-					f, Hands.side_of(h))
-				var ptip: Vector3 = (res[1] as Array)[3]
-				var err: float = ptip.distance_to(tgt)
-				# Порог = семантике пробы хода (PRESS_TOL): сдвиг принят
-				# ровно тогда, когда проба доезжает с этой точностью.
-				_check(err < Hands.PRESS_TOL * pitch,
-					"hand %d f=%d press of '%s' reaches (3D err %.2f px)" %
-						[h, f, key_id, err])
-				var pans: Array = res[0] as Array
-				for i in n:
-					var ang: float = pans[i] as float
-					var l2: Vector2 = lim[i]
-					_check(ang >= l2.x - 0.12 and ang <= l2.y + 0.12,
-						"hand %d f=%d press of '%s' dof %d within flexibility (%.2f in [%.2f..%.2f])" % [
-							h, f, key_id, i, ang, l2.x, l2.y])
-				# Оппозиция большого: пресс ПРОБЕЛА РАСКРУЧИВАЕТ дисталь
-				# (поворот > 0.05) — без поворота седловидный CMC не ра-
-				# ботает (ловлено 26.10.2026: без DOF хорда недостижима).
-				# «Глобус» жмётся выпрямленным большим — без оппозиции.
-				if f == Hands.THUMB and key_id.begins_with("пробел"):
-					var tw: float = pans[2] as float
-					_check(tw > 0.05,
-						"hand %d thumb press engages the opposition twist (%.3f)" % [
-							h, tw])
+				if (y > x + 1.5 and y > z + 1.5) or (y < x - 1.5 and y < z - 1.5):
+					b += 1
+			if b > 0:
+				bump += 1
+				if bump_pose == "":
+					bump_pose = String(k)
+		_check(bump == 0,
+			"%s: no bump or notch on the palm in any baked pose (%d poses, e.g. '%s')"
+			% [side, bump, bump_pose])
+		_check(bad == 0, "%s: every baked ray is a positive number (%d bad)"
+			% [side, bad])
+		_check(worst > 300.0,
+			"%s: the forearm reaches far past the wrist (%.0f mm)" % [side, worst])
 
 
-## Микроработа суставов (26.10.2026, модель глубокого покоя): в покое
-## дистальные суставы У ПОТОЛКА анатомии (PIP/DIP ~1.6..1.75 рад), по-
-## тому «согнуть сильнее в доску» кисть не может — и решатель этого и
-## не требует: пресс-глубина идёт ОТ ПЯСТИ (MCP сгиб растёт, дистали
-## почти на месте), а разгиб (кончик дальше от корня) идёт ДИСТАЛОМ
-## (PIP/DIP раскрываются раньше пястного). Выровненные веса дают кашу
-## без этих фокусов — ловятся обеими пробами.
-func _micro_checks(bs: Array) -> void:
-	var pitch := Hands.pitch_of(bs)
-	var pose := Hands.rest_both(bs)
-	for h in [Hands.LEFT, Hands.RIGHT]:
-		var fingers: Dictionary = (pose[h] as Dictionary)["fingers"]
-		for f in [Hands.INDEX, Hands.MIDDLE, Hands.RING, Hands.PINKY]:
-			var fd: Dictionary = fingers[f]
-			var r: Array = fd["angles"]
-			var bones: Array = Hands.bones_px(f, pitch)
-			var tip: Vector3 = (fd["chain"] as Array)[3]
-			var root: Vector3 = (fd["chain"] as Array)[0]
-			var reach := 0.0
-			for bn in bones:
-				reach += bn as float
-			var axis := (tip - root).normalized()
-			# Пресс: цель глубже по z при том же xy — пястный сгиб
-			# растёт, дистали расходятся меньше (они у потолка).
-			var press_t := tip + Vector3(0.0, 0.0, -0.15 * pitch)
-			var res: Array = Hands.ik_chain(root, bones, press_t, r, r,
-				f, Hands.side_of(h))
-			var land: float = ((res[1] as Array)[3] as Vector3) \
-				.distance_to(press_t)
-			var dpip_extra := (res[0] as Array)[2] as float \
-				- (r[2] as float)
-			_check(land < 0.06 * pitch,
-				"hand %d f=%d pressed goal is reachable (err %.2f px)" % [
-					h, f, land])
-			# Пресс НЕ требует добора дистального сгиба: в покое PIP
-			# у потолка, глубину добирает пястный сгиб.
-			_check(dpip_extra < 0.05,
-				"hand %d f=%d press does not need extra PIP curl (%.3f)" % [
-					h, f, dpip_extra])
-			# Перезаход (цель дальше покоя) — дистальный открывается.
-			var overt := tip + axis * minf(0.15 * pitch,
-				(reach - tip.distance_to(root)) * 0.6)
-			var res2: Array = Hands.ik_chain(root, bones, overt, r, r, f,
-				Hands.side_of(h))
-			var dpip := absf(Hands._angdiff(
-				(res2[0] as Array)[2] as float, r[2] as float))
-			var ddip := absf(Hands._angdiff(
-				(res2[0] as Array)[3] as float, r[3] as float))
-			var dmcp2 := absf(Hands._angdiff(
-				(res2[0] as Array)[0] as float, r[0] as float))
-			_check(ddip + dpip + 0.35 >= dmcp2,
-				"hand %d f=%d micro-extension bends distal first (pip %.3f dip %.3f mcp %.3f)" % [
-					h, f, dpip, ddip, dmcp2])
+## ------------------------------------------------------- ладонь и предплечье
 
-
-## Симметрия: правая кисть — ТОЧНОЕ ЗЕРКАЛО анатомии левой. Мерило —
-## МОДЕЛЬНЫЙ скелет: вектор корень−кончик (3D) зеркалится по x, y и z
-## совпадают, покойные углы ПОДРАЗУМЕВАЮТСЯ ОДНИ И ТЕ ЖЕ. Клавишные
-## контакты на доске несимметричны — поэтому мир сверяем не по клавишам.
-## Ось зеркала — ЦЕНТР ДОМ-ГРУППЫ «ф»↔«ж» (как в diag_mirror.gd и как
-## считает цель большого в hands.gd): доска асимметрична по служебным
-## (слева Tab/Caps/Shift = 5.5 питча), а дом-клавиши зеркальны между
-## собой. Центр окна НЕ годится: цель большого от него не зеркальна.
-func _board_axis(bs: Array) -> float:
-	return 0.5 * ((Hands.key_rect(bs, "ф") as Rect2).get_center().x
-		+ (Hands.key_rect(bs, "ж") as Rect2).get_center().x)
-
-
-## Большой В ЦИКЛЕ ТОЖЕ: его зеркало держится на оси поворота (×m,
-## докстринг fk_chain) и на зеркале по построению (rest_both) —
-## долина twist'а плоская, сам спуск улп-шум разводит (26.10.2026).
-func _mirror_checks(bs: Array) -> void:
-	var pose := Hands.rest_both(bs)
-	var axs := _board_axis(bs)
-	# Негативная проба: ось зеркала — дом-группа, а НЕ центр экрана
-	# (цель большого считается от «ф»↔«ж»; от центра зеркало краснело
-	# на ~1.5 питча — ловится только живой парой значений).
-	var axs_win := root.size.x * 0.5
-	var th_l := (((pose[Hands.LEFT]["fingers"] as Dictionary)[
-		Hands.THUMB] as Dictionary)["chain"] as Array)[3] as Vector3
-	var th_r := (((pose[Hands.RIGHT]["fingers"] as Dictionary)[
-		Hands.THUMB] as Dictionary)["chain"] as Array)[3] as Vector3
-	_check(absf((th_l.x - axs_win) + (th_r.x - axs_win)) > 0.05,
-		"mirror axis is the home group, not the screen centre "
-			+ "(screen-centre probe must differ)")
-	var pl: Dictionary = pose[Hands.LEFT]
-	var pr: Dictionary = pose[Hands.RIGHT]
-	for f in [Hands.INDEX, Hands.MIDDLE, Hands.RING, Hands.PINKY,
-			Hands.THUMB]:
-		var lfd: Dictionary = (pl["fingers"] as Dictionary)[f]
-		var rfd: Dictionary = (pr["fingers"] as Dictionary)[f]
-		var lchain: Array = lfd["chain"]
-		var rchain: Array = rfd["chain"]
-		var loff: Vector3 = (lchain[0] as Vector3) - (lchain[3] as Vector3)
-		var roff: Vector3 = (rchain[0] as Vector3) - (rchain[3] as Vector3)
-		_check(absf(roff.x + loff.x) < 0.02,
-			"finger %d root offset mirrors by x (%.2f vs %.2f)" % [
-				f, roff.x, -loff.x])
-		_check(absf(roff.y - loff.y) < 0.02,
-			"finger %d root offset keeps y in both hands (%.2f vs %.2f)" % [
-				f, roff.y, loff.y])
-		_check(absf(roff.z - loff.z) < 0.02,
-			"finger %d root offset keeps z in both hands (%.2f vs %.2f)" % [
-				f, roff.z, loff.z])
-		# Кончик зеркален ТОЛЬКО у большого: его цели (четверти
-		# пробела) — зеркальная пара; дом-цели четырёх пальцев лежат
-		# на несимметричных столбцах ЙЦУКЕН (зеркало несут корневые
-		# смещения выше).
-		var ltip: Vector3 = lchain[3] as Vector3
-		var rtip: Vector3 = rchain[3] as Vector3
-		if f == Hands.THUMB:
-			_check(absf((ltip.x - axs) + (rtip.x - axs)) < 0.05,
-				"thumb tips mirror across the board axis (%.2f, %.2f)"
-					% [ltip.x - axs, rtip.x - axs])
-		# Покойные углы идентичны: анатомия оная, зеркало — в FK.
-		var lrest: Array = lfd["angles"]
-		var rrest: Array = rfd["angles"]
-		for i in Hands._dof_count(f):
-			var dl: float = absf(Hands._angdiff(
-				rrest[i] as float, lrest[i] as float))
-			_check(dl < 0.01,
-				"finger %d rest angle %d identical for both hands (%.4f)" % [
-					f, i, dl])
-
-
-## Правило касания пресса: малая клавиша — ЦЕНТР; большая — ближай-
-## ший край с отступом в половину малой клавиши. press_goal — КОН-
-## ТАКТ на плоскости, БЕЗ y-просадки: просадка теперь З (Z_PRESS) —
-## старое «просаживание по экрану» должно быть мертво. Ход кисти:
-## дом-цель стоит с места, низ дальнего столбца уводит кисть, после
-## хода палец СГНУТ (COMFY доли размаха).
-func _press_checks(bs: Array) -> void:
-	var pitch := Hands.pitch_of(bs)
-	var pose := Hands.rest_both(bs)
-	# Малая: центр ровно.
-	var center: Vector2 = Hands.press_point(bs, "а", Vector2.ZERO)
-	_check(center.distance_to(
-		(Hands.key_rect(bs, "а") as Rect2).get_center()) < 0.001,
-		"press of a small key is its exact center")
-	# Большая: без кончика — центр клавиши.
-	var sh := Hands.key_rect(bs, "Shift") as Rect2
-	var sg: Vector2 = Hands.press_point(bs, "Shift", Vector2.ZERO)
-	_check((sg - sh.get_center()).length() < 0.01,
-		"press of a big key without tip is its center")
-	var tip_inside := sh.get_center()
-	var sg2: Vector2 = Hands.press_point(bs, "Shift", tip_inside)
-	_check(sg2.x >= sh.position.x + 0.5 * pitch - 0.01
-		and sg2.x <= sh.end.x - 0.5 * pitch + 0.01,
-		"press of a big key clamps tip into the inset zone")
-	# press_goal — тот же контакт: просадка МЕРТВА по экрану
-	# (она ушла в высоту Z_PRESS), чистое тождество без увода.
-	var pg: Vector2 = Hands.press_goal(bs, "а", Vector2.ZERO)
-	_check((pg - center).length() < 0.01,
-		"press goal is the contact on the plane (dip moved into z)")
-	var pgc: Vector2 = Hands.press_goal(bs, "Shift", tip_inside)
-	_check((pgc - sg2).length() < 0.01,
-		"press goal of a big key matches press point")
-	# Пресс над далёкой клавишей решается (цели НЕ нулевые).
-	var pinky_tip: Vector3 = (((pose[Hands.LEFT]["fingers"] as Dictionary)[
-		Hands.PINKY] as Dictionary)["chain"] as Array)[3]
-	var far: Vector2 = Hands.press_goal(bs, "1",
-		Vector2(pinky_tip.x, pinky_tip.y))
-	_check(far != Vector2.ZERO, "free press goal resolves")
-	# Сдвиг кисти: дом-цель стоит с места; низ дальнего столбца уводит
-	# кисть ровно к работе; ЦИФРОВОЙ ряд — дальняя ветка с COMFY.
-	var pl: Dictionary = pose[Hands.LEFT]
-	var home_tip: Vector3 = (((pl["fingers"] as Dictionary)[
-		Hands.PINKY] as Dictionary)["chain"] as Array)[3]
-	var home_root: Vector3 = (((pl["fingers"] as Dictionary)[
-		Hands.PINKY] as Dictionary)["chain"] as Array)[0]
-	var home_contact: Vector2 = Hands.press_point(bs, "ф", Vector2.ZERO)
-	var home_shift: Vector2 = Hands.shift_goal(pose, Hands.LEFT,
-		Hands.PINKY, home_contact, pitch)
-	_check(home_shift.is_zero_approx(),
-		"home press does not demand a whole-hand shift")
-	var far_contact: Vector2 = Hands.press_point(bs, "я", Vector2.ZERO)
-	var far_shift: Vector2 = Hands.shift_goal(pose, Hands.LEFT,
-		Hands.PINKY, far_contact, pitch)
-	_check(far_shift.length() > 0.5 * pitch,
-		"bottom-row press moves the whole hand toward the key")
-	var tf: Vector2 = far_contact - Vector2(home_root.x, home_root.y)
-	_check(absf(Hands._angdiff(far_shift.angle(), tf.angle())) < 0.35,
-		"shift drives the hand straight toward the far key")
-	# Проба хода: БЕЗ хода мизинец «я» не доезжает (иначе ход не нужен).
-	var tgt: Vector3 = Vector3(far_contact.x, far_contact.y,
-		Hands.Z_PRESS * pitch)
-	var bones: Array = Hands.bones_px(Hands.PINKY, pitch)
-	var from_rest: Array = Hands.ik_chain(home_root, bones, tgt,
-		((pl["fingers"] as Dictionary)[Hands.PINKY]
-			as Dictionary)["angles"], [], Hands.PINKY,
-		Hands.side_of(Hands.LEFT))
-	var no_shift_err: float = ((from_rest[1] as Array)[3] as Vector3) \
-		.distance_to(tgt)
-	_check(no_shift_err >= Hands.PRESS_TOL * pitch,
-		"pinky 'я' genuinely needs the hand shift without it (err %.2f)" %
-			no_shift_err)
-	# После хода работающий палец СГНУТ (COMFY доли размаха), а не
-	# распрямлён — кисть не обязана прижимать палец в струну (3D).
-	# Правило ДАЛЬНЕЙ ветки; меряется на цифре «1» (дальний ряд).
-	var one_contact: Vector2 = Hands.press_point(bs, "1",
-		Vector2(home_tip.x, home_tip.y))
-	var reach := 0.0
-	for bn in bones:
-		reach += bn as float
-	# Дальняя ветка: ход = формула d3 − COMFY·reach; проба решателя
-	# обязана ДОЕЗЖАТЬ после хода (иначе формула без толку).
-	var one_shift: Vector2 = Hands.shift_goal(pose, Hands.LEFT,
-		Hands.PINKY, one_contact, pitch)
-	var one_tgt: Vector3 = Vector3(one_contact.x, one_contact.y,
-		Hands.Z_PRESS * pitch)
-	var one_d: float = home_root.distance_to(one_tgt)
-	_check(absf(one_shift.length() - (one_d - Hands.COMFY * reach)) < 0.02,
-		"far-row shift mirrors the 3D overshoot beyond COMFY (%.2f vs %.2f)" % [
-			one_shift.length(), one_d - Hands.COMFY * reach])
-	var sroot: Vector3 = home_root \
-		+ Vector3(one_shift.x, one_shift.y, 0.0)
-	var land: Array = Hands.ik_chain(sroot, bones, one_tgt,
-		((pl["fingers"] as Dictionary)[Hands.PINKY]
-			as Dictionary)["angles"], [], Hands.PINKY,
-		Hands.side_of(Hands.LEFT))
-	var land_err: float = ((land[1] as Array)[3] as Vector3) \
-		.distance_to(one_tgt)
-	_check(land_err < Hands.PRESS_TOL * pitch,
-		"far-row press lands after the shift (err %.2f px)" % [land_err])
-
-
-## Z-механика (26.10.2026): ход кисти меряется ТРЁХМЕРНОЙ дистанцией
-## корень→контакт. ДАЛЬНИЕ клавиши (за размах) — ход ЖИВОЙ ФОРМУЛЫ
-## d3 − COMFY·reach; ближние — ход ПЕРВОЙ ДОЕЗЖАЮЩЕЙ пробы сетки
-## SHIFT_TRIES, не длиннее её максимума.
-func _z_checks(bs: Array) -> void:
-	var pitch := Hands.pitch_of(bs)
-	var pose := Hands.rest_both(bs)
-	var contact: Vector2 = Hands.press_point(bs, "1", Vector2.ZERO)
-	var root: Vector3 = (((pose[Hands.LEFT]["fingers"] as Dictionary)[
-		Hands.PINKY] as Dictionary)["chain"] as Array)[0]
-	var reach := 0.0
-	for bn in Hands.bones_px(Hands.PINKY, pitch):
-		reach += bn as float
-	var tgt := Vector3(contact.x, contact.y, Hands.Z_PRESS * pitch)
-	var d := root.distance_to(tgt)
-	var shift: Vector2 = Hands.shift_goal(pose, Hands.LEFT, Hands.PINKY,
-		contact, pitch)
-	var want := maxf(d - Hands.COMFY * reach, 0.0)
-	_check(absf(shift.length() - want) < 0.02,
-		"far-row shift magnitude mirrors the 3D overshoot beyond COMFY (%.2f vs %.2f)" % [
-			shift.length(), want])
-	# Ближняя «я»: ход — ДОЕЗЖАЮЩАЯ проба сетки, ненулевой и не длин-
-	# нее последней пробы (первый ток сетки вывел бы ход за пределы).
-	var bottom: Vector2 = Hands.press_point(bs, "я", Vector2.ZERO)
-	var bshift: Vector2 = Hands.shift_goal(pose, Hands.LEFT,
-		Hands.PINKY, bottom, pitch)
-	var tmax: float = (Hands.SHIFT_TRIES[Hands.SHIFT_TRIES.size() - 1]
-		as float) * pitch
-	_check(bshift.length() > 0.5 * pitch and bshift.length() <= tmax,
-		"near-key shift is a working trial step, not the max (%.2f in (0..%.2f])" % [
-			bshift.length(), tmax])
-	# Высоты покоя в порядке: большой лежит ниже остальных (подушечка
-	# на пробеле), кончики hover — над доской.
-	_check(Hands.Z_TIP_THUMB > 0.0 and Hands.Z_TIP_THUMB < Hands.Z_TIP,
-		"thumb hovers lower than the fingers (%.2f < %.2f)" % [
-			Hands.Z_TIP_THUMB, Hands.Z_TIP])
-	# Константная просадка пальца при прессе одна для ВСЕХ клавиш: z —
-	# параметр модели, а не клавиши; экранная просадка retired.
-	_check(Hands.Z_PRESS < 0.0 and Hands.Z_PRESS > -0.6,
-		"Z_PRESS is a small dip into the key (%.2f)" % Hands.Z_PRESS)
-	# Экранная просадка retired: константы PRESS_DIP больше нет —
-	# старое «просаживание по экрану» не должно вернуться.
-	# Экранная просадка retired: константы PRESS_DIP больше нет —
-	# старое «просаживание по экрану» не должно вернуться.
-	_check(not "PRESS_DIP" in load("res://scripts/hands.gd")
-		.get_script_constant_map(),
-		"screen-space dip constant is retired (PRESS_DIP is gone)")
-
-
-## Буквенные подписи доски (прессы меряются по ним).
-func _letter_sigs(bs: Array) -> Array:
-	var out: Array = []
-	for b in bs:
-		var s := String(b["s"])
-		if Kbd.is_plain_letter(s) and s != " ":
-			out.append(s)
-	return out
-
-
-## Подсказка ведёт руки: сигнатура из _hint_keys → [рука, палец] и
-## точка нажатия. Шифты — мизинцы, «←»/«↵» — правый мизинец, пробел —
-## половиной своего бока; точки — центры; половины пробела — по своей
-## стороне. Ширины [у пясти, у кончика] в пределах полов и потолков.
-func _hint_checks(bs: Array) -> void:
-	_check(Hands.hint_finger("Shift") == [Hands.LEFT, Hands.PINKY],
-		"hint Shift is the left pinky")
-	_check(Hands.hint_finger("ShiftR") == [Hands.RIGHT, Hands.PINKY],
-		"hint ShiftR is the right pinky")
-	_check(Hands.hint_finger("←") == [Hands.RIGHT, Hands.PINKY],
-		"hint backspace is the right pinky")
-	_check(Hands.hint_finger("↵") == [Hands.RIGHT, Hands.PINKY],
-		"hint enter is the right pinky")
-	_check(Hands.hint_finger("в") == [Hands.LEFT, Hands.MIDDLE],
-		"hint letter uses its mapped finger")
-	_check(Hands.hint_finger("чужое") == [-1, -1],
-		"hint of a foreign sig does not move a hand")
-	var pitch := Hands.pitch_of(bs)
-	# Шифт+буква — ДВЕ руки: обе подсказки дают пальцы (автор 18.10).
-	var shift_f := Hands.hint_finger("Shift")
-	var key_f := Hands.hint_finger("о")
-	_check(shift_f[0] != key_f[0],
-		"hint Shift+letter goes to two different hands")
-	# Точки: центр клавиши; половины пробела — по своей стороне.
-	var vo := Hands.key_rect(bs, "о")
-	_check((Hands.hint_point(bs, "о") as Vector2).distance_to(
-		vo.get_center()) < 0.001, "hint point is the key center")
-	var sp := Hands.key_rect(bs, "пробел")
-	var pl: Vector2 = Hands.hint_point(bs, "пробел:Л") as Vector2
-	var pr: Vector2 = Hands.hint_point(bs, "пробел:П") as Vector2
-	_check(pl.x < sp.get_center().x and pr.x > sp.get_center().x,
-		"space halves hint by opposite hand on its own side")
-	_check(absf(pl.y - sp.get_center().y) < 0.001 * pitch
-		and absf(pr.y - sp.get_center().y) < 0.001 * pitch,
-		"space halves hint at the row height")
-	# Точка отсутствующей клавиши — ноль: рука не реагирует.
-	_check(Hands.hint_point(bs, "чужое") == Vector2.ZERO,
-		"foreign hint point is ZERO")
-	# Тело кисти меряется ширинами [у пясти, у кончика]: полы НЕ
-	# теряются на мелкой доске, потолки НЕ мешают на крупной.
-	var wb: Array = Hands.widths_of(pitch)
-	_check((wb[0] as float) >= 9.0 and (wb[0] as float) <= 21.0,
-		"palm width in bounds on the test board")
-	_check((wb[1] as float) >= 6.0 and (wb[1] as float) <= 12.0,
-		"tip width in bounds on the test board")
-	_check((Hands.widths_of(20.0)[0] as float) >= 9.0
-		and (Hands.widths_of(20.0)[1] as float) >= 6.0,
-		"width floor holds on a small board")
-	_check((Hands.widths_of(400.0)[0] as float) <= 21.0
-		and (Hands.widths_of(400.0)[1] as float) <= 12.0,
-		"width ceiling holds on a big board")
-	_check((wb[0] as float) > (wb[1] as float), "finger is tapered")
-
-
-## КОНТУР (автор 27.10.2026): кисть на экране — ОДНА замкнутая внешняя
-## граница (объединение ладони и пальцев), а не скелет. Держит: все
-## суставы внутри контура (палец не оторвался), нажатие не рвёт контур
-## и ставит палец на клавишу, контур не уезжает от доски, демонстрация
-## подсказки поднимает палец и возвращается ровно в покой.
-func _contour_checks(bs: Array) -> void:
+## Ладонь с предплечьем: гладкие радиусы, кисть уходит ЗА КРАЙ экрана,
+## подушечки покоя стоят на дом-клавишах.
+func _palm_checks(bs: Array, view: Vector2, tag: String) -> void:
 	var pitch := Hands.pitch_of(bs)
 	var rest := Hands.rest_both(bs)
-	_check(not rest.is_empty(), "contour: rest pose is built")
+	_check(not rest.is_empty(), tag + ": rest pose is built")
 	if rest.is_empty():
 		return
-	# Рамка доски — по самим клавишам (buttons — единственный источник).
-	var br := Rect2()
-	var first := true
-	for b in bs:
-		var r := b["r"] as Rect2
-		if first:
-			br = r
-			first = false
-		else:
-			br = br.merge(r)
+	var map: Dictionary = rest["map"] as Dictionary
+	_check(not map.is_empty(), tag + ": board map is measured")
 	for h in [Hands.LEFT, Hands.RIGHT]:
-		var poly := Hands.hand_outline(rest, {}, pitch, h)
-		_check(poly.size() >= 12,
-			"hand %d contour is built (%d points)" % [h, poly.size()])
-		_check(absf(Hands._poly_area(poly)) > pitch * pitch,
-			"hand %d contour has positive area" % h)
-		var fingers: Dictionary = (rest[h] as Dictionary)["fingers"] as Dictionary
-		for f in fingers.keys():
-			var ch: Array = (fingers[f] as Dictionary)["chain"] as Array
-			for i in [0, ch.size() - 1]:
-				var p3: Vector3 = ch[i] as Vector3
-				_check(Geometry2D.is_point_in_polygon(
-					Vector2(p3.x, p3.y), poly),
-					"hand %d finger %d joint %d is inside the contour"
-					% [h, f, i])
-		# Ладонь уходит за нижний ряд (пятка), пальцы — вглубь доски:
-		# дальше двух питчей в стороны и трёх с половиной вниз рука не
-		# живёт. Выезд за эти поля — сломанная геометрия, а не поза.
-		var lo := Vector2(br.position.x - 2.0 * pitch,
-			br.position.y - 3.5 * pitch)
-		var hi := Vector2(br.end.x + 2.0 * pitch,
-			br.end.y + 3.5 * pitch)
-		var out := 0
+		var side := Hands.side_name(h)
+		var radii := Hands.shape_radii(h, {})
+		_check(radii.size() == Shape.N,
+			"%s %s: rest contour has 256 radii (%d)" % [tag, side, radii.size()])
+		# ШИШАХ — это ЛОКАЛЬНЫЙ выступ: радиус вырос и тут же упал (или
+		# наоборот — вмятина). Соседние лучи на ладони (r < 95 мм, до
+		# перехода в предплечье) обязаны идти плавно; обрыв к предплечью
+		# законный — там стенка трубы почти радиальна (скачок 79 мм на
+		# переходе), и мерить его гладкостью бессмысленно.
+		var bad := 0
+		var bump := 0
+		var jump := 0.0
+		for i in radii.size():
+			var a := float(radii[(i - 1 + radii.size()) % radii.size()])
+			var b := float(radii[i])
+			var c := float(radii[(i + 1) % radii.size()])
+			if maxf(maxf(a, b), c) >= 95.0:
+				continue
+			jump = maxf(jump, absf(b - c))
+			if absf(b - c) > 8.0:
+				bad += 1
+			if (b > a + 1.5 and b > c + 1.5) or (b < a - 1.5 and b < c - 1.5):
+				bump += 1
+		_check(bad == 0, "%s %s: palm radii are smooth (%d jumps, max %.1f mm)"
+			% [tag, side, bad, jump])
+		_check(bump == 0,
+			"%s %s: no bump or notch on the palm contour (%d)" % [tag, side, bump])
+		# Предплечье вниз: радиус огромный в ОБЕИХ нижних четвертях.
+		var down := 0.0
+		for i in [radii.size() * 3 / 4 - 2, radii.size() * 3 / 4 + 2]:
+			down = maxf(down, float(radii[i]))
+		_check(down > 250.0,
+			"%s %s: forearm reaches past the wrist (%.0f mm)" % [tag, side, down])
+		var poly := Hands.hand_outline(bs, rest, {}, h)
+		_check(poly.size() >= 32,
+			"%s %s: contour is built (%d points)" % [tag, side, poly.size()])
+		_check(absf(Hands._poly_area(poly)) > 4.0 * pitch * pitch,
+			"%s %s: contour has the area of a hand" % [tag, side])
+		# ОБРУБОК ЛОВИТСЯ ЗДЕСЬ: кисть обязана УЙТИ за нижний край экрана —
+		# пересечь его хотя бы дважды (вошла и вышла). Торец внутри экрана
+		# дал бы ноль, а замкнутый контур целиком в кадре — тоже.
+		var cross := _edge_crossings(poly, Vector2(0.0, view.y),
+			Vector2(view.x, view.y))
+		var low := -INF
 		for p in poly:
-			if p.x < lo.x or p.x > hi.x or p.y < lo.y or p.y > hi.y:
-				out += 1
-		_check(out == 0,
-			"hand %d contour stays near the board (%d points out)"
-			% [h, out])
-		# Нажатие: контур цел, точка контакта внутри, форма изменилась.
-		for s in ["а", "о", "в", "л", "ы", "д", "ф", "ж", "я", "ъ",
-				"1", "0", "пробел:Л", "пробел:П", "Shift", "ShiftR",
-				"←", "↵", "глобус"]:
-			var hf := Hands.finger_of(s)
-			if (hf[0] as int) != h:
+			low = maxf(low, p.y)
+		_check(cross >= 2 and low > view.y + 4.0,
+			"%s %s: forearm leaves the screen (%d crossings, lowest %.0f of %.0f)"
+			% [tag, side, cross, low, view.y])
+		# Подушечки покоя — на дом-клавишах.
+		var st := Hands.pose_of(bs, h, rest, {})
+		var flat: Array = st["flat"] as Array
+		var off: Vector2 = st["shift"] as Vector2
+		var root_x := float(HandsPoses.ROOT_MM[side])
+		var homes: Dictionary = Hands.HOME_KEY[h] as Dictionary
+		for f in [Hands.INDEX, Hands.MIDDLE, Hands.RING, Hands.PINKY]:
+			var r := Hands.key_rect(bs, String(homes[f]))
+			if r.size == Vector2.ZERO:
 				continue
-			var rt := Hands.rest_tip(rest, h, hf[1] as int)
-			var c := Hands.press_point(bs, s, rt)
-			if c == Vector2.ZERO:
+			var pad := Hands.to_px(map, Hands3D.pad(flat, side, root_x,
+				String(Hands3D.RAY_OF[f]))) + off
+			_check(pad.distance_to(r.get_center()) <= 0.5 * pitch,
+				"%s %s: finger %d rests on '%s' (%.1f px)"
+				% [tag, side, f, String(homes[f]),
+					pad.distance_to(r.get_center())])
+
+
+## Сколько раз контур пересекает ОТРЕЗОК (например, нижнюю границу экрана).
+## Предплечье уходит вниз, поэтому нижняя граница — та, которую оно обязано
+## пересечь. Боковые границы считались бы дважды, если кисть стоит у края.
+func _edge_crossings(poly: PackedVector2Array, a: Vector2, b: Vector2) -> int:
+	var n := poly.size()
+	var cnt := 0
+	for i in n:
+		if Geometry2D.segment_intersects_segment(poly[i],
+				poly[(i + 1) % n], a, b) != null:
+			cnt += 1
+	return cnt
+
+
+## ------------------------------------------------------------- пальцы
+
+## Пальцы — ленты из FK модели: ширина равна коже, суставы внутри,
+## кончик на цепи, соседние не слипаются, большой на своей стороне.
+func _finger_checks(bs: Array, tag: String) -> void:
+	var pitch := Hands.pitch_of(bs)
+	var rest := Hands.rest_both(bs)
+	if rest.is_empty():
+		return
+	var map: Dictionary = rest["map"] as Dictionary
+	var sr := float(map["sr"])
+	for h in [Hands.LEFT, Hands.RIGHT]:
+		var side := Hands.side_name(h)
+		var st := Hands.pose_of(bs, h, rest, {})
+		var flat: Array = st["flat"] as Array
+		var off: Vector2 = st["shift"] as Vector2
+		var root_x := float(HandsPoses.ROOT_MM[side])
+		var xf := Hands3D.hand_xf(Hands3D.arm_of(flat))
+		var bands := {}
+		for ray in Hands3D.FINGERS:
+			var pts := Hands3D.finger_fk(ray, Hands3D.finger_angles(flat, ray))
+			var px := PackedVector2Array()
+			for i in pts.size():
+				px.append(Hands.to_px(map, Hands3D.to_world(side, root_x,
+					xf * pts[i])) + off)
+			var band := Hands.finger_band(flat, side, root_x, String(ray),
+				map, xf, off)
+			bands[ray] = band
+			_check(band.size() >= 3,
+				"%s %s %s: finger band is built" % [tag, side, ray])
+			if band.size() < 3:
 				continue
-			# Кисть ходит за работой — как в игре (_hands_hit считает
-			# shift_goal); дальняя клавиша без хода недостижима.
-			var sh := Hands.shift_goal(rest, h, hf[1] as int, c, pitch)
-			var pressed := Hands.hand_outline(rest,
-				{h: {(hf[1] as int): [c, 1.0]}}, pitch, h, sh)
-			_check(pressed.size() >= 12,
-				"pressed '%s' keeps one contour" % s)
-			# Кончик решателя может не дотянуться до центра клавиши на
-			# пиксели (это пресс, а не телепорт); контур обязан быть РЯДОМ
-			# с клавишей — не дальше трети питча.
-			_check(_dist_to_poly(c, pressed) <= 0.35 * pitch,
-				"pressed '%s' contour reaches the key (%.1f px)"
-				% [s, _dist_to_poly(c, pressed)])
-			_check(not _same_poly(pressed, poly),
-				"pressing '%s' moves the contour" % s)
-	# Демонстрация подсказки — чистая фаза: покой, выдержка, пауза,
-	# симметрия подъёма/спада, период.
+			var inner := 0
+			for p in px:
+				if Geometry2D.is_point_in_polygon(p, band):
+					inner += 1
+			_check(inner == px.size(),
+				"%s %s %s: every joint is inside its band (%d/%d)"
+				% [tag, side, ray, inner, px.size()])
+			# Ширина ленты = 2·радиус кожи, и меряется ОНА, а не площадь:
+			# у согнутой цепи площадь/длина завышена (хорда короче дуги, а
+			# торцы-полукруги добавляют площадь). Расстояние от сустава до
+			# границы ленты и есть радиус кожи в этом суставе.
+			var rs: Array = Hands3D.SKIN_R[ray] as Array
+			for i in px.size():
+				var d := _dist_to_boundary(px[i], band)
+				var want := float(rs[i]) * sr
+				_check(d >= 0.70 * want and d <= 1.40 * want,
+					"%s %s %s: joint %d is as thick as the skin (%.1f vs %.1f px)"
+					% [tag, side, ray, i, d, want])
+		# Соседние пальцы не слипаются в рукавицу: общая площадь мала.
+		for pair in [["II", "III"], ["III", "IV"], ["IV", "V"]]:
+			var pa: Array = pair as Array
+			var a: PackedVector2Array = bands[pa[0]] as PackedVector2Array
+			var b: PackedVector2Array = bands[pa[1]] as PackedVector2Array
+			if a.size() < 3 or b.size() < 3:
+				continue
+			var ia := 0.0
+			for q in Geometry2D.intersect_polygons(a, b):
+				ia += absf(Hands._poly_area(q))
+			var small := minf(absf(Hands._poly_area(a)),
+				absf(Hands._poly_area(b)))
+			_check(ia <= 0.35 * small,
+				"%s %s: fingers %s+%s are separate (%.0f%%)" % [tag, side,
+					pa[0], pa[1], 100.0 * ia / maxf(small, 1.0)])
+		# Большой: лента построена, кончик внутри, палец на СВОЕЙ стороне
+		# (у левой кисти — правее ладони, у правой — левее).
+		var th := Hands.thumb_band(flat, side, root_x, map, xf, off)
+		_check(th.size() >= 3, "%s %s: thumb band is built" % [tag, side])
+		if th.size() >= 3:
+			var tpts: PackedVector3Array = (Hands3D.thumb_fk(
+				Hands3D.thumb_angles(flat))["pts"]) as PackedVector3Array
+			var tip := Hands.to_px(map, Hands3D.to_world(side, root_x,
+				xf * tpts[tpts.size() - 1])) + off
+			_check(Geometry2D.is_point_in_polygon(tip, th),
+				"%s %s: thumb tip is inside its band" % [tag, side])
+			var palm := Hands.hand_outline(bs, rest, {}, h)
+			var cx := 0.0
+			for p in palm:
+				cx += p.x
+			cx /= maxf(float(palm.size()), 1.0)
+			var inner := (tip.x > cx) if h == Hands.LEFT else (tip.x < cx)
+			_check(inner, "%s %s: thumb is on the inner side of the hand"
+				% [tag, side])
+			_check(absf(Hands._poly_area(th)) > pitch * pitch,
+				"%s %s: thumb is a real digit, not a sliver" % [tag, side])
+
+
+## ------------------------------------------------------------- зеркало
+
+## Правая кисть — отражение левой: ось зеркала — дом-группа «ф»↔«ж»,
+## а не центр экрана (доска асимметрична по служебным клавишам).
+func _mirror_checks(bs: Array, tag: String) -> void:
+	var rest := Hands.rest_both(bs)
+	if rest.is_empty():
+		return
+	var axis := 0.5 * ((Hands.key_rect(bs, "ф") as Rect2).get_center().x
+		+ (Hands.key_rect(bs, "ж") as Rect2).get_center().x)
+	var pl := Hands.hand_outline(bs, rest, {}, Hands.LEFT)
+	var pr := Hands.hand_outline(bs, rest, {}, Hands.RIGHT)
+	if pl.size() < 3 or pr.size() < 3:
+		_check(false, tag + ": both contours are built for the mirror")
+		return
+	var worst := 0.0
+	for p in pl:
+		var m := Vector2(2.0 * axis - p.x, p.y)
+		worst = maxf(worst, _dist_to_poly(m, pr))
+	_check(worst <= 2.0,
+		"%s: right hand mirrors the left (worst %.2f px)" % [tag, worst])
+
+
+## ------------------------------------------------------------- нажатия
+
+## КАЖДАЯ запечённая поза: подушечка — в своей клавише, контур до неё
+## доходит, форма кисти меняется. Это главное обещание кистей.
+func _press_checks(bs: Array) -> void:
+	var pitch := Hands.pitch_of(bs)
+	var rest := Hands.rest_both(bs)
+	if rest.is_empty():
+		_check(false, "presses: rest pose is built")
+		return
+	var map: Dictionary = rest["map"] as Dictionary
+	var total := 0
+	var bad_key := 0
+	var bad_pad := 0
+	var bad_reach := 0
+	var bad_move := 0
+	var worst_reach := 0.0
+	for h in [Hands.LEFT, Hands.RIGHT]:
+		var side := Hands.side_name(h)
+		var own := 0
+		var root_x := float(HandsPoses.ROOT_MM[side])
+		var presses: Dictionary = HandsPoses.PRESS[side] as Dictionary
+		var labels := presses.keys()
+		labels.sort()
+		var rest_poly := Hands.hand_outline(bs, rest, {}, h)
+		for lb in labels:
+			var sig := String(lb)
+			var f := Hands.finger_of(sig)
+			# Запечены ОБЕ кисти на все 53 подписи доски: у чужой руки
+			# поза — покой (её пальцы эту клавишу не жмут). Проверяем
+			# только СВОИ подписи, чужие молча пропускаем.
+			if (f[0] as int) != h:
+				continue
+			var r := Hands.sig_rect(bs, sig)
+			if r.size == Vector2.ZERO:
+				_check(false, "key '%s' has no rect on the board" % sig)
+				continue
+			total += 1
+			own += 1
+			var presses_now := {h: {(f[1] as int): [sig, 1.0]}}
+			var poly := Hands.hand_outline(bs, rest, presses_now, h)
+			if poly.size() < 3:
+				_check(false, "pressed '%s' keeps a contour" % sig)
+				continue
+			var st := Hands.pose_of(bs, h, rest, presses_now)
+			var flat: Array = st["flat"] as Array
+			var off: Vector2 = st["shift"] as Vector2
+			var ray := "I" if (f[1] as int) == Hands.THUMB \
+				else String(Hands3D.RAY_OF[f[1]])
+			var pad := Hands.to_px(map, Hands3D.pad(flat, side, root_x, ray)) + off
+			if not r.grow(1.0).has_point(pad):
+				bad_key += 1
+				if bad_key <= 3:
+					print("PRESS: '%s' pad %.1f,%.1f outside %s" % [sig,
+						pad.x, pad.y, str(r)])
+			if not Geometry2D.is_point_in_polygon(pad, poly):
+				bad_pad += 1
+			var d := _dist_to_poly(r.get_center(), poly)
+			worst_reach = maxf(worst_reach, d)
+			if d > 0.5 * pitch:
+				bad_reach += 1
+				if bad_reach <= 3:
+					print("PRESS: '%s' contour %.1f px from the key" % [sig, d])
+			if _same_poly(poly, rest_poly):
+				bad_move += 1
+				if bad_move <= 3:
+					print("PRESS: '%s' does not move the contour" % sig)
+		_check(own >= 20,
+			"%s: own presses are all checked (%d)" % [side, own])
+	_check(total >= 50, "all baked presses are checked (%d)" % total)
+	_check(bad_key == 0, "every press puts its pad on the key (%d bad)" % bad_key)
+	_check(bad_pad == 0, "every pad is inside its contour (%d bad)" % bad_pad)
+	_check(bad_reach == 0,
+		"every press reaches its key (worst %.1f px, %d bad)"
+		% [worst_reach, bad_reach])
+	_check(bad_move == 0, "every press moves the hand (%d still)" % bad_move)
+
+
+## ------------------------------------------------------------- подсказка
+
+## Демонстрация подсказки — чистая фаза: покой, выдержка, пауза,
+## симметрия подъёма/спада, период.
+func _hint_checks(bs: Array) -> void:
 	_check(Hands.hint_depth(0.0) == 0.0, "hint demo starts at rest")
 	_check(Hands.hint_depth(Hands.HINT_RISE_T
 		+ Hands.HINT_HOLD_T * 0.5) == 1.0, "hint demo holds the key")
@@ -807,6 +526,64 @@ func _contour_checks(bs: Array) -> void:
 			mono = false
 		prev = d
 	_check(mono, "hint demo rises monotonically")
+	# Точка подсказки — центр клавиши; половины пробела — свои половины.
+	var a := Hands.hint_point(bs, "а")
+	_check(a.distance_to((Hands.key_rect(bs, "а") as Rect2).get_center()) < 0.01,
+		"hint point is the key centre")
+	var sp := Hands.key_rect(bs, "пробел") as Rect2
+	var hl := Hands.hint_point(bs, "пробел:Л")
+	var hr := Hands.hint_point(bs, "пробел:П")
+	_check(hl.x < hr.x, "space halves are left-to-right")
+	_check(absf((hl.x + hr.x) * 0.5 - sp.get_center().x) < 0.01,
+		"space halves are centred on the space bar")
+	_check(absf(hl.y - sp.get_center().y) < 0.01,
+		"space halves keep the row height")
+
+
+## ------------------------------------------------------------- контур
+
+## Контур — ЧИСТАЯ мера: повторный вызов даёт ту же ломаную (кэш в
+## main.draw_both опирается на это). Само рисование проверяется кадром
+## (Painter ниже): вне _draw() CanvasItem рисовать не разрешает.
+func _outline_checks(bs: Array) -> void:
+	var rest := Hands.rest_both(bs)
+	if rest.is_empty():
+		_check(false, "outline: rest pose is built")
+		return
+	for h in [Hands.LEFT, Hands.RIGHT]:
+		var a := Hands.hand_outline(bs, rest, {}, h)
+		var b := Hands.hand_outline(bs, rest, {}, h)
+		_check(_same_poly(a, b), "hand %d: contour is deterministic" % h)
+		_check(a.size() >= 32, "hand %d: contour is a closed hand (%d points)"
+			% [h, a.size()])
+		var moved := Hands.hand_outline(bs, rest,
+			{h: {Hands.INDEX: ["а", 1.0]}}, h)
+		_check(not _same_poly(a, moved), "hand %d: a press moves the contour" % h)
+
+
+## Рисование ОБЕИХ кистей — только из _draw(): CanvasItem иначе ругается
+## «Drawing is only allowed inside this node's _draw()». Узел делает три
+## вызова подряд (покой, повтор, нажатие) и складывает ключи кэша.
+class Painter extends Node2D:
+	var bs: Array = []
+	var rest := {}
+	var keys1: Array = []
+	var keys2: Array = []
+	var keys3: Array = []
+	var done := false
+
+	func _draw() -> void:
+		if rest.is_empty():
+			return
+		var cache := {}
+		Hands.draw_both(self, bs, rest, {}, Ui.INK_DAY, cache)
+		keys1 = cache.keys().duplicate()
+		Hands.draw_both(self, bs, rest, {}, Ui.INK_DAY, cache)
+		keys2 = cache.keys().duplicate()
+		Hands.draw_both(self, bs, rest,
+			{Hands.LEFT: {Hands.INDEX: ["а", 1.0]}}, Ui.INK_DAY, cache)
+		keys3 = cache.keys().duplicate()
+		done = true
 
 
 ## Одинаковы ли контуры (порядок вершин у Clipper устойчив: изменилась
@@ -820,9 +597,22 @@ func _same_poly(a: PackedVector2Array, b: PackedVector2Array) -> bool:
 	return true
 
 
+## Расстояние от точки ВНУТРИ контура до его границы (мера «радиус кожи»:
+## у ленты пальца оно равно радиусу капсулы в этом суставе).
+func _dist_to_boundary(p: Vector2, poly: PackedVector2Array) -> float:
+	var n := poly.size()
+	if n < 3:
+		return 0.0
+	var best := INF
+	for i in n:
+		var q := Geometry2D.get_closest_point_to_segment(
+			p, poly[i], poly[(i + 1) % n])
+		best = minf(best, p.distance_to(q))
+	return best
+
+
 ## Расстояние от точки до контура (0 — внутри). Мера «контур дошёл до
-## клавиши»: кончик решателя прощает пиксели, поэтому сравниваем не
-## попадание, а близость.
+## клавиши»: подушечка прощает пиксели, поэтому сравниваем близость.
 func _dist_to_poly(p: Vector2, poly: PackedVector2Array) -> float:
 	if poly.size() < 3:
 		return INF

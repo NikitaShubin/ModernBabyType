@@ -31,12 +31,15 @@ var shift := false
 var hide_kb := false
 var press_key := ""       # вспыхнувшая клавиша
 var press_t := 0.0        # таймер всего хода
-# Куда палец идёт при этой вспышке: [рука, палец, точка нажатия].
+## Кадр «палец на клавише» снимается с ЗАМОРОЖЕННОЙ фазой: под llvmpipe
+## между кадрами проходит больше времени, чем длится само нажатие
+## (PRESS_TIME 0.34 с), и снимок приезжал уже после возврата — кадры
+## выходили байт в байт одинаковыми (ловил драйвер 05.11.2026).
+var press_frozen := false
+# Куда палец идёт при этой вспышке: [рука, палец, подпись клавиши].
 var press_hand := -1
 var press_finger := -1
-var press_point := Vector2.ZERO
-var press_goal := Vector2.ZERO   # контакт плюс просадка в клавишу
-var _shift := Vector2.ZERO       # ход кисти под эту вспышку
+var press_label := ""
 const FLASH_T := 0.28     # затухание заливки клавиши (как в игре)
 const PRESS_TIME := 0.34  # ход пальца: опустился и вернулся
 
@@ -85,14 +88,25 @@ func _relayout() -> void:
 
 
 func _process(dt: float) -> void:
+	if press_frozen:
+		return
 	if press_t > 0.0:
 		press_t = maxf(0.0, press_t - dt)
 		if press_t <= 0.0:
+			# Гаснет только заливка. Цель пальца (рука, палец, подпись)
+			# остаётся: ею драйвер возвращает кадр нажатия в замороженную
+			# фазу, не повторяя тап (см. set_press_phase).
 			press_key = ""
-			press_hand = -1
-			press_finger = -1
-			_shift = Vector2.ZERO  # палец вернулся — кисть тоже
 		queue_redraw()
+
+
+## Фаза хода ДЛЯ СНИМКА (0 — покой, 0.5 — палец на клавише, 1 — вернулся).
+## Драйвер ставит её руками и морозит спад, иначе кадр нажатия не доживает
+## до снимка.
+func set_press_phase(at: float) -> void:
+	press_t = clampf(1.0 - at, 0.0, 1.0) * PRESS_TIME
+	press_frozen = at < 1.0
+	queue_redraw()
 
 
 func _input(ev: InputEvent) -> void:
@@ -129,17 +143,18 @@ func _tap(pos: Vector2) -> void:
 	_bs = Kbd.buttons(_area, shift, false)
 	press_key = key
 	press_t = maxf(FLASH_T, PRESS_TIME)
+	press_frozen = false
 	var pf := Hands.finger_of(key)
 	press_hand = pf[0]
 	press_finger = pf[1]
-	# Пресс как в игре: КОНТАКТ на клавише; просадка В клавишу теперь
-	# по ВЫСОТЕ кончика (Z_PRESS в 3D), по экрану палец не проваливается.
-	var rt := Hands.rest_tip(_rest, press_hand, press_finger)
-	press_point = Hands.press_point(_bs, key, rt)
-	press_goal = press_point
-	_shift = Hands.shift_goal(_rest, press_hand, press_finger,
-		press_point, _pitch)
-	# Цель нажатия — МИРОВАЯ (draw_both сам снимает сдвиг кисти с цели).
+	# Поза нажатия — ЗАПЕЧЁННАЯ, по подписи клавиши; посадку на клавишу
+	# игры делает Hands.pose_of (сдвиг кисти входит в позу кадра).
+	# Пробел запечён ПОЛОВИНАМИ («пробел:Л»/«пробел:П», как в игре):
+	# голая подпись «пробел» позы не находила, и тап по пробелу не
+	# двигал большой палец вовсе.
+	press_label = Hands.key_label(key)
+	if key == "пробел":
+		press_label = "пробел:Л" if press_hand == Hands.LEFT else "пробел:П"
 	queue_redraw()
 
 
@@ -169,12 +184,10 @@ func _flash_sb() -> StyleBox:
 func _draw_hands() -> void:
 	if _rest.is_empty():
 		return
-	# Ходы: тап гонит палец к цели нажатия по полусинусу хода
-	# (нажал-вернулся), кисть ходит темже решением, что в игре.
+	# Ход: тап гонит палец к клавише по полусинусу (нажал-вернулся).
 	var presses := {}
 	if press_t > 0.0 and press_hand >= 0:
 		var t01 := 1.0 - press_t / float(PRESS_TIME)
 		var depth := sin(clampf(t01, 0.0, 1.0) * PI)
-		presses = {press_hand: {press_finger: [press_goal, depth]}}
-	Hands.draw_both(self, _rest, presses, _pitch, Ui.INK_DAY,
-		{press_hand: _shift} if press_hand >= 0 else {}, _cache)
+		presses = {press_hand: {press_finger: [press_label, depth]}}
+	Hands.draw_both(self, _bs, _rest, presses, Ui.INK_DAY, _cache)

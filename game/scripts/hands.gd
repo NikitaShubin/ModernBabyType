@@ -1,39 +1,40 @@
 class_name Hands
 extends RefCounted
 
-## Кисти обеих рук над доской. МОДУЛЬ ЧИСТЫЙ (нет сцены и состояния).
+## Кисти обеих рук над доской — ПРОЕКЦИЯ ТЕХ САМЫХ 3D-КИСТЕЙ.
 ##
-## РЕВИЗИЯ 26.10.2026 — ПОЛНОСТЬЮ ТРЁХМЕРНАЯ КИНЕМАТИКА (по требованию
-## автора: «модель кисти со всеми суставами, пропорциями и ограничениями,
-## 3D, а рисование — проекция на плоскость сверху»).
+## Автор 04.11.2026: «это должны быть те самые руки из 3д». Прежняя
+## редакция рисовала свою 2D-модель со своим IK, и она читалась
+## пародией: палец шириной 12 мм против настоящих 20, ладонь-обрубок
+## 48 мм против 74. Теперь модель ОДНА — tools/hand3d (скелет, углы
+## покоя, кожа, плечо), а игра её только проецирует.
 ##
-## 1) СКЕЛЕТ — антропометрический. Фаланги — из антропометрии кисти
-##    (мм-таблица BONES_MM ниже; питч доски = ANSI 19.05 мм, PITCH_MM).
-##    Цепь пальца — 3 сегмента [проксимальная, средняя, дистальная]
-##    фаланги от пястного сустава (MCP); большой — свои 3 сегмента
-##    [запястно-пястный остаток, проксимальная, дистальная].
-##    Диапазоны суставов — по анатомии (Wikipedia/Gray, Kapandji):
-##    MCP мыщельковый — сгиб 0..90°, переразгибание до −26°, отведение
-##    ±25°; PIP — сгиб 0..100°; DIP — 0..80°; седловидный CMC большого
-##    — широкий ход. Ограничения JOINT_LIMITS — рад.
-## 2) FK/IK ВЕСЬМА В 3D: каждая кость — вектор (азимут от «вперёд к
-##    доске» БАЗОВОГО направления BASE_A + отведение, суммарный сгиб);
-##    целевая точка — (x, y) клавиши НА ПЛОСКОСТИ, z — высота кончика
-##    над клавишей (покой ZT — hover, нажатие — просадка В клавишу,
-##    Z_PRESS). Что видно сверху — проекция (x, y); высота z живёт
-##    только в механике (и лёгком затемнении рисования).
-## 3) ЛЮБАЯ поза — градиентный спуск по энергии
-##    E(θ) = Σ JOINT_W·(θ−θrest)²/2 + минимум |tip−target|², при мягком
-##    проецировании на пределы гибкости (ср. прежний аргмин L2 из
-##    сеток: теперь численный решатель — те же смыслы, меньше строк).
-## 4) ПОКОЙ ВЫВОДИТСЯ: корень пальца = целью покоя + KNUCKLE-смещение
-##    (пястная дуга ПОД кончиками: основания НИЖЕ кончиков — пальцы
-##    растут от ладони, а не назад; жалоба автора 26.10.2026: «пальцы
-##    спускаются вниз против ладони — как будто растут задом»).
-##    Дальше решатель ставит кончик над дом-клавишей на высоте ZT.
-## 5) ХОД КИСТИ: дальняя клавиша тянет всю кисть (shift_goal), как
-##    в реальном наборе. Рисование — ладонь одним полигоном, пальцы
-##    лентами с полукруглыми шапками; z слегка управляет прозрачностью.
+## ЧТО ЗДЕСЬ ПРОИСХОДИТ (и чего здесь нет):
+##   1. Поз нажатий игра НЕ решает: они запечены в hands_poses.gd тем же
+##      решателем исследования, что и просмотрщик доски (нажатие стоило
+##      бы 0.5–3.4 с — в кадр это не влезает). Поза кадра — покой,
+##      подтянутый к позе нажатия на его ход; плечо — средневзвешенное
+##      по нажатиям (сумма весов не больше 1).
+##   2. СИЛУЭТ тоже запечён — с ПОЛЯ 3D-модели (hands_shape.gd). В игре
+##      его не собирают из примитивов: объединение проекций — не
+##      проекция объединения, и smin-скругление выносит настоящую
+##      поверхность на 5.8 мм наружу. Отсюда были ступеньки и «шишах» у
+##      большого пальца (автор 05.11.2026). Контур снят лучами из центра
+##      ладони вдоль ЛОКАЛЬНОЙ z кисти (той же осью, которой игра кладёт
+##      пальцы на клавиши), с предплечьем в том же контуре.
+##   3. Поза кадра смешивает РАДИУСЫ контура теми же весами, что и углы:
+##      топология у всех поз одна, поэтому промежуточная поза — тоже
+##      честный контур модели.
+##   4. Рисуется контур линией и лёгкой заливкой (автор 27.10.2026:
+##      «только контуры рук»), чтобы подписи клавиш читались.
+##
+## Модуль ЧИСТЫЙ: нет сцены и состояния, все меры — статические функции
+## (headless не рисует, а тесты меряют их числом).
+
+## Запечённый силуэт модели (генерируется tools/hand3d/bake_outline.gd).
+## Берём preload'ом, а не глобальным именем: кэш глобальных классов в
+## .godot обновляется импортом, и свежий файл в нём ещё не числится.
+const Shape := preload("res://scripts/hands_shape.gd")
 
 const THUMB := 0
 const INDEX := 1
@@ -44,125 +45,14 @@ const PINKY := 4
 const LEFT := 0
 const RIGHT := 1
 
-## ANSI-питч клавиатуры, мм: вся антропометрия мерится в питчах.
+## Питч ANSI и шаг ряда — те же, что у доски исследования: по ним
+## миллиметры кисти ложатся на пиксели доски игры.
 const PITCH_MM := 19.05
+const ROW_STEP_MM := 21.7575
+const HOME_Y := 152.0
 
-## Фаланги, мм [сегмент 1, 2, 3] по цепи каждого пальца. Четырёх пальцев
-## — прокс/средняя/дистальная (антропометрия кисти, средние значения
-## разных измерений расходятся на единицы мм — пропорции устойчивы).
-## Большой: [запястно-пястная часть в ладони, проксимальная,
-## дистальная] — первая часть прячется под ладонью.
-const BONES_MM := {
-	THUMB: [17.0, 31.5, 25.5],
-	INDEX: [39.5, 22.0, 15.5],
-	MIDDLE: [42.0, 25.0, 16.5],
-	RING: [39.0, 23.5, 15.5],
-	PINKY: [33.0, 18.5, 13.5],
-}
-
-## Базовый азимут пальца (рад, от направления «вперёд к доске», −y):
-## у четырёх пальцев 0 — вперёд; большой смотрит В СТОРОНУ ПРОБЕЛА
-## от своей половины кисти (вниз по доске и к центру).
-const BASE_A := {THUMB: 2.28, INDEX: 0.0, MIDDLE: 0.0, RING: 0.0,
-	PINKY: 0.0}
-
-## Вес жёсткости сустава: четырёх пальцев — [сгиб MCP, отведение MCP,
-## сгиб PIP, сгиб DIP]; большого — [сгиб CMC, отведение, поворот,
-## сгиб MCP, сгиб IP]: пястный самый жёсткий, дистальный свободнее —
-## тянуться кончиком.
-const JOINT_W := [3.0, 2.0, 1.3, 0.8]
-const JOINT_W_THUMB := [3.0, 2.0, 1.3, 2.0, 0.8]
-
-## Пределы гибкости (рад): [min, max] по суставам. Четыре пальца:
-## [сгиб MCP, отведение MCP, сгиб PIP, сгиб DIP] — MCP: сгиб
-## 0..90° с переразгибанием −26°, отведение ±25°; PIP 0..100°; DIP
-## 0..80° (+ небольшой запас на переразгибание у головок). Большой —
-## 5 суставов: [сгиб CMC, отведение, ПОВОРОТ (оппозиция седловид-
-## ного CMC: дистальная плоскость сгиба поворачивается вокруг столб-
-## ца, 0..100°), сгиб MCP, сгиб IP].
-const JOINT_LIMITS := {
-	THUMB: [Vector2(-0.55, 1.40), Vector2(-0.55, 0.55), Vector2(0.0, 1.75), Vector2(-0.55, 1.40), Vector2(-0.10, 1.40)],
-	INDEX: [Vector2(-0.45, 1.57), Vector2(-0.44, 0.44), Vector2(-0.06, 1.75), Vector2(-0.06, 1.40)],
-	MIDDLE: [Vector2(-0.45, 1.57), Vector2(-0.44, 0.44), Vector2(-0.06, 1.75), Vector2(-0.06, 1.40)],
-	RING: [Vector2(-0.45, 1.57), Vector2(-0.44, 0.44), Vector2(-0.06, 1.75), Vector2(-0.06, 1.40)],
-	PINKY: [Vector2(-0.45, 1.57), Vector2(-0.44, 0.44), Vector2(-0.06, 1.75), Vector2(-0.06, 1.40)],
-}
-
-## Пред-покой (пара для решателя): сгибы расслабленной руки над домом.
-## Четыре пальца [MCP, отведение, PIP, DIP]; большой [CMC, отведе-
-## ние, поворот, MCP, IP]. Отведение 0 — решатель сам отводит, куда
-## ведёт геометрия дом-клавиш; сгибы дают естественную дугу. Большой:
-## дисталь чуточку закрыта и повёрнута к ладони (оппозиция).
-const REST_PRIOR := {
-	INDEX: [0.50, 0.0, 1.00, 0.62],
-	MIDDLE: [0.48, 0.0, 0.95, 0.60],
-	RING: [0.52, 0.0, 1.00, 0.64],
-	PINKY: [0.58, 0.0, 1.08, 0.68],
-	THUMB: [0.20, 0.05, 0.90, 0.30, 0.25],
-}
-
-## Пястная дуга ПОД кончиками (питчи; смещение КОРНЯ от цели покоя):
-## x — наружу (у левой +x к центру доски: оси пальцев веером), y —
-## НАЗАД К ИГРОКУ (положительное = корень НИЖЕ кончика на экране —
-## пальцы растут от ладони; жалоба автора 26.10.2026: «основания
-## дотягиваются до ряда цифр, пальцы спускаются вниз против ладони»),
-## z — высота пясти над доской. Дуга ВЫПУКЛА К КЛАВИШАМ: корень
-## среднего ВЫШЕ хорды указательный-мизинец (средняя фаланга кисти
-## самая высокая — анатомия), мизинец глубже всех. Толчок корней ДО
-## цифрового ряда: ~1.0–1.3 питча — на уровне верхнего буквенного
-## ряда, не «1234567890» (правило автора 26.10.2026).
-const KNUCKLE := {
-	INDEX: Vector3(0.28, 1.15, 1.70),
-	MIDDLE: Vector3(0.08, 1.02, 1.85),
-	RING: Vector3(-0.10, 1.10, 1.72),
-	PINKY: Vector3(-0.32, 1.30, 1.50),
-}
-
-## Корень большого относительно СВОЕЙ цели (его четверть пробела),
-## долях питча: корень В ЛАДОНИ — снаружи, ЗА контактом (ниже экрана
-## по y) и высоко над доской (уровень ложа большого пальца): большой
-## идёт из пятки ладони наискось к пробелу, дисталь закрывается
-## ПОВОРОТОМ (оппозиция CMC), а не ныряет в доску.
-const THUMB_ROOT := Vector3(-0.80, -0.90, 1.80)
-
-## Высота кончика в покое — hover над дом-клавишей (питчи над доской).
-## Большой стоит ВПЛОТЬ К ПРОБЕЛУ: подушечка почти лежит (0.08 питча
-## ≈ 2-3 px). Бывший 0.32 решатель не выдерживал: покой большого
-## стоит на углах пределов суставов и честный аргмин приходит к
-## 2-5 px над доской у ОБОИХ рук (ловлено 26.10.2026: z 4.7 / 2.34
-## при целевых 10.8) — константу чиним по замыслу, а не решатель.
-const Z_TIP := 0.55
-const Z_TIP_THUMB := 0.08
-
-## Высота КОНЧИКА при нажатии: клавиша прогибается под пальцем.
-const Z_PRESS := -0.10
-
-## ВЫСОТА запястья/пятки ладони (питчи над доской) и её смещение от
-## среднего контакта дома: ладонь ЛЕЖИТ за нижним рядом, не лезет вверх.
-const WRIST_OFF := Vector2(0.0, 2.55)
-const WRIST_Z := 2.05
-
-## Шаги траст-региона в РАДИАНАХ (направление — нормированный гради-
-## ент, линейный поиск по энергии; сетка ДОЛЖНА накрывать оптимум па-
-## раболы по лучу: при σ-жёсткой задаче он стоит на ~0.001–0.01 рад —
-## сетка только до 0.02 перепрыгивала его и решатель замирал — ловле-
-## но 26.10.2026). Итерации, вес штрафа покоя, допуск задачи: хардклэм
-## на каждой оси давал bang-bang осцилляцию шага — решатель замирал;
-## шкала всей позы сразу честная, энергия не растёт.
-## σ задачи = SOLVE_TOL·L — ошибка кончика меряется В ЕДИНИЦАХ ДОПУ-
-## СКА (порог досрочного выхода): тогда энергия НЕ окупает недоездом
-## за пределом допуска — лексикографика «сначала доезд, потом покой»
-## (канон 25.10.2026: покой выбирает позу СРЕДИ ДОЕХАВШИХ). Меньший
-## σ работал и замирал выше допуска (аргмин балансирует; ловлено
-## 26.10.2026: цель 0.92 размаха давала err 9–14 px при допуске~1.6).
-const SOLVE_STEPS := [0.30, 0.12, 0.05, 0.02, 0.008, 0.003, 0.001]
-const SOLVE_MAX := 420
-const SOLVE_TOL := 0.012  #reach-доля — порог досрочного выхода
-const SOLVE_SIG := 0.006  #reach-доля: σ задачи; err* решателя ≈ 1.04·σ
-const REST_SCALE := 0.22
-
-## Дом-клавиша пальца (покой — кончик над ней). Указательные закрывают
-## по две колонки: покой у ПЕРВОЙ (а/о), вторая достаётся при нажатии.
+## Дом-клавиша пальца. Указательные закрывают по две колонки: покой у
+## ПЕРВОЙ (а/о), вторая достаётся при нажатии.
 const HOME_KEY := {
 	LEFT: {INDEX: "а", MIDDLE: "в", RING: "ы", PINKY: "ф"},
 	RIGHT: {INDEX: "о", MIDDLE: "л", RING: "д", PINKY: "ж"},
@@ -214,6 +104,10 @@ static func side_of(h: int) -> float:
 	return 1.0 if h == LEFT else -1.0
 
 
+static func side_name(h: int) -> String:
+	return "L" if h == LEFT else "R"
+
+
 ## [рука, палец] клавиши; [-1, -1] если клавиши нет в карте.
 ## Пробел поддержан подписями «пробел:Л» / «пробел:П» (большой СВОБОД-
 ## ной руки); латиница мапится в свою русскую клавишу (физически одна).
@@ -244,6 +138,29 @@ static func hand_of(s: String) -> int:
 	return finger_of(s)[0] as int
 
 
+## Подпись клавиши ДОСКИ по подписи события: строчная буква (латиница —
+## через свою русскую пару), «пробел:Л/П» как есть. По ней ищется и
+## прямоугольник клавиши, и запечённая поза нажатия.
+##
+## Кириллица возвращается САМА СОБОЙ и раньше обратного поиска: таблица
+## RU_EN двусторонняя, и «м» находила в ней латинскую «v» (там есть пара
+## v→м) — подсказка руки на «м» тогда искала позу «v», не находила её и
+## молчала (ловил combo_test 05.11.2026).
+static func key_label(sig: String) -> String:
+	if sig.begins_with("пробел:"):
+		return sig
+	if sig.length() == 1:
+		var lo := sig.to_lower()
+		var cp := lo.unicode_at(0)
+		if cp >= 0x0400 and cp <= 0x04FF:
+			return lo
+		for ru in Kbd.RU_EN.keys():
+			if String(Kbd.RU_EN[ru]) == lo:
+				return String(ru)
+		return lo
+	return sig
+
+
 ## Палец подсказки: [рука, палец] или [-1, -1] (чужая подпись не двигает
 ## руку). Регистр буквы палец не меняет, латиница — та же клавиша.
 static func hint_finger(sig: String) -> Array:
@@ -270,143 +187,6 @@ static func sig_rect(bs: Array, sig: String) -> Rect2:
 		return Rect2(sp.position.x + sp.size.x * (0.0 if half_l else 0.5),
 			sp.position.y, sp.size.x * 0.5, sp.size.y)
 	return key_rect(bs, sig)
-
-
-## Точка нажатия по подписи: центр ПЛОЩАДИ клавиши (палец опускается на
-## всю плоскость); половины пробела — по своей стороне. Малая клавиша —
-## центр; большая — ближайший к покойному кончику край с отступом в
-## половину малой клавиши (автор 25.10.2026).
-static func press_point(bs: Array, sig: String, tip: Vector2) -> Vector2:
-	var pitch := pitch_of(bs)
-	var r := sig_rect(bs, sig)
-	if r.size == Vector2.ZERO or pitch <= 0.0:
-		return Vector2.ZERO
-	if _is_small(r, pitch, bs):
-		return r.get_center()
-	var iy := minf(0.5 * _row_h(bs, pitch), r.size.y * 0.5)
-	var ix := minf(0.5 * pitch, r.size.x * 0.5)
-	if tip == Vector2.ZERO:
-		return Vector2(r.position.x + r.size.x * 0.5, r.position.y + iy)
-	return Vector2(clampf(tip.x, r.position.x + ix, r.end.x - ix),
-		clampf(tip.y, r.position.y + iy, r.end.y - iy))
-
-
-## Цель нажатия: КОНТАКТ на плоскости. Просадка в клавишу — это ВЫСОТА
-## кончика (Z_PRESS, 3D), а не смещение по экрану.
-static func press_goal(bs: Array, sig: String, tip: Vector2) -> Vector2:
-	return press_point(bs, sig, tip)
-
-
-## Цель сдвига КИСТИ целиком. rest — обе руки (rest_both), h/f — кто
-## жмёт, tgt — КОНТАКТ нажатия. Кисть ходит ТОЛЬКО когда работать пальцем
-## с места нечем; признак «нечем» — ТРОЙНАЯ РЕШЕННАЯ проба нажатия:
-## 1) 3D-дистанция корень→контакт дальше предельного размаха (дальние
-##    ряды с близких пальцев — клавиша «1» с мизинца);
-## 2) решатель НЕ доезжает (мизинец не достаёт «я»: кончик оказывается
-##    ЗА корнем — азимут обратной направленности, ловлено 26.10.2026);
-## 3) уже на грани размаха — большой сглаживающий ход до COMFY.
-## Ход сядет палец на удобный изгиб; решается КОРОТКОЙ пробой нажатия
-## на каждый кандидат хода (0..SOLV_MAX_SHIFT). Дальние ряды едут
-## ходом, дом-клавиши — с места.
-const COMFY := 0.85
-const REACH_LIMIT := 0.995
-## Порог доезда пробы нажатия (доля питча — примерно половина клави-
-## ши) и сетка пробных ходов (питчи). Ход годится, если проба доезжа-
-## ет; из доезжающих берётся МИНИМАЛЬНЫЙ, иначе самый доезжающий.
-const PRESS_TOL := 0.25
-const SHIFT_TRIES := [0.0, 0.7, 1.4, 2.1, 2.8]
-
-static func shift_goal(rest: Dictionary, h: int, f: int, tgt: Vector2,
-		pitch: float) -> Vector2:
-	if not rest.has(h) or pitch <= 0.0:
-		return Vector2.ZERO
-	var fd: Dictionary = rest.get(h, {}) as Dictionary
-	var fl := fd.get("fingers", {}) as Dictionary
-	if not fl.has(f):
-		return Vector2.ZERO
-	var fdata: Dictionary = fl[f] as Dictionary
-	var root: Vector3 = fdata["root"] as Vector3
-	var m: float = side_of(h)
-	var bones: Array = bones_px(f, pitch)
-	var reach := 0.0
-	for b in bones:
-		reach += b as float
-	var tp := Vector3(tgt.x, tgt.y, Z_PRESS * pitch)
-	var d := tp - root
-	var dist := d.length()
-	if dist < 1e-6 or reach <= 0.0:
-		return Vector2.ZERO
-	# Скольжение по ПЛОСКОСТИ доски: вертикаль добирается изгибом.
-	var dir2 := Vector2(d.x, d.y)
-	if dir2.length() < 1e-6:
-		# Цель ровно под корнем — ход бессмысленен, изгиб сам.
-		return Vector2.ZERO
-	dir2 = dir2.normalized()
-	var rest_ang: Array = fdata.get("angles", []) as Array
-	if dist > REACH_LIMIT * reach:
-		# Дальняя клавиша: ход на доезд минус удобный запас.
-		return dir2 * (dist - COMFY * reach)
-	# В размахе по дистанции, но проба нажатия может намекать на
-	# недоезд (азимут/глубокий сгиб) — тогда короткий ход. Сетка
-	# восходящая: первый доезжающий ход — МИНИМАЛЬНЫЙ.
-	for k in SHIFT_TRIES.size():
-		var offer: float = SHIFT_TRIES[k] * pitch
-		if _press_ok(_trial(root, dir2, tp, pitch, f, m, rest_ang,
-				offer), tp, pitch):
-			return dir2 * offer
-	# Ни один ход не доезжает — ход на максимум сетки: недоезд меньше.
-	return dir2 * (SHIFT_TRIES[SHIFT_TRIES.size() - 1] * pitch)
-
-
-## Проба нажатия с ХОДОМ кисти offer вдоль dir2 (плоскость доски):
-## корень едет, решатель ставит цепь на контакт tp. rest — покойные
-## углы пальца ( continuity позы), при чужой длине — пред-покой.
-static func _trial(root: Vector3, dir2: Vector2, tp: Vector3,
-		pitch: float, f: int, m: float, rest_ang: Array,
-		offer: float) -> Array:
-	var n := _dof_count(f)
-	var rr: Array = rest_ang if rest_ang.size() == n \
-		else REST_PRIOR[f]
-	var cand := root + Vector3(dir2.x * offer, dir2.y * offer, 0.0)
-	return ik_chain(cand, bones_px(f, pitch), tp, rr, rr, f, m)
-
-
-static func _press_ok(res: Array, tp: Vector3, pitch: float) -> bool:
-	var tip: Vector3 = (res[1] as Array)[3]
-	return tip.distance_to(tp) < PRESS_TOL * pitch
-
-
-## Просадка кончика В клавишу нажатием живёт В З (Z_PRESS); экранная
-## просадка retired — константа удалена 26.10.2026.
-
-
-## Малая клавиша — буквенного шага ширина (клавиши одного ряда одной
-## высоты, малость меряется шириной).
-static func _is_small(r: Rect2, pitch: float, bs: Array) -> bool:
-	return r.size.x <= pitch * 1.05 + 0.01 \
-		and r.size.y <= _row_h(bs, pitch) * 1.05 + 0.01
-
-
-## Высота ряда — у буквенной клавиши (все ряды одной высоты).
-static func _row_h(bs: Array, pitch: float) -> float:
-	for b in bs:
-		if Kbd.is_plain_letter(String(b["s"])):
-			return (b["r"] as Rect2).size.y
-	return pitch
-
-
-## Покойный кончик пальца (экранная проекция; для press_point / проверок).
-static func rest_tip(rest: Dictionary, h: int, f: int) -> Vector2:
-	if rest.has(h):
-		var fing: Dictionary = (rest[h] as Dictionary).get("fingers", {}) \
-			as Dictionary
-		if fing.has(f):
-			var fd: Dictionary = fing[f] as Dictionary
-			var chain: Array = fd.get("chain", []) as Array
-			if chain.size() == 4:
-				var tip3: Vector3 = chain[3] as Vector3
-				return Vector2(tip3.x, tip3.y)
-	return Vector2.ZERO
 
 
 ## Прямоугольник клавиши по подписи — мера самого списка buttons().
@@ -451,535 +231,364 @@ static func key_center(bs: Array, s: String) -> Vector2:
 	return r.position + r.size * 0.5
 
 
-## Кости пальца ИСТИННОЙ длины (питчи): антропометрия, БЕЗ проекционных
-## поправок — проекцию считает решатель из 3D-позы.
-static func bones_px(f: int, pitch: float) -> Array:
-	var out: Array = []
-	for mm in BONES_MM[f]:
-		out.append((mm as float) / PITCH_MM * pitch)
+## Высота ряда — у буквенной клавиши (все ряды одной высоты).
+static func _row_h(bs: Array, pitch: float) -> float:
+	for b in bs:
+		if Kbd.is_plain_letter(String(b["s"])):
+			return (b["r"] as Rect2).size.y
+	return pitch
+
+
+## Малая клавиша — буквенного шага ширина (клавиши одного ряда одной
+## высоты, малость меряется шириной).
+static func _is_small(r: Rect2, pitch: float, bs: Array) -> bool:
+	return r.size.x <= pitch * 1.05 + 0.01 \
+		and r.size.y <= _row_h(bs, pitch) * 1.05 + 0.01
+
+
+## ---------- доска → миллиметры кисти ----------
+##
+## Доска исследования симметрична относительно x = 0, а доска игры
+## заполняет область целиком — значит центр доски и есть x = 0.
+## Масштабы меряются по САМОЙ доске игры: sx — по девяти шагам дом-ряда
+## «ф»…«ж» (в мм это 9·PITCH), sy — по шагу ряда «й»→«ф» (в мм это
+## ROW_STEP). Так раскладка игры ложится на модель без выдуманных
+## констант; остаток (у игры зазор 8 px против 1 мм) добирается сдвигом
+## кисти к нажимаемой клавише.
+static func board_map(bs: Array) -> Dictionary:
+	var row := ["ф", "ы", "в", "а", "п", "р", "о", "л", "д", "ж"]
+	var first := key_rect(bs, row[0]).get_center()
+	var last := key_rect(bs, row[row.size() - 1]).get_center()
+	var q := key_rect(bs, "й").get_center()
+	if first == Vector2.ZERO or last == Vector2.ZERO or q == Vector2.ZERO:
+		return {}
+	var sx := (last.x - first.x) / (float(row.size() - 1) * PITCH_MM)
+	var sy := (first.y - q.y) / ROW_STEP_MM
+	if sx <= 0.0 or sy <= 0.0:
+		return {}
+	var lo := INF
+	var hi := -INF
+	for b in bs:
+		var r: Rect2 = b["r"]
+		lo = minf(lo, r.position.x)
+		hi = maxf(hi, r.end.x)
+	return {"sx": sx, "sy": sy, "sr": (sx + sy) * 0.5,
+		"ox": (lo + hi) * 0.5, "oy": first.y}
+
+
+## Глубина кисти на экране: доля честной проекции сверху (1.0 — как
+## сверху, 0.5 — как из-под 30°, как в самом исследовании). На телефоне
+## клавиатура прижата к низу, и честная проекция оставляет от кисти одни
+## пальцы: ладонь (85 мм) в 60 мм не влезает. Ужимаем ТОЛЬКО глубину —
+## размах пальцев по x остаётся точным, подушечки садятся на клавиши
+## сдвигом кисти.
+static var depth_k := 1.0
+
+
+## Мировые мм исследования → пиксели доски.
+static func to_px(map: Dictionary, p: Vector3) -> Vector2:
+	return Vector2(float(map["ox"]) + p.x * float(map["sx"]),
+		float(map["oy"]) - (p.y - HOME_Y) * float(map["sy"]) * depth_k)
+
+
+## ---------- поза кадра ----------
+
+## Покой обеих кистей НА ЭТОЙ доске: плоские позы из запечённых данных
+## плюс карта доски и поправка покоя (чтобы подушечки легли на дом-
+## клавиши игры). Пересчитывается только на смену доски.
+static func rest_both(bs: Array) -> Dictionary:
+	var map := board_map(bs)
+	if map.is_empty():
+		return {}
+	var out := {"map": map, "shift": {}}
+	for h in [LEFT, RIGHT]:
+		var side := side_name(h)
+		var flat: Array = (HandsPoses.HOME[side] as Array).duplicate()
+		out[h] = flat
+		(out["shift"] as Dictionary)[h] = _rest_shift(bs, h, flat, map)
 	return out
 
 
-## Ширины пальца [у пясти, у кончика]: от питча с полами и потолками —
-## на мелкой доске палец не худее изнутри, на крупной не толще.
-## Кончик — подушечка, не игла.
-static func widths_of(pitch: float) -> Array:
-	return [clampf(0.34 * pitch, 9.0, 21.0), clampf(0.20 * pitch, 6.0, 12.0)]
-
-
-## ---------- 3D-кинематика ----------
-
-## FK цепи из корня: углы [сгиб MCP, отведение MCP, сгиб PIP/IP,
-## сгиб DIP]; у большого — 5 [-сгиб CMC, отведение, ПОВОРОТ (оппози-
-## ция CMC), сгиб MCP, сгиб IP]. База «вперёд к доске» (−y), отведе-
-## ние — азимут вокруг вертикали от базового направления BASE_A[f];
-## сгибы суммируются по цепи (фаланги продолжают дугу). m — рука:
-## +1 левая, −1 правая (зеркало по x). Возвращает [root, j1, j2, tip]
-## — Vector3.
-##
-## ПОВОРОТ большого (twist): сгиб дистальных фаланг совершается в
-## плоскости, повёрнутой вокруг горизонтальной оси столбца на угол
-## ang[2]: перпендикуляр = cosT·(0,0,−1) + sinT·m·(c_az, s_az, 0).
-## При T=0 — вертикальный сгиб «в доску» (как у четырёх пальцев); при
-## T≈π/2 дисталь закрывается ГОРИЗОНТАЛЬНО «через ладонь» — оппози-
-## ция седловидного CMC (большой достаёт пробел из-за ладони, а не
-## ныряет в доску: ловлено численно 26.10.2026 — без поворота хорда
-## четверти пробела/~=0.32 длины недостижима, кончик тонул под доску).
-## Ось поворота ЗЕРКАЛИТСЯ РУКОЙ (×m): оппозиция обеих кистей меряется
-## ОДНИМ знаком [0..90°], и fk правой руки при тех же углах — точное
-## x-зеркало левой (иначе решатель большого катился в разные долины:
-## twist 0.34 слева против 0.22 справа, руки не отражения 26.10.2026).
-static func fk_chain(root: Vector3, bones: Array, ang: Array, f: int,
-		m: float) -> Array:
-	var az := (BASE_A[f] as float) + (ang[1] as float)
-	var s_az := sin(az)
-	var c_az := cos(az)
-	var cum := (ang[0] as float)
-	var twist := (ang[2] as float) if f == THUMB else 0.0
-	var c_t := cos(twist)
-	var s_t := sin(twist)
-	var pts: Array = [root]
-	var p := root
-	var n_ang := ang.size()
-	for i in 3:
-		# Сгиб очередного сустава: подписывается к прежней дуге.
-		# Индекс сгиба: пальцы — [MCP=0, PIP=2, DIP=3] (отведение на
-		# 1); большой — [CMC=0, MCP=3, IP=4] (поворот на 2).
-		if i >= 1:
-			var fi := (i + 1) if f != THUMB else (i + 2)
-			cum += (ang[fi] as float)
-		var c_i := cos(cum)
-		var s_i := sin(cum)
-		var L := (bones[i] as float)
-		var dx := m * s_az * c_i
-		var dy := -c_az * c_i
-		var dz := -s_i
-		if f == THUMB and i >= 1:
-			# Дистальные фаланги: плоскость сгиба повёрнута на twist
-			# вокруг столбца (см. докстринг fk_chain); ось поворота
-			# зеркалится рукой (×m) — те же углы дают зеркало.
-			var px := c_i * (m * s_az) + s_i * (s_t * m * c_az)
-			var py := c_i * (-c_az) + s_i * (s_t * s_az)
-			var pz := -s_i * c_t
-			dx = px
-			dy = py
-			dz = pz
-		p = p + Vector3(dx, dy, dz) * L
-		pts.append(p)
-	return pts
-
-
-## Стартовая оценка — «струна к цели»: азимут по горизонтальной
-## составляющей, суммарный сгиб — по вертикальному перепаду,
-## разбросанный по трём суставам дуги.
-static func _init_angles(root: Vector3, bones: Array, target: Vector3,
-		f: int, m: float, prior: Array) -> Array:
-	var d := target - root
-	var L := 0.0
-	for b in bones:
-		L += b as float
-	var az := (BASE_A[f] as float) + (prior[1] as float)
-	if Vector2(d.x, d.y).length() > 1e-6:
-		az = atan2(m * d.x, -d.y)
-	var tilt := 0.0
-	if L > 1e-6:
-		tilt = asin(clampf(-d.z / L, -1.0, 1.0))
-	# Разброс сгиба по дуге: MCP получает свою долю покоя.
-	if f == THUMB:
-		# [CMC, ABD, TWIST (покоя не наклоняем), MCP, IP]
-		return [
-			tilt * 0.35 + (prior[0] as float) * 0.25,
-			wrapf(az - (BASE_A[f] as float), -PI, PI),
-			(prior[2] as float),
-			tilt * 0.40 + (prior[3] as float) * 0.25,
-			tilt * 0.25 + (prior[4] as float) * 0.25,
-		]
-	return [
-		tilt * 0.40 + (prior[0] as float) * 0.25,
-		wrapf(az - (BASE_A[f] as float), -PI, PI),
-		tilt * 0.35,
-		tilt * 0.25,
-	]
-
-
-## Решатель позы: минимум энергии E = e²/σ² + REST_SCALE·Σ w·dev² —
-## квадрат ошибки кончика В ЕДИНИЦАХ ДОПУСКА σ (= SOLVE_SIG·L) плюс
-## весовой штраф углов от покоя. Направление — чистый градиент E с
-## ТРАСТ-РЕГИОНОМ (см. константы решателя), линейный поиск по сетке
-## (энергия не растёт никогда, без bang-bang осцилляций и взборов —
-## ловлено численно 26.10.2026).
-## rest — покойные углы (DOF пальца), prev — прошлые углы (ползучесть
-## позы на равной энергии). Возвращает [углы, цепь].
-static func ik_chain(root: Vector3, bones: Array, target: Vector3,
-		rest: Array = [], prev: Array = [], f: int = INDEX,
-		m: float = 1.0) -> Array:
-	var L := 0.0
-	for b in bones:
-		L += b as float
-	if bones.size() != 3 or L <= 0.0:
-		return [rest, fk_chain(root, bones, rest as Array, f, m)]
-	var fallback: Array = REST_PRIOR[f]
-	var n := _dof_count(f)
-	var lim: Array = JOINT_LIMITS[f]
-	var ang := _init_angles(root, bones, target, f, m,
-		rest if rest.size() == n else fallback)
-	# Начальная поза обязана быть ЛЕГАЛЬНОЙ: цель вне конуса отведения
-	# даёт az сверх предела, и каждый пробный шаг зажимает его скачком —
-	# энергия взрывается, линейный поиск отвергает всё (ловлено 26.10.
-	# 2026: ang[1]=0.85 при пределе ±0.44, решатель на месте).
-	for dof in n:
-		ang[dof] = clampf((ang[dof] as float),
-			(lim[dof] as Vector2).x, (lim[dof] as Vector2).y)
-	var w: Array = JOINT_W_THUMB if f == THUMB else JOINT_W
-	var delta := 0.02
-	var sig2: float = pow(SOLVE_SIG * L, 2.0)
-	var chain := fk_chain(root, bones, ang, f, m)
-	# Недостижимая цель: цепь В СТРУНУ на цель (как у старого решате-
-	# ля), без биологических ограничений — это геометрия, а не поза.
-	var d_tot := target - root
-	if d_tot.length() > L + 1e-9:
-		var t0 := asin(clampf(-d_tot.z / d_tot.length(), -1.0, 1.0))
-		var az0 := wrapf(atan2(m * d_tot.x, -d_tot.y) - (BASE_A[f] as float),
-			-PI, PI)
-		# Сгибы копируют покой — струна тянется расслабленной рукой.
-		var straight: Array = []
-		for dof in n:
-			straight.append(0.0)
-		straight[0] = t0
-		straight[1] = az0
-		return [straight, fk_chain(root, bones, straight, f, m)]
-	for it in SOLVE_MAX:
-		var tip := chain[3] as Vector3
-		var e := target - tip
-		if e.length() < SOLVE_TOL * L:
-			break
-		# Численный якобиан 3×DOF.
-		var J: Array = []
-		for dof in n:
-			var a2 := ang.duplicate()
-			a2[dof] = (a2[dof] as float) + delta
-			var tip2: Vector3 = (fk_chain(root, bones, a2, f, m)[3]) as Vector3
-			J.append((tip2 - tip) / delta)
-		# Энергия: E = e²/σ² + REST_SCALE·Σ w·dev² (e в единицах до-
-		# пуска σ, см. SOLVE_SIG). Направление — ЧИСТЫЙ ГРАДИЕНТ E без
-		# предобуславливания: деление задачи́го члена на вес сустава w
-		# глушило ПЯСТНЫЙ сгиб (w=3) — PIP/DIP отъезжали к своим по-
-		# толкам (наживо 26.10.2026: PIP=1.75, MCP=0.08 на крючке).
-		# Жёсткость покоя в направлении даёт сам штраф; масштаб шага —
-		# ТРАСТ-РЕГИОН в радианах (градиент при σ-жёсткой задаче начи-
-		# нается с ~10²–10³ рад — сетка ДОЛЕЙ шага относительно него
-		# слепа: минимальная доля всё равно прыжок за потолок).
-		# DLS-шаг с хардклэмпом каждой оси давал bang-bang: знак шага
-		# отражался на итерации, решатель замирал (ловлено численно
-		# 26.10.2026: jt=±5.65 ровно в знак).
-		var grad: Array[float] = []
-		for dof in n:
-			# ∇E_task = −2·J·e/σ²: e = target − tip, ∂e/∂θ = −J.
-			# НЕ упрощать до +2·J·e — задачи́й шаг встанет на ВЗБОР по
-			# энергии (такое ловлено: решатель стартовал с err 89 и
-			# застрял на err 76, шаг шёл против цели).
-			var task_g: float = -2.0 * J[dof].dot(e) / sig2
-			var pull: float = ang[dof]
-			if rest.size() == n:
-				pull = rest[dof]
-			elif prev.size() == n:
-				pull = prev[dof]
-			var dev: float = wrapf((ang[dof] as float) - pull, -PI, PI)
-			var rest_g := 2.0 * REST_SCALE * (w[dof] as float) * dev
-			grad.append(task_g + rest_g)
-		var gnorm := 0.0
-		for dof3 in n:
-			gnorm += grad[dof3] * grad[dof3]
-		gnorm = sqrt(gnorm)
-		if gnorm < 1e-12:
-			break
-		var cur_err: float = (chain[3] as Vector3).distance_to(target)
-		var cur_dev := 0.0
-		for dof2 in n:
-			var pull_cur: float = ang[dof2]
-			if rest.size() == n:
-				pull_cur = rest[dof2]
-			elif prev.size() == n:
-				pull_cur = prev[dof2]
-			cur_dev += (w[dof2] as float) * pow(
-				wrapf((ang[dof2] as float) - pull_cur, -PI, PI), 2.0)
-		var cur_en: float = cur_err * cur_err / sig2 \
-			+ REST_SCALE * cur_dev
-		var best_ang := ang
-		var best_chain := chain
-		var best_e := cur_en
-		for k in SOLVE_STEPS.size():
-			var sc: float = -SOLVE_STEPS[k]
-			var a_try := ang.duplicate()
-			for dof in n:
-				a_try[dof] = clampf((ang[dof] as float)
-					+ grad[dof] / gnorm * sc,
-					(lim[dof] as Vector2).x, (lim[dof] as Vector2).y)
-			var c_try: Array = fk_chain(root, bones, a_try, f, m)
-			var t_try: Vector3 = c_try[3]
-			var try_err: float = t_try.distance_to(target)
-			var try_dev := 0.0
-			for dof2 in n:
-				var pull2: float = rest[dof2] if rest.size() == n \
-					else (ang[dof2] as float)
-				try_dev += (w[dof2] as float) * pow(
-					wrapf((a_try[dof2] as float) - pull2, -PI, PI), 2.0)
-			var en: float = try_err * try_err / sig2 \
-				+ REST_SCALE * try_dev
-			if en < best_e:
-				best_e = en
-				best_ang = a_try
-				best_chain = c_try
-		if best_e >= cur_en - 1e-9:
-			break
-		ang = best_ang
-		chain = best_chain
-	return [ang, chain]
-
-
-## Разница углов (−π..π) — для проверки покоя и мер в тестах.
-static func _angdiff(a: float, b: float) -> float:
-	return wrapf(a - b, -PI, PI)
-
-
-## Число степеней свободы пальца: четыре пальца — 4 [MCP flex, MCP
-## abd, PIP flex, DIP flex], большой — 5 (плюс поворот CMC).
-static func _dof_count(f: int) -> int:
-	return 5 if f == THUMB else 4
-
-
-## ---------- ПОКОЙ ----------
-
-## Поза покоя ОБЕИХ кистей: у каждого пальца корень = цель покоя +
-## KNUCKLE-смещение (пястная дуга ПОД кончиками), решатель ставит
-## кончик над дом-клавишей на высоте hover. Большой догоняет свою
-## четверть пробела. Геометрия чистая, без подгонки подобием: 3D-
-## решателю не нужно «дотягивать» кончики по 2D-карте.
-##
-## ЗЕРКАЛО СТРОИТСЯ, А НЕ СЛУЧАЕТСЯ: правый большой получает РОВНО
-## те же углы, что левый (fk зеркален при тех же углах — см. докс-
-## тринг fk_chain), кончик ложится в зеркальную цель по построению.
-## Спускать правый большой самостоятельно нельзя: долина twist'а
-## плоская, улп-шум целей за сотни итераций разводит спуски на
-## ~0.013 рад — руки перестают быть отражениями (ловлено
-## diag_mirror 26.10.2026 на 540×1140).
-static func rest_both(bs: Array) -> Dictionary:
-	var pitch := pitch_of(bs)
-	if pitch <= 0.0:
-		return {}
-	var pose := {}
-	for h in [LEFT, RIGHT]:
-		var p := _rest_one(bs, h, pitch)
-		if p.is_empty():
-			return {}
-		pose[h] = p
-	# Зеркало большого: углы левой кисти — в правую.
-	var fl: Dictionary = (pose[LEFT]["fingers"] as Dictionary)[THUMB] \
-		as Dictionary
-	var fr: Dictionary = (pose[RIGHT]["fingers"] as Dictionary)[THUMB] \
-		as Dictionary
-	var ang: Array = fl["angles"] as Array
-	fr["angles"] = ang
-	var chain := fk_chain(fr["root"] as Vector3, bones_px(THUMB, pitch),
-		ang, THUMB, side_of(RIGHT))
-	fr["chain"] = chain
-	return pose
-
-
-static func _rest_one(bs: Array, h: int, pitch: float) -> Dictionary:
-	var space := key_rect(bs, "пробел")
-	if space.size == Vector2.ZERO:
-		return {}
-	var m := side_of(h)
-	var fingers := {}
-	var rests := {}
-	var sum_y := 0.0
+## Поправка покоя: средняя невязка подушечек четырёх пальцев до их
+## дом-клавиш (одна на кисть — жёсткий сдвиг, форма кисти не меняется).
+static func _rest_shift(bs: Array, h: int, flat: Array,
+		map: Dictionary) -> Vector2:
+	var side := side_name(h)
+	var root_x := float(HandsPoses.ROOT_MM[side])
+	var acc := Vector2.ZERO
 	var n := 0
+	var homes: Dictionary = HOME_KEY[h] as Dictionary
 	for f in [INDEX, MIDDLE, RING, PINKY]:
-		var home_map: Dictionary = HOME_KEY[h] as Dictionary
-		var home := key_rect(bs, String(home_map[f]))
-		if home.size == Vector2.ZERO:
-			return {}
-		var txy := press_point(bs, String(home_map[f]), Vector2.ZERO)
-		if txy == Vector2.ZERO:
-			return {}
-		rests[f] = _solve_rest(bs, f, h, pitch, txy)
-		var fd: Dictionary = rests[f]
-		var chain: Array = fd["chain"] as Array
-		sum_y += (chain[3] as Vector3).y
+		var r := key_rect(bs, String(homes[f]))
+		if r.size == Vector2.ZERO:
+			continue
+		var pad := Hands3D.pad(flat, side, root_x, Hands3D.RAY_OF[f])
+		acc += r.get_center() - to_px(map, pad)
 		n += 1
-		fingers[f] = fd
-	# Цель большого — четверть пробела СВОЕЙ стороны, СИММЕТРИЧНАЯ
-	# ЦЕЛИКОМ ОТНОСИТЕЛЬНО ОСИ РУКИ (ось «ф»↔«ж» — крайних дом-клавиш),
-	# а не центра доски: доска асимметрична по служебным (слева Tab/
-	# Caps/Shift = 5.5 питча, справа стереть/ввод/шифт иной ширины),
-	# и центр доски ≠ центр буквенных рядов. Два разных центра (доска
-	# для большого, дом-группа для пальцев) разводили кисти: левый
-	# большой поджимался к указательному (мелкая V-выемка), правый
-	# уходил вправо от руки (глубокая) — кисти не были отражениями
-	# ГЛАЗАМИ, хотя числа попарно зеркальны (ловлено кадром
-	# hands-mirror-02-rest-zoom 26.10.2026). Ось меряется крайними
-	# домами, а не половинами пробела — на нечётной пиксельной ширине
-	# те ложились на полпикселя несимметрично. Кламп к пробелу: при
-	# широкой доске цель не уходит за край клавиши.
-	var axis := 0.5 * (key_rect(bs, "ф").get_center().x
-		+ key_rect(bs, "ж").get_center().x)
-	var tx := axis - m * space.size.x * 0.25
-	var pad := 0.15 * pitch
-	tx = clampf(tx, space.position.x + pad,
-		space.position.x + space.size.x - pad)
-	var tyx := Vector2(tx,
-		space.position.y
-		+ minf(0.5 * _row_h(bs, pitch), space.size.y * 0.5))
-	rests[THUMB] = _solve_rest(bs, THUMB, h, pitch, tyx)
-	sum_y += ((rests[THUMB]["chain"] as Array)[3] as Vector3).y
-	n += 1
-	for f in rests.keys():
-		fingers[f] = rests[f]
-	# Запястье — за нижним рядом, к центру кисти.
-	var wrist := Vector2(tyx.x + m * WRIST_OFF.x * pitch,
-		(tyx.y) + WRIST_OFF.y * pitch)
-	return {"fingers": fingers, "rest_ang": rests, "hand": h,
-		"knuckle_y": sum_y / n, "wrist": wrist}
+	return acc / float(n) if n > 0 else Vector2.ZERO
 
 
-## Покой ОДНОГО пальца: корень = цель покоя + KNUCKLE (зеркалом по
-## руке), z — из таблицы; решатель ставит кончик снова над целью на
-## высоте hover. Возвращает [углы, цепь].
-static func _solve_rest(bs: Array, f: int, h: int, pitch: float,
-		txy: Vector2) -> Dictionary:
-	var m := side_of(h)
-	var bones := bones_px(f, pitch)
-	var tip_z := (Z_TIP_THUMB if f == THUMB else Z_TIP) * pitch
-	if f == THUMB:
-		var k := THUMB_ROOT
-		var root := Vector3(txy.x + m * k.x * pitch, txy.y + k.y * pitch,
-			k.z * pitch)
-		var res := ik_chain(root, bones, Vector3(txy.x, txy.y, tip_z),
-			REST_PRIOR[f], REST_PRIOR[f], f, m)
-		return {"root": root, "angles": res[0] as Array,
-			"chain": res[1] as Array}
-	var k: Vector3 = KNUCKLE[f]
-	var root := Vector3(txy.x + m * k.x * pitch, txy.y + k.y * pitch,
-		k.z * pitch)
-	var res := ik_chain(root, bones, Vector3(txy.x, txy.y, tip_z),
-		REST_PRIOR[f], REST_PRIOR[f], f, m)
-	return {"root": root, "angles": res[0] as Array, "chain": res[1] as Array}
+## Поза кисти на кадр: покой + нажатия. presses = {рука: {палец:
+## [подпись клавиши, ход 0..1, ...]}} (лишние поля — фаза и действие
+## удержания, руки они не касаются).
+##
+## Каждый палец берёт СВОИ четыре угла из своей запечённой позы, плечо —
+## средневзвешенное (сумма весов ≤ 1), сдвиг — туда, где подушечка этой
+## позы оказывается на клавише игры (у широких клавиш — ближайшая точка
+## с отступом, а не центр: иначе большой уезжал бы на середину пробела).
+static func pose_of(bs: Array, h: int, rest: Dictionary,
+		presses: Dictionary) -> Dictionary:
+	if rest.is_empty() or not rest.has(h):
+		return {}
+	var side := side_name(h)
+	var root_x := float(HandsPoses.ROOT_MM[side])
+	var map: Dictionary = rest["map"] as Dictionary
+	var base: Array = rest[h] as Array
+	var pitch := pitch_of(bs)
+	var per: Dictionary = presses.get(h, {}) as Dictionary
+	var poses := {}
+	var wsum := 0.0
+	var shift := Vector2.ZERO
+	var sw := 0.0
+	for f in per.keys():
+		var e: Array = per[f] as Array
+		if e.size() < 2:
+			continue
+		var label := String(e[0])
+		var w := clampf(float(e[1]), 0.0, 1.0)
+		if w <= 0.0001:
+			continue
+		var pd: Dictionary = HandsPoses.PRESS[side] as Dictionary
+		if not pd.has(label):
+			continue
+		var p: Array = pd[label] as Array
+		poses[f] = [p, w]
+		wsum += w
+		var r := sig_rect(bs, label)
+		if r.size == Vector2.ZERO:
+			continue
+		var ray: String = Hands3D.RAY_OF[f] if f != THUMB else "I"
+		var at := to_px(map, Hands3D.pad(p, side, root_x, ray))
+		shift += (pad_target(bs, r, at, pitch) - at) * w
+		sw += w
+	var rest_shift: Vector2 = (rest["shift"] as Dictionary).get(h, Vector2.ZERO)
+	var total := clampf(sw, 0.0, 1.0)
+	var off := rest_shift * (1.0 - total) + shift
+	return {"flat": Hands3D.blend_many(base, poses), "shift": off,
+		"map": map}
+
+
+## Точка посадки на клавишу: малая — центр; широкая — ближайшая к
+## подушечке точка с отступом в полклавиши (палец остаётся там, где его
+## поставила модель, а не едет в середину пробела).
+static func pad_target(bs: Array, r: Rect2, at: Vector2,
+		pitch: float) -> Vector2:
+	if pitch <= 0.0 or _is_small(r, pitch, bs):
+		return r.get_center()
+	var iy := minf(0.5 * _row_h(bs, pitch), r.size.y * 0.5)
+	var ix := minf(0.5 * pitch, r.size.x * 0.5)
+	return Vector2(clampf(at.x, r.position.x + ix, r.end.x - ix),
+		clampf(at.y, r.position.y + iy, r.end.y - iy))
 
 
 ## ---------- РИСОВАНИЕ ----------
 
-## Обе кисти на доске. presses = {рука: {палец: [цель, ход 0..1]}}:
-## палец решается из покоя к цели (кончик — НА ПЛОСКОСТИ клавиши,
-## просадка в клавишу — по z), ход лерпит 3D-цепь от покоя к нажатию.
-## shifts = {рука: Vector2} — кисть ЦЕЛИКОМ съезжает по плоскости.
-##
-## Кисть рисуется КОНТУРОМ (автор 27.10.2026: «не скелеты и не чистое
-## 3D, а только контуры рук»): одна замкнутая внешняя граница ладони и
-## пальцев — объединение их лент. Костей, суставов и внутренних швов
-## на экране нет; движение читается силуэтом (подсказка и реальное
-## нажатие), а подписи клавиш видны сквозь лёгкую заливку.
-static func draw_both(ci: CanvasItem, rest: Dictionary,
-		presses: Dictionary, pitch: float, ink: Color,
-		shifts: Dictionary = {}, cache: Variant = null) -> void:
-	if rest.is_empty() or pitch <= 0.0:
+## Обе кисти на доске. presses — как у pose_of; кисть рисуется ОДНИМ
+## замкнутым контуром (запечённый силуэт модели), линией и лёгкой
+## заливкой. Кэш — по состоянию позы: в покое контур не пересобирается.
+static func draw_both(ci: CanvasItem, bs: Array, rest: Dictionary,
+		presses: Dictionary, ink: Color, cache: Variant = null) -> void:
+	if rest.is_empty():
 		return
-	# Кэш контуров: в покое и позе без движения объединение Clipper'ом
-	# (две кисти — ~1.1 мс) не повторяется каждый кадр. Ключ — состояние
-	# позы; владелец кэша чистит его при смене доски (поза пересобрана).
+	var pitch := pitch_of(bs)
+	if pitch <= 0.0:
+		return
 	var polys: Dictionary
+	var key := "%.3f|%s" % [pitch, str(presses)]
 	if cache is Dictionary:
 		var cd: Dictionary = cache
-		var key := "%.3f|%s|%s" % [pitch, str(presses), str(shifts)]
 		if cd.has(key) and cd[key] is Dictionary:
 			polys = cd[key] as Dictionary
 		else:
-			polys = _outlines(rest, presses, pitch, shifts)
+			polys = _outlines(bs, rest, presses)
 			cd.clear()
 			cd[key] = polys
 	else:
-		polys = _outlines(rest, presses, pitch, shifts)
+		polys = _outlines(bs, rest, presses)
 	for h in polys.keys():
 		var poly: PackedVector2Array = polys[h]
 		if poly.size() >= 3:
 			_draw_contour(ci, poly, pitch, ink)
 
 
-## Контуры обеих кистей по позе: {рука: PackedVector2Array}.
-static func _outlines(rest: Dictionary, presses: Dictionary, pitch: float,
-		shifts: Dictionary) -> Dictionary:
+## Контуры обеих кистей: {рука: PackedVector2Array}.
+static func _outlines(bs: Array, rest: Dictionary,
+		presses: Dictionary) -> Dictionary:
 	var polys := {}
 	for h in [LEFT, RIGHT]:
-		if not rest.has(h):
-			continue
-		var off: Vector2 = shifts.get(h, Vector2.ZERO)
-		polys[h] = hand_outline(rest, presses, pitch, h, off)
+		var poly := hand_outline(bs, rest, presses, h)
+		if poly.size() >= 3:
+			polys[h] = poly
 	return polys
 
 
-## Контур ОДНОЙ кисти — ЧИСТАЯ МЕРА: ею же рисует draw_both, её же
-## меряют тесты (headless картинку не рисует, а геометрию проверяет
-## числом). rest — обе руки, presses — как у draw_both, off — сдвиг
-## кисти. Одна замкнутая граница: ладонь + все пять лент, объединённые
-## Clipper'ом (Geometry2D.merge_polygons).
-static func hand_outline(rest: Dictionary, presses: Dictionary,
-		pitch: float, h: int,
-		off: Vector2 = Vector2.ZERO) -> PackedVector2Array:
-	if not rest.has(h) or pitch <= 0.0:
+## Контур ОДНОЙ кисти — ЧИСТАЯ МЕРА: ею рисует draw_both, её же меряют
+## тесты (headless картинку не рисует, а геометрию проверяет числом).
+##
+## Силуэт НЕ собирается в игре: он запечён с ПОЛЯ 3D-модели
+## (tools/hand3d/bake_outline.gd → hands_shape.gd) вдоль локальной z, то
+## есть ровно той осью, которой смотрит игра. Здесь остаётся проекция:
+## луч полярной меры → точка в системе кисти → мир → пиксели доски.
+##
+## Почему запечено, а не собрано: объединение проекций примитивов — не
+## проекция объединения. Сглаживание smin выносит настоящую поверхность
+## на 5.8 мм наружу, и объединение теней этого не знает — на контуре
+## появлялись ступеньки и «шишах» у большого пальца (автор 05.11.2026).
+static func hand_outline(bs: Array, rest: Dictionary, presses: Dictionary,
+		h: int) -> PackedVector2Array:
+	var st := pose_of(bs, h, rest, presses)
+	if st.is_empty():
 		return PackedVector2Array()
-	var pose: Dictionary = rest[h] as Dictionary
-	var solved := _solve_hand(pose, presses, pitch, h, off)
-	return outline_of(pose, solved, pitch, off)
-
-
-## Контур по УЖЕ решённым цепям: рисование решает цепи один раз на
-## кадр (IK не дёргается дважды), тесты — своей пробой.
-static func outline_of(pose: Dictionary, solved: Dictionary,
-		pitch: float, off: Vector2) -> PackedVector2Array:
-	var w := widths_of(pitch)
-	var parts: Array = []
-	var palm := _palm_poly(pose, pitch, off, solved)
-	if palm.size() >= 3:
-		parts.append(palm)
-	for f in [THUMB, INDEX, MIDDLE, RING, PINKY]:
-		if not solved.has(f):
+	var side := side_name(h)
+	var root_x := float(HandsPoses.ROOT_MM[side])
+	var map: Dictionary = st["map"] as Dictionary
+	var off: Vector2 = st["shift"] as Vector2
+	var flat: Array = st["flat"] as Array
+	var radii := shape_radii(h, presses)
+	if radii.is_empty():
+		return PackedVector2Array()
+	var xf := Hands3D.hand_xf(Hands3D.arm_of(flat))
+	var c: Vector2 = Shape.CENTER
+	var n := radii.size()
+	var palm := PackedVector2Array()
+	palm.resize(n)
+	for k in n:
+		var a := TAU * float(k) / float(n)
+		var q := c + Vector2(cos(a), sin(a)) * float(radii[k])
+		palm[k] = to_px(map, Hands3D.to_world(side, root_x,
+			xf * Vector3(q.x, q.y, 0.0))) + off
+	# Пальцы в полярную меру не влезают (они торчат от ладони радиально,
+	# каждый занимает ~10°, и щели между ними становятся широкими
+	# клиньями), поэтому ладонь запечена ОТДЕЛЬНО, а каждый палец —
+	# лента из своей цепи и своих радиусов кожи (SKIN_R / THUMB_R).
+	var acc := palm
+	for ray in Hands3D.FINGERS:
+		var band := finger_band(flat, side, root_x, ray, map, xf, off)
+		if band.size() < 3:
 			continue
-		var chain: Array = (solved[f] as Array)[0] as Array
-		var band := _finger_poly(chain, w[0] as float, w[1] as float)
-		if band.size() >= 3:
-			parts.append(band)
-	return _union_parts(parts)
-
-
-## Решённые цепи кисти: {палец: [точки 2D, ход 0..1]}. Нажатие решается
-## из покоя к цели, снятой на сдвиг кисти: кончик ложится на МИРОВУЮ
-## клавишу после сдвига.
-static func _solve_hand(pose: Dictionary, presses: Dictionary,
-		pitch: float, h: int, off: Vector2) -> Dictionary:
-	var fingers: Dictionary = pose["fingers"] as Dictionary
-	var press_f: Dictionary = {}
-	if presses.has(h) and (presses[h] is Dictionary):
-		press_f = presses[h] as Dictionary
-	var solved := {}
-	for f in fingers.keys():
-		var fd: Dictionary = fingers[f] as Dictionary
-		var chain0: Array = fd["chain"] as Array
-		var rest_ang: Array = fd.get("angles", []) as Array
-		var cpt: Array = []
-		var phase := 0.0
-		if press_f.has(f):
-			var info: Array = press_f[f] as Array
-			phase = clampf(info[1] as float, 0.0, 1.0)
-			var tgt := Vector3((info[0] as Vector2).x,
-				(info[0] as Vector2).y, Z_PRESS * pitch) \
-				- Vector3(off.x, off.y, 0.0)
-			var res := ik_chain(fd["root"] as Vector3,
-				bones_px(f, pitch), tgt, rest_ang, rest_ang,
-				f, side_of(h))
-			cpt = res[1] as Array
-		var pts: Array = []
-		for i in chain0.size():
-			var a := chain0[i] as Vector3
-			var p := a
-			if phase > 0.0 and cpt.size() == chain0.size():
-				var b := cpt[i] as Vector3
-				p = a.lerp(b, phase)
-			p = Vector3(p.x + off.x, p.y + off.y, p.z)
-			pts.append(Vector2(p.x, p.y))
-		solved[f] = [pts, phase]
-	return solved
-
-
-## Объединение частей кисти в ОДИН внешний контур. Части перекрываются
-## (палец растёт из вершины ладони), поэтому каждая пара сливается в
-## один полигон; из ответа берётся САМАЯ БОЛЬШАЯ площадь — дыр в руке
-## нет, а у merge_polygons дырка вернулась бы отдельным (обратным)
-## контуром. Если слияние не удалось, часть отбрасывается: контур
-## остаётся замкнутым (потеря пальца ловится тестом «все подушечки
-## внутри»).
-static func _union_parts(parts: Array) -> PackedVector2Array:
-	var acc := PackedVector2Array()
-	for part in parts:
-		var p: PackedVector2Array = part
-		if p.size() < 3:
-			continue
-		if acc.is_empty():
-			acc = p
-			continue
-		var merged := Geometry2D.merge_polygons(acc, p)
-		var best := acc
-		var best_a := absf(_poly_area(acc))
-		for q in merged:
-			var qq: PackedVector2Array = q
-			var a := absf(_poly_area(qq))
-			if a > best_a:
-				best = qq
-				best_a = a
-		acc = best
+		acc = _biggest(Geometry2D.merge_polygons(acc, band))
+	var th := thumb_band(flat, side, root_x, map, xf, off)
+	if th.size() >= 3:
+		acc = _biggest(Geometry2D.merge_polygons(acc, th))
 	return acc
 
 
-## Площадь полигона (шнурок) — мера выбора внешнего контура.
+## Лента ОДНОГО пальца: проекция его кожи — три усечённых конуса вдоль
+## цепи (Hands3D.finger_fk + SKIN_R). Проекция конуса — выпуклая оболочка
+## двух спроецированных кругов, и оболочка считается УЖЕ в пикселях:
+## доска растянута по y (sx ≈ 1.78, sy ≈ 1.94), поэтому круг модели
+## становится эллипсом, и оболочка в мм дала бы косые бока.
+static func finger_band(flat: Array, side: String, root_x: float,
+		ray: String, map: Dictionary, xf: Transform3D,
+		off: Vector2 = Vector2.ZERO) -> PackedVector2Array:
+	var pts := Hands3D.finger_fk(ray, Hands3D.finger_angles(flat, ray))
+	return _chain_band(pts, Hands3D.SKIN_R[ray] as Array, side, root_x,
+		map, xf, off)
+
+
+## Лента большого: та же мера, что у пальцев, но цепь своя (thumb_fk:
+## [CMC, MCP, IP, кончик]) и радиусы свои (THUMB_R). Из полярной ладони
+## большой выведен: он торчит от ладони, и полярный контур превращал его
+## в тонкий шип — а «шишах» на его стороне и был жалобой автора.
+static func thumb_band(flat: Array, side: String, root_x: float,
+		map: Dictionary, xf: Transform3D,
+		off: Vector2 = Vector2.ZERO) -> PackedVector2Array:
+	var fk := Hands3D.thumb_fk(Hands3D.thumb_angles(flat))
+	var pts: PackedVector3Array = fk["pts"] as PackedVector3Array
+	return _chain_band(pts, Hands3D.THUMB_R as Array, side, root_x,
+		map, xf, off)
+
+
+static func _chain_band(pts: PackedVector3Array, rs: Array, side: String,
+		root_x: float, map: Dictionary, xf: Transform3D,
+		off: Vector2) -> PackedVector2Array:
+	var acc := PackedVector2Array()
+	for i in 3:
+		var cap := _cap_px(xf * pts[i], float(rs[i]),
+			xf * pts[i + 1], float(rs[i + 1]), side, root_x, map, off)
+		if cap.size() < 3:
+			continue
+		acc = cap if acc.is_empty() else _biggest(
+			Geometry2D.merge_polygons(acc, cap))
+	return acc
+
+
+## Проекция усечённого конуса: выпуклая оболочка двух кругов.
+const CAP_SEG := 24
+
+
+static func _cap_px(a: Vector3, ra: float, b: Vector3, rb: float,
+		side: String, root_x: float, map: Dictionary,
+		off: Vector2 = Vector2.ZERO) -> PackedVector2Array:
+	var pts := PackedVector2Array()
+	for v in [[a, ra], [b, rb]]:
+		var q: Vector3 = v[0] as Vector3
+		var r := float(v[1])
+		for j in CAP_SEG:
+			var t := TAU * float(j) / float(CAP_SEG)
+			pts.append(to_px(map, Hands3D.to_world(side, root_x,
+				Vector3(q.x + cos(t) * r, q.y + sin(t) * r, 0.0))) + off)
+	return Geometry2D.convex_hull(pts)
+
+
+## Самый крупный кусок объединения (Clipper отдаёт и дырки отдельными
+## полигонами; у кисти дырок нет — берём тело).
+static func _biggest(polys: Array) -> PackedVector2Array:
+	var best := PackedVector2Array()
+	var ba := 0.0
+	for p in polys:
+		var poly: PackedVector2Array = p
+		var a := absf(_poly_area(poly))
+		if a > ba:
+			ba = a
+			best = poly
+	return best
+
+
+## Радиусы контура на кадр: покой, подтянутый к позам нажатий ровно теми
+## же весами, какими Hands3D.blend_many собирает позу (сумма весов ≤ 1).
+## Промежуточная поза — тоже честный контур: топология у всех поз одна,
+## поэтому радиусы смешиваются поэлементно.
+static func shape_radii(h: int, presses: Dictionary) -> PackedFloat32Array:
+	var side := side_name(h)
+	var table: Dictionary = Shape.RADII[side] as Dictionary
+	var base: Array = table[""] as Array
+	var acc := {}
+	var wsum := 0.0
+	var per: Dictionary = presses.get(h, {}) as Dictionary
+	for f in per.keys():
+		var e: Array = per[f] as Array
+		if e.size() < 2:
+			continue
+		var label := String(e[0])
+		var w := clampf(float(e[1]), 0.0, 1.0)
+		if w <= 0.0001 or not table.has(label):
+			continue
+		acc[label] = float(acc.get(label, 0.0)) + w
+		wsum += w
+	var k0 := clampf(1.0 - wsum, 0.0, 1.0)
+	var out := PackedFloat32Array()
+	out.resize(base.size())
+	for i in out.size():
+		var v := float(base[i]) * k0
+		for lb in acc.keys():
+			var arr: Array = table[lb] as Array
+			v += float(arr[i]) * float(acc[lb])
+		out[i] = v
+	return out
+
+
+## Площадь полигона (шнурок) — мера контура для тестов и диагностики.
 static func _poly_area(p: PackedVector2Array) -> float:
 	var a := 0.0
 	var n := p.size()
@@ -994,16 +603,26 @@ static func _poly_area(p: PackedVector2Array) -> float:
 ## без неё узкий палец читается двумя чёрточками, а не пальцем; alpha
 ## низкая, чтобы подписи клавиш оставались видны. Толщина линии — от
 ## питча (на мелкой доске не игла, на крупной не жирная).
+##
+## alpha 0.14, а не 0.10: на 0.10 кисть на живой доске читалась ОДНИМИ
+## ЛИНИЯМИ (проверено кадром vis-26: внутри ладони цвет не отличался от
+## фона), и контур выглядел каракулями. Подписи клавиш под 14% чернил
+## остаются различимыми — это и был выбор автора 27.10.2026.
+static var fill_a := 0.14
+static var line_a := 0.75
+static var line_w := 0.07
+
+
 static func _draw_contour(ci: CanvasItem, poly: PackedVector2Array,
 		pitch: float, ink: Color) -> void:
 	var fill := ink
-	fill.a = 0.10
+	fill.a = fill_a
 	var line := ink
-	line.a = 0.75
+	line.a = line_a
 	var loop := PackedVector2Array(poly)
 	loop.append(poly[0])
 	ci.draw_colored_polygon(poly, fill)
-	ci.draw_polyline(loop, line, clampf(pitch * 0.07, 2.0, 5.0), true)
+	ci.draw_polyline(loop, line, clampf(pitch * line_w, 2.0, 5.0), true)
 
 
 ## Демонстрация подсказки: палец идёт к клавише, стоит на ней и
@@ -1027,131 +646,3 @@ static func hint_depth(t: float) -> float:
 		return 1.0 - smoothstep(0.0, 1.0,
 			(x - HINT_RISE_T - HINT_HOLD_T) / HINT_FALL_T)
 	return 0.0
-
-
-## Одна лента: вдоль хорды «корень→кончик» со СЖАТЫМИ поперечными
-## смещениями из цепи. Лента по сырой цепи рвёт триангуляцию: 3D-ход
-## костей спроецирован в XY как S-петля (звенья по 2 px против ширины
-## 10 px), борта пересекаются, EarCut рисует клин-огрызок (ловлено
-## снимком dbg-strip). Каркас — хорда, поперечные смещения точек цепи
-## зажаты в ±0.35 длины: мягкая дуга остаётся, радиус всюду сильно
-## больше полширины — самопересечений нет.
-static func _finger_poly(chain: Array, w0: float,
-		w1: float) -> PackedVector2Array:
-	var n := chain.size()
-	if n < 2:
-		return PackedVector2Array()
-	var root := chain[0] as Vector2
-	var tip := chain[n - 1] as Vector2
-	var axis := tip - root
-	var alen := axis.length()
-	if alen < 1e-3:
-		return PackedVector2Array()
-	var axis_u := axis / alen
-	var perp := Vector2(-axis_u.y, axis_u.x)
-	var pts: Array = []
-	for i in n:
-		var t: float = (i as float) / ((n - 1) as float)
-		var d := ((chain[i] as Vector2) - root).dot(perp)
-		d = clampf(d, -0.35 * alen, 0.35 * alen)
-		pts.append(root + axis_u * (alen * t) + perp * d)
-	# Борта — по перпендикуляру ХОРДЫ: разворачивающаяся развёртка на
-	# крутых дугах оставляла локальные вывороты бортов (полоса в
-	# щели), перпендикуляр хорды их не даёт вовсе; дуга читается
-	# самими смещёнными точками каркаса.
-	var nv := func(i: int) -> Vector2:
-		return perp
-	var out := PackedVector2Array()
-	for i in n:
-		var p := pts[i] as Vector2
-		var fr := 1.0 - (i as float) / ((n - 1) as float)
-		var wi := lerpf(w1, w0, fr)
-		out.append(p - (nv.call(i) as Vector2) * (wi * 0.5))
-	var tip2 := pts[n - 1] as Vector2
-	var nt: Vector2 = (nv.call(n - 1) as Vector2)
-	for kk in [1, 2, 3, 4]:
-		var phi: float = nt.angle() + PI + PI * (kk as float) / 5.0
-		out.append(tip2 + (w1 * 0.5) * Vector2(cos(phi), sin(phi)))
-	for i in range(n - 1, -1, -1):
-		var p2 := pts[i] as Vector2
-		var fr2 := 1.0 - (i as float) / ((n - 1) as float)
-		var wi2 := lerpf(w1, w0, fr2)
-		out.append(p2 + (nv.call(i) as Vector2) * (wi2 * 0.5))
-	var root2 := pts[0] as Vector2
-	var nr0: Vector2 = (nv.call(0) as Vector2)
-	for kk2 in [1, 2, 3, 4]:
-		var phi0: float = nr0.angle() + PI * (kk2 as float) / 5.0
-		out.append(root2 + (w0 * 0.5) * Vector2(cos(phi0), sin(phi0)))
-	return out
-
-
-## Ладонь: полигон по корням пальцев решённой позы (+ сдвиг кисти) и
-## двум углам пятки, сглаженный Catmull-Rom замкнуто. Порядок точек —
-## по углу вокруг центроида: звёздчатый полигон не самопересекается.
-static func _palm_poly(pose: Dictionary, pitch: float, off: Vector2,
-		solved: Dictionary) -> PackedVector2Array:
-	var pts := PackedVector2Array()
-	for f in [PINKY, RING, MIDDLE, INDEX, THUMB]:
-		if solved.has(f):
-			var sd: Array = solved[f] as Array
-			var ch: Array = sd[0] as Array
-			if ch.is_empty():
-				continue
-			pts.append(ch[0] as Vector2)
-	if pts.size() < 3:
-		return PackedVector2Array()
-	var x_min := (pts[0] as Vector2).x
-	var x_max := (pts[0] as Vector2).x
-	for p in pts:
-		x_min = minf(x_min, p.x)
-		x_max = maxf(x_max, p.x)
-	# Пятка — ЗА нижним рядом доски (запястье уходит за край), и СУЖЕ
-	# размаха пальцев: ладонь трапецией, не каплей.
-	var wrist := (pose["wrist"] as Vector2) + off
-	var heel_y: float = wrist.y - 1.15 * pitch
-	var heel_in := 0.55 * pitch
-	pts.append(Vector2(x_max - heel_in, heel_y))
-	pts.append(Vector2(x_min + heel_in, heel_y))
-	var cx := 0.0
-	var cy := 0.0
-	for p in pts:
-		cx += p.x
-		cy += p.y
-	cx /= pts.size()
-	cy /= pts.size()
-	var ordered: Array = pts.duplicate()
-	ordered.sort_custom(func(a: Vector2, b: Vector2) -> bool:
-		var aa := (a - Vector2(cx, cy)).angle()
-		var bb := (b - Vector2(cx, cy)).angle()
-		return aa < bb)
-	var arr: Array = []
-	for p in ordered:
-		arr.append(p)
-	return PackedVector2Array(_smooth_closed(arr))
-
-
-## Замкнутый Catmull-Rom: 4 сэмпла на звено, кольцо замыкается.
-static func _smooth_closed(pts: Array, samples: int = 4) -> Array:
-	var n := pts.size()
-	if n < 3:
-		return pts
-	var out: Array = []
-	for i in n:
-		var p0: Vector2 = pts[(i - 1 + n) % n]
-		var p1: Vector2 = pts[i]
-		var p2: Vector2 = pts[(i + 1) % n]
-		var p3: Vector2 = pts[(i + 2) % n]
-		out.append(p1)
-		for s in range(1, samples):
-			var t := (s as float) / (samples as float)
-			out.append(_catmull(p0, p1, p2, p3, t))
-	return out
-
-
-static func _catmull(p0: Vector2, p1: Vector2, p2: Vector2, p3: Vector2,
-		t: float) -> Vector2:
-	var t2 := t * t
-	var t3 := t2 * t
-	return 0.5 * ((2.0 * p1) + (-p0 + p2) * t
-		+ (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
-		+ (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)

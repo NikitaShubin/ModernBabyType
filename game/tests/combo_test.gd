@@ -3880,9 +3880,12 @@ func _case_hands_hint_demo() -> void:
 		not _main._hands_hint.is_empty(),
 		"%s: the hint targets were not built" % tag
 	)
-	# Цели — ровно на подсвеченных клавишах: палец тот и точка на клавише.
+	# Цели — ПОДПИСИ клавиш на СВОИХ пальцах, и такие позы запечены:
+	# иначе рука не знает, куда идти. Поза нажатия ищется по подписи
+	# доски (key_label), а не по сырому событию: «М» и «м» — одна клавиша.
 	for s in hi:
-		var hf := Hands.finger_of(String(s))
+		var key := Hands.key_label(String(s))
+		var hf := Hands.finger_of(key)
 		var h: int = hf[0]
 		var f: int = hf[1]
 		var per: Dictionary = _main._hands_hint.get(h, {}) as Dictionary
@@ -3891,13 +3894,13 @@ func _case_hands_hint_demo() -> void:
 			"%s: the hinted «%s» has no finger target" % [tag, s]
 		)
 		if per.has(f):
-			var want := Hands.press_point(
-				_main._hands_bs, String(s),
-				Hands.rest_tip(_main._hands_rest, h, f)
+			_check(
+				String(per[f]) == key,
+				"%s: the target for «%s» is not its key («%s»)" % [tag, s, String(per[f])]
 			)
 			_check(
-				(per[f] as Vector2).distance_to(want) < 0.5,
-				"%s: the target for «%s» is off its key" % [tag, s]
+				(HandsPoses.PRESS[Hands.side_name(h)] as Dictionary).has(key),
+				"%s: the hinted «%s» has a baked press pose" % [tag, key]
 			)
 	# Цикл демонстрации: за полный период палец доходит до клавиши
 	# (глубина 1) и возвращается в покой (0). Считаем крайние значения.
@@ -3912,35 +3915,53 @@ func _case_hands_hint_demo() -> void:
 		maxd > 0.99 and mind < 0.01,
 		"%s: the hint cycle does not rise and fall (%.2f..%.2f)" % [tag, mind, maxd]
 	)
-	# Ход кисти гаснет вместе с фазой: на середине подъёма цель сдвига —
-	# ровно доля полной. При глубине 1 умножение на неё неотличимо от
-	# его отсутствия, поэтому меряем в середине подъёма.
+	# Ход пальца гаснет вместе с фазой: на середине подъёма вес позы —
+	# ровно глубина. При глубине 1 умножение на неё неотличимо от его
+	# отсутствия, поэтому меряем в середине подъёма.
 	_main._hands_hint_t = Hands.HINT_RISE_T * 0.5
-	_main.call("_hands_tick", 0.0, _main._own_rect(), _main._kb_enter_shown(), hi)
 	var midd: float = Hands.hint_depth(_main._hands_hint_t)
 	_check(
 		midd > 0.3 and midd < 0.7,
 		"%s: the middle of the rise is not half depth (%.2f)" % [tag, midd]
 	)
-	for h in _main._hands_hint_sh.keys():
-		var full: Vector2 = _main._hands_hint_sh[h] as Vector2
-		var want_sh: Vector2 = full * midd
-		var got_sh: Vector2 = _main._hands_shiftg.get(h, Vector2.ZERO) as Vector2
-		_check(
-			got_sh.distance_to(want_sh) < 0.01,
-			"%s: the hand shift is not scaled by the hint depth (%s vs %s)" % [
-				tag, str(got_sh), str(want_sh)
-			]
-		)
-		# Сама цель не нулевая у шифта (рука тянется), и в середине хода
-		# кисть ещё не доехала до полной.
-		if full.length() > 1.0:
+	var mid_press := _main.call("_hands_presses") as Dictionary
+	for h in _main._hands_hint.keys():
+		var per: Dictionary = _main._hands_hint[h] as Dictionary
+		var got: Dictionary = mid_press.get(h, {}) as Dictionary
+		for f in per.keys():
 			_check(
-				got_sh.length() < full.length() - 1.0,
-				"%s: the hand shift does not fade with the phase (%.1f of %.1f)" % [
-					tag, got_sh.length(), full.length()
+				got.has(f) and is_equal_approx(float((got[f] as Array)[1]), midd),
+				"%s: the hinted finger is not weighted by the depth (%s)" % [
+					tag, str(got.get(f, []))
 				]
 			)
+	# Кисть РЕАЛЬНО едет за подсказкой: на площадке подушечка подсказанного
+	# пальца ушла на клавишу, а не осталась в покое (поза кадра собирается
+	# из _hands_presses, глубина 1 — полный ход).
+	_main._hands_hint_t = Hands.HINT_RISE_T + Hands.HINT_HOLD_T * 0.5
+	var rest0: Dictionary = _main._hands_rest
+	var bs0: Array = _main._hands_bs
+	var hk := Hands.key_label(String(hi[hi.size() - 1]))
+	var hf0 := Hands.finger_of(hk)
+	var hh0: int = hf0[0]
+	var ff0: int = hf0[1]
+	var side0 := Hands.side_name(hh0)
+	var rx0 := float(HandsPoses.ROOT_MM[side0])
+	var ray0 := String(Hands3D.RAY_OF[ff0])
+	var map0: Dictionary = rest0["map"] as Dictionary
+	var pr_now := _main.call("_hands_presses") as Dictionary
+	var st0 := Hands.pose_of(bs0, hh0, rest0, {})
+	var st1 := Hands.pose_of(bs0, hh0, rest0, pr_now)
+	var tip0 := Hands.to_px(map0, Hands3D.pad(st0["flat"] as Array, side0,
+		rx0, ray0)) + (st0["shift"] as Vector2)
+	var tip1 := Hands.to_px(map0, Hands3D.pad(st1["flat"] as Array, side0,
+		rx0, ray0)) + (st1["shift"] as Vector2)
+	_check(
+		tip0.distance_to(tip1) > 0.5,
+		"%s: the hinted finger does not move (%.2f px)" % [
+			tag, tip0.distance_to(tip1)
+		]
+	)
 	# Возвращаем цикл на площадку: реальное нажатие проверяем на глубине 1.
 	_main._hands_hint_t = Hands.HINT_RISE_T + Hands.HINT_HOLD_T * 0.5
 	_main.call("_hands_tick", 0.0, _main._own_rect(), _main._kb_enter_shown(), hi)
