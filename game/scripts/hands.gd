@@ -393,9 +393,17 @@ static func pad_target(bs: Array, r: Rect2, at: Vector2,
 
 ## ---------- РИСОВАНИЕ ----------
 
-## Обе кисти на доске. presses — как у pose_of; кисть рисуется ОДНИМ
-## замкнутым контуром (запечённый силуэт модели), линией и лёгкой
-## заливкой. Кэш — по состоянию позы: в покое контур не пересобирается.
+## Обе кисти на доске. presses — как у pose_of.
+##
+## Заливка — ОДИН раз по объединённому силуэту, а линия — по КАЖДОЙ
+## части (ладонь, каждый палец, большой). Контур объединения знает
+## только внешнюю границу руки: между соседними пальцами её нет, потому
+## что там рука ещё продолжается, и шов пропадал (автор 06.11.2026:
+## «между средним и безымянным пальцами нет линии»). А ребро между
+## двумя частями — это граница, которую глаз и ждёт увидеть. Контуры
+## частей лежат ВНУТРИ объединения, поэтому обрезка не нужна: одна
+## заливка, линии частей. Кэш — по состоянию позы: в покое Clipper не
+## гоняем.
 static func draw_both(ci: CanvasItem, bs: Array, rest: Dictionary,
 		presses: Dictionary, ink: Color, cache: Variant = null) -> void:
 	if rest.is_empty():
@@ -403,37 +411,48 @@ static func draw_both(ci: CanvasItem, bs: Array, rest: Dictionary,
 	var pitch := pitch_of(bs)
 	if pitch <= 0.0:
 		return
-	var polys: Dictionary
+	var sets: Dictionary
 	var key := "%.3f|%s" % [pitch, str(presses)]
 	if cache is Dictionary:
 		var cd: Dictionary = cache
 		if cd.has(key) and cd[key] is Dictionary:
-			polys = cd[key] as Dictionary
+			sets = cd[key] as Dictionary
 		else:
-			polys = _outlines(bs, rest, presses)
+			sets = _part_sets(bs, rest, presses)
 			cd.clear()
-			cd[key] = polys
+			cd[key] = sets
 	else:
-		polys = _outlines(bs, rest, presses)
-	for h in polys.keys():
-		var poly: PackedVector2Array = polys[h]
-		if poly.size() >= 3:
-			_draw_contour(ci, poly, pitch, ink)
+		sets = _part_sets(bs, rest, presses)
+	for h in sets.keys():
+		var parts: Dictionary = sets[h] as Dictionary
+		_draw_parts(ci, parts, pitch, ink)
 
 
-## Контуры обеих кистей: {рука: PackedVector2Array}.
-static func _outlines(bs: Array, rest: Dictionary,
+## Части обеих кистей: {рука: hand_parts()}.
+static func _part_sets(bs: Array, rest: Dictionary,
 		presses: Dictionary) -> Dictionary:
-	var polys := {}
+	var sets := {}
 	for h in [LEFT, RIGHT]:
-		var poly := hand_outline(bs, rest, presses, h)
-		if poly.size() >= 3:
-			polys[h] = poly
-	return polys
+		var parts := hand_parts(bs, rest, presses, h)
+		var merged: PackedVector2Array = parts.get("merged",
+			PackedVector2Array()) as PackedVector2Array
+		if merged.size() >= 3:
+			sets[h] = parts
+	return sets
 
 
-## Контур ОДНОЙ кисти — ЧИСТАЯ МЕРА: ею рисует draw_both, её же меряют
-## тесты (headless картинку не рисует, а геометрию проверяет числом).
+## Контур ОДНОЙ кисти — ЧИСТАЯ МЕРА: ею меряют тесты (headless картинку
+## не рисует, а геометрию проверяет числом). Это ОБЪЕДИНЕНИЕ частей:
+## внешняя граница руки.
+static func hand_outline(bs: Array, rest: Dictionary, presses: Dictionary,
+		h: int) -> PackedVector2Array:
+	var parts := hand_parts(bs, rest, presses, h)
+	return parts.get("merged", PackedVector2Array()) as PackedVector2Array
+
+
+## Части кисти на кадр: {"merged": объединение, "order": [контуры
+## частей], "palm": ладонь}. merged — заливка, order — линии (ладонь,
+## четыре пальца, большой; шов между соседями виден).
 ##
 ## Силуэт НЕ собирается в игре: он запечён с ПОЛЯ 3D-модели
 ## (tools/hand3d/bake_outline.gd → hands_shape.gd) вдоль локальной z, то
@@ -444,11 +463,11 @@ static func _outlines(bs: Array, rest: Dictionary,
 ## проекция объединения. Сглаживание smin выносит настоящую поверхность
 ## на 5.8 мм наружу, и объединение теней этого не знает — на контуре
 ## появлялись ступеньки и «шишах» у большого пальца (автор 05.11.2026).
-static func hand_outline(bs: Array, rest: Dictionary, presses: Dictionary,
-		h: int) -> PackedVector2Array:
+static func hand_parts(bs: Array, rest: Dictionary, presses: Dictionary,
+		h: int) -> Dictionary:
 	var st := pose_of(bs, h, rest, presses)
 	if st.is_empty():
-		return PackedVector2Array()
+		return {}
 	var side := side_name(h)
 	var root_x := float(HandsPoses.ROOT_MM[side])
 	var map: Dictionary = st["map"] as Dictionary
@@ -456,7 +475,7 @@ static func hand_outline(bs: Array, rest: Dictionary, presses: Dictionary,
 	var flat: Array = st["flat"] as Array
 	var radii := shape_radii(h, presses)
 	if radii.is_empty():
-		return PackedVector2Array()
+		return {}
 	var xf := Hands3D.hand_xf(Hands3D.arm_of(flat))
 	var c: Vector2 = Shape.CENTER
 	var n := radii.size()
@@ -472,15 +491,18 @@ static func hand_outline(bs: Array, rest: Dictionary, presses: Dictionary,
 	# клиньями), поэтому ладонь запечена ОТДЕЛЬНО, а каждый палец —
 	# лента из своей цепи и своих радиусов кожи (SKIN_R / THUMB_R).
 	var acc := palm
+	var order: Array = [palm]
 	for ray in Hands3D.FINGERS:
 		var band := finger_band(flat, side, root_x, ray, map, xf, off)
 		if band.size() < 3:
 			continue
+		order.append(band)
 		acc = _biggest(Geometry2D.merge_polygons(acc, band))
 	var th := thumb_band(flat, side, root_x, map, xf, off)
 	if th.size() >= 3:
+		order.append(th)
 		acc = _biggest(Geometry2D.merge_polygons(acc, th))
-	return acc
+	return {"merged": acc, "order": order, "palm": palm}
 
 
 ## Лента ОДНОГО пальца: проекция его кожи — три усечённых конуса вдоль
@@ -598,31 +620,41 @@ static func _poly_area(p: PackedVector2Array) -> float:
 	return a * 0.5
 
 
-## Контур руки: замкнутая линия и ЛЁГКАЯ заливка (автор 27.10.2026:
-## «только контуры рук», не скелет и не 3D). Заливка не для объёма —
-## без неё узкий палец читается двумя чёрточками, а не пальцем; alpha
-## низкая, чтобы подписи клавиш оставались видны. Толщина линии — от
-## питча (на мелкой доске не игла, на крупной не жирная).
+## Кисть: заливка по объединённому силуэту и линии по КАЖДОЙ части
+## (ладонь, четыре пальца, большой). Швы между частями — это и есть
+## границы, которые глаз ждёт: между соседними пальцами внешнего
+## контура нет, рука там продолжается, а ребро между частями есть.
+## Контуры частей лежат внутри объединения, поэтому обрезка не нужна.
 ##
-## alpha 0.14, а не 0.10: на 0.10 кисть на живой доске читалась ОДНИМИ
-## ЛИНИЯМИ (проверено кадром vis-26: внутри ладони цвет не отличался от
-## фона), и контур выглядел каракулями. Подписи клавиш под 14% чернил
-## остаются различимыми — это и был выбор автора 27.10.2026.
+## Заливка не для объёма — без неё узкий палец читается двумя чёрточками,
+## а не пальцем; alpha низкая, чтобы подписи клавиш оставались видны.
+## Толщина линии — от питча (на мелкой доске не игла, на крупной не
+## жирная). alpha 0.14, а не 0.10: на 0.10 кисть на живой доске читалась
+## ОДНИМИ ЛИНИЯМИ (кадр vis-26: внутри ладони цвет не отличался от фона).
 static var fill_a := 0.14
 static var line_a := 0.75
 static var line_w := 0.07
 
 
-static func _draw_contour(ci: CanvasItem, poly: PackedVector2Array,
+static func _draw_parts(ci: CanvasItem, parts: Dictionary,
 		pitch: float, ink: Color) -> void:
+	var merged: PackedVector2Array = parts.get("merged",
+		PackedVector2Array()) as PackedVector2Array
+	if merged.size() < 3:
+		return
 	var fill := ink
 	fill.a = fill_a
+	ci.draw_colored_polygon(merged, fill)
 	var line := ink
 	line.a = line_a
-	var loop := PackedVector2Array(poly)
-	loop.append(poly[0])
-	ci.draw_colored_polygon(poly, fill)
-	ci.draw_polyline(loop, line, clampf(pitch * line_w, 2.0, 5.0), true)
+	var w := clampf(pitch * line_w, 2.0, 5.0)
+	for p in parts.get("order", []) as Array:
+		var poly: PackedVector2Array = p
+		if poly.size() < 3:
+			continue
+		var loop := PackedVector2Array(poly)
+		loop.append(poly[0])
+		ci.draw_polyline(loop, line, w, true)
 
 
 ## Демонстрация подсказки: палец идёт к клавише, стоит на ней и

@@ -3667,6 +3667,7 @@ func _fill_cases() -> void:
 	_cases_list.append(["_case_win_celebration", Callable(self, "_case_win_celebration"), 0])
 	_cases_list.append(["_case_hands_hold", Callable(self, "_case_hands_hold"), 0])
 	_cases_list.append(["_case_hands_hint_demo", Callable(self, "_case_hands_hint_demo"), 0])
+	_cases_list.append(["_case_hands_shift_hand", Callable(self, "_case_hands_shift_hand"), 0])
 # (конец списка кейсов)
 ## Холмы по рецепту автора (18.10.2026 после релиза: «не уменьшать
 ## радиусы, а опустить вниз центры, радиусы вернуть большими»): при
@@ -4007,6 +4008,83 @@ func _case_hands_hint_demo() -> void:
 		not st[0],
 		"%s: the finger did not come back after the release (%s)" % [tag, str(st)]
 	)
+	_common(tag)
+
+
+## Шифт не делит руку с буквой (автор 06.11.2026: «движок не различает
+## нажатие левого и правого шифтов, то при нажатии под шифтом букв
+## левой руки движок косячит, пытаясь визуализировать нажатие одной
+## рукой сразу 2х клавиш»). Движок шлёт одно действие «шифт», кисть
+## ставит его по правилу противоположной руки; если буква пришла на ту
+## же руку, шифт переезжает на другую. Подсказка это правило уже
+## держит — проверяем и её, и живой путь нажатия.
+func _case_hands_shift_hand() -> void:
+	_fresh(0, 1)
+	_kbd_on()
+	var tag := "shift hand"
+	# Подсказка заглавной: шифт и буква — РАЗНЫЕ руки.
+	var hi: Array = _main._keys_for("В")
+	_check(hi.size() == 2,
+		"%s: expected shift+letter hint, got %s" % [tag, str(hi)])
+	if hi.size() == 2:
+		_check(Hands.hand_of(String(hi[0])) != Hands.hand_of(String(hi[1])),
+			"%s: the hint puts shift and the letter on one hand (%s)"
+			% [tag, str(hi)])
+	var btns := _kbd_buttons()
+	# Левая рука: шифт «Shift» + буква «в» (левый средний). Шифт обязан
+	# уехать на правый мизинец.
+	_main._hands_curs.clear()
+	_main._hands_held.clear()
+	_main.last_hand = ""
+	_main._hands_held["шифт"] = true
+	_main.call("_flash", "шифт")
+	var lc: Dictionary = _main._hands_curs.get(Hands.LEFT, {}) as Dictionary
+	_check(String((lc.get(Hands.PINKY, [""]) as Array)[0]) == "Shift",
+		"%s: the shift did not start on the left pinky" % tag)
+	_main.call("_own_press", btns["в"], true)
+	var lc2: Dictionary = _main._hands_curs.get(Hands.LEFT, {}) as Dictionary
+	var rc2: Dictionary = _main._hands_curs.get(Hands.RIGHT, {}) as Dictionary
+	_check(not lc2.has(Hands.PINKY),
+		"%s: the shift stayed on the hand that pressed a letter" % tag)
+	_check(String((rc2.get(Hands.PINKY, [""]) as Array)[0]) == "ShiftR",
+		"%s: the shift did not move to the other hand (%s)"
+		% [tag, str(rc2.get(Hands.PINKY, []))])
+	_check(lc2.has(Hands.MIDDLE),
+		"%s: the letter did not land on its own finger" % tag)
+	# Правая рука: шифт «ShiftR» + буква «л» (правый средний) — шифт
+	# уезжает на левый мизинец.
+	_main._hands_curs.clear()
+	_main._hands_held.clear()
+	_main.last_hand = "Л"
+	_main._hands_held["шифт"] = true
+	_main.call("_flash", "шифт")
+	var rc: Dictionary = _main._hands_curs.get(Hands.RIGHT, {}) as Dictionary
+	_check(String((rc.get(Hands.PINKY, [""]) as Array)[0]) == "ShiftR",
+		"%s: the shift did not start on the right pinky" % tag)
+	_main.call("_own_press", btns["л"], true)
+	var lc3: Dictionary = _main._hands_curs.get(Hands.LEFT, {}) as Dictionary
+	var rc3: Dictionary = _main._hands_curs.get(Hands.RIGHT, {}) as Dictionary
+	_check(not rc3.has(Hands.PINKY),
+		"%s: the right shift stayed under the right letter" % tag)
+	_check(String((lc3.get(Hands.PINKY, [""]) as Array)[0]) == "Shift",
+		"%s: the right shift did not move left" % tag)
+	_check(rc3.has(Hands.MIDDLE),
+		"%s: the right letter did not land on its own finger" % tag)
+	# Чужая рука шифт не двигает: слева шифт, справа буква — так и надо.
+	_main._hands_curs.clear()
+	_main._hands_held.clear()
+	_main.last_hand = ""
+	_main._hands_held["шифт"] = true
+	_main.call("_flash", "шифт")
+	_main.call("_own_press", btns["л"], true)
+	var lc4: Dictionary = _main._hands_curs.get(Hands.LEFT, {}) as Dictionary
+	var rc4: Dictionary = _main._hands_curs.get(Hands.RIGHT, {}) as Dictionary
+	_check(String((lc4.get(Hands.PINKY, [""]) as Array)[0]) == "Shift",
+		"%s: a letter on the other hand moved the shift" % tag)
+	_check(not rc4.has(Hands.PINKY),
+		"%s: a letter on the other hand put a shift on its hand" % tag)
+	_main._hands_held.clear()
+	_main._hands_curs.clear()
 	_common(tag)
 
 

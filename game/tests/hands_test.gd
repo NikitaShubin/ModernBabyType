@@ -108,8 +108,10 @@ func _hands_test() -> void:
 		_finger_checks(board, tag)
 		_mirror_checks(board, tag)
 	_press_checks(bs)
+	_idle_checks()
 	_hint_checks(bs)
 	_outline_checks(bs)
+	_seam_checks(bs)
 
 
 ## ---------------------------------------------------------------- карта
@@ -501,6 +503,57 @@ func _press_checks(bs: Array) -> void:
 	_check(bad_move == 0, "every press moves the hand (%d still)" % bad_move)
 
 
+## --------------------------------------------------- только свой палец
+
+## Нажатие двигает ТОЛЬКО свой палец (автор 06.11.2026: при «в»/«л»
+## безымянный дёргался сильнее среднего — казалось, что нажали не ту
+## клавишу). Решатель в 3D подгибает соседние пальцы под клиренс
+## клавиш — это верно для физики, но в проекции сверху читается как
+## чужое нажатие. Правка — в ПОЗЕ (`bake_poses.gd._still_idle`), а
+## здесь держится УРОВЕНЬ ДАННЫХ: в запечённой позе нажатия у всех
+## остальных пальцев (и у большого, если он не цель) углы ровно как в
+## покое. Перепекание без этой правки краснит каждую строку.
+func _idle_checks() -> void:
+	for side in ["L", "R"]:
+		var home: Array = HandsPoses.HOME[side] as Array
+		var presses: Dictionary = HandsPoses.PRESS[side] as Dictionary
+		var hand := Hands.LEFT if side == "L" else Hands.RIGHT
+		var bad := 0
+		var checked := 0
+		var targets := {}
+		for lb in presses.keys():
+			var sig := String(lb)
+			var f := Hands.finger_of(sig)
+			if (f[0] as int) != hand:
+				continue
+			var target: int = f[1]
+			var p: Array = presses[lb] as Array
+			checked += 1
+			targets[target] = int(targets.get(target, 0)) + 1
+			# Пальцы II..V — индексы 8..23 (по 4 угла на палец в порядке
+			# RAY_OF: II, III, IV, V).
+			for k in 4:
+				if k + 1 == target:
+					continue
+				for j in 4:
+					var i := 8 + k * 4 + j
+					if absf(float(p[i]) - float(home[i])) > 1e-4:
+						bad += 1
+			# Большой — индексы 24..28: в покое, если он не цель.
+			if target != Hands.THUMB:
+				for i in range(24, 29):
+					if absf(float(p[i]) - float(home[i])) > 1e-4:
+						bad += 1
+		_check(checked >= 20,
+			"%s: idle checks cover own presses (%d)" % [side, checked])
+		# Нажатия есть на КАЖДОМ пальце — иначе проверка была бы слепой
+		# к целому пальцу (например, к безымянному из жалобы автора).
+		_check(targets.size() == 5,
+			"%s: presses cover all five digits (%s)" % [side, str(targets.keys())])
+		_check(bad == 0,
+			"%s: an idle finger moves in a press pose (%d angles)" % [side, bad])
+
+
 ## ------------------------------------------------------------- подсказка
 
 ## Демонстрация подсказки — чистая фаза: покой, выдержка, пауза,
@@ -559,6 +612,70 @@ func _outline_checks(bs: Array) -> void:
 		var moved := Hands.hand_outline(bs, rest,
 			{h: {Hands.INDEX: ["а", 1.0]}}, h)
 		_check(not _same_poly(a, moved), "hand %d: a press moves the contour" % h)
+
+
+## ------------------------------------------------------------- швы
+
+## Швы между частями (автор 06.11.2026: «между средним и безымянным
+## пальцами нет линии… границы рисуются только там, где кончается рука
+## и начинается фон, а должны ещё и там, где полигон имеет ребро с
+## соседом»). Контур ОБЪЕДИНЕНИЯ знает только внешнюю границу: между
+## соседними пальцами её нет, потому что рука там продолжается. Поэтому
+## заливка одна по объединению, а линия — по КАЖДОЙ части.
+##
+## Проверки держат обе стороны правила:
+##   * частей ровно шесть (ладонь + четыре пальца + большой), и каждая
+##     лежит внутри объединения — обрезка не нужна;
+##   * части ПЕРЕКРЫВАЮТСЯ (сумма площадей заметно больше объединения),
+##     иначе шов был бы виден и без линий частей;
+##   * средний и безымянный сливаются в ОДНУ фигуру — внешнего контура
+##     между ними нет, шов может дать только линия части.
+func _seam_checks(bs: Array) -> void:
+	var rest := Hands.rest_both(bs)
+	if rest.is_empty():
+		_check(false, "seams: rest pose is built")
+		return
+	var map: Dictionary = rest["map"] as Dictionary
+	for h in [Hands.LEFT, Hands.RIGHT]:
+		var side := Hands.side_name(h)
+		var parts := Hands.hand_parts(bs, rest, {}, h)
+		var merged: PackedVector2Array = parts.get("merged",
+			PackedVector2Array()) as PackedVector2Array
+		var order: Array = parts.get("order", []) as Array
+		_check(order.size() == 6,
+			"hand %d: palm + four fingers + thumb are stroked (%d parts)"
+			% [h, order.size()])
+		if merged.size() < 3:
+			_check(false, "hand %d: merged silhouette exists" % h)
+			continue
+		var ma := absf(Hands._poly_area(merged))
+		var sum := 0.0
+		var inside := true
+		for p in order:
+			var poly: PackedVector2Array = p
+			if poly.size() < 3:
+				inside = false
+				continue
+			sum += absf(Hands._poly_area(poly))
+			var c := Vector2.ZERO
+			for q in poly:
+				c += q
+			c /= float(poly.size())
+			if not Geometry2D.is_point_in_polygon(c, merged):
+				inside = false
+		_check(inside, "hand %d: every part lies inside the silhouette" % h)
+		_check(sum > ma * 1.02,
+			"hand %d: parts do not overlap the union (%.2f vs %.2f) — the seam was never hidden"
+			% [h, sum, ma])
+		var flat: Array = rest[h] as Array
+		var rx := float(HandsPoses.ROOT_MM[side])
+		var xf := Hands3D.hand_xf(Hands3D.arm_of(flat))
+		var off: Vector2 = (rest["shift"] as Dictionary)[h] as Vector2
+		var mid := Hands.finger_band(flat, side, rx, "III", map, xf, off)
+		var ring := Hands.finger_band(flat, side, rx, "IV", map, xf, off)
+		_check(Geometry2D.merge_polygons(mid, ring).size() == 1,
+			"hand %d: middle and ring merge into one piece — the outer contour has no seam there"
+			% h)
 
 
 ## Рисование ОБЕИХ кистей — только из _draw(): CanvasItem иначе ругается

@@ -2991,9 +2991,13 @@ func _hands_hit(sig: String) -> void:
 		return
 	var key := sig
 	if sig == "шифт":
-		# Обе подписи шифта дают одно действие; для кисти берём левую
-		# (правая демонстрируется в песочнице, действие неотличимо).
-		key = "Shift"
+		# Движок не различает левый и правый шифт: обе клавиши приходят
+		# одним действием «шифт». Кисть сторону РАЗЛИЧАЕТ, поэтому
+		# ставим его на руку, противоположную последней букве (то же
+		# правило, что у подсказки, _opp_shift). Если следующая буква
+		# придёт на эту же руку, _hands_shift_away перенесёт шифт —
+		# иначе на одной руке оказались бы две клавиши (автор 06.11.2026).
+		key = "ShiftR" if last_hand == "Л" else "Shift"
 	elif sig == "стереть":
 		key = "←"
 	elif sig == "язык":
@@ -3010,6 +3014,12 @@ func _hands_hit(sig: String) -> void:
 	var f: int = hf[1]
 	if not (HandsPoses.PRESS[Hands.side_name(h)] as Dictionary).has(key):
 		return
+	# Шифт не делит руку с буквой: если зажатый шифт стоит на руке,
+	# которая сейчас жмёт клавишу, переносим его на другую (правило
+	# противоположной руки). Само нажатие шифта сюда не попадает —
+	# ему руку выбирает ветка sig выше.
+	if sig != "шифт":
+		_hands_shift_away(h)
 	var curs: Dictionary = _hands_curs.get(h, {}) as Dictionary
 	_hands_curs[h] = curs
 	# Повторное нажатие в спаде продолжает с текущей фазы — палец
@@ -3018,6 +3028,50 @@ func _hands_hit(sig: String) -> void:
 	# Четвёртый элемент — действие удержания: пока оно в _hands_held,
 	# фаза держится 0 (палец стоит на клавише), а не уходит в спад.
 	curs[f] = [key, clampf(prev[1] as float, 0.0, 1.0), 1, sig]
+
+
+## Подпись шифта ДЛЯ РУКИ: левая — «Shift» (левый мизинец), правая —
+## «ShiftR» (правый мизинец). Движок стороны не различает, а запечённые
+## позы различают: на доске у каждой руки своя клавиша шифта.
+static func _shift_key(h: int) -> String:
+	return "Shift" if h == Hands.LEFT else "ShiftR"
+
+
+## Перенести зажатый шифт на руку, СВОБОДНУЮ от нажатой клавиши.
+##
+## Движок шлёт одно действие «шифт» независимо от того, какой шифт
+## физически нажат, поэтому кисть сначала ставит его по правилу
+## противоположной руки. Если следующая буква приходится на ту же руку,
+## две клавиши оказались бы на одной кисти — переносим шифт на другую.
+## Мизинец другой руки обычно свободен; занят — чужое нажатие не сносим
+## (одной физической рукой две клавиши одновременно не жмут, так что
+## это только редкая гонка эха).
+func _hands_shift_away(h: int) -> void:
+	if not _hands_held.has("шифт"):
+		return
+	var from := -1
+	for hh in [Hands.LEFT, Hands.RIGHT]:
+		var curs: Dictionary = _hands_curs.get(hh, {}) as Dictionary
+		var a: Array = curs.get(Hands.PINKY, []) as Array
+		if a.size() > 0 and (String(a[0]) == "Shift" or String(a[0]) == "ShiftR"):
+			from = hh
+			break
+	if from < 0 or from != h:
+		return
+	var to := Hands.RIGHT if h == Hands.LEFT else Hands.LEFT
+	var dst: Dictionary = _hands_curs.get(to, {}) as Dictionary
+	if dst.has(Hands.PINKY):
+		return
+	var src: Dictionary = _hands_curs[h] as Dictionary
+	var a: Array = src.get(Hands.PINKY, []) as Array
+	src.erase(Hands.PINKY)
+	if src.is_empty():
+		_hands_curs.erase(h)
+	# Ход сохраняем: палец уже стоит на шифте, а зажатое действие
+	# (_hands_held) само удержит его на новой клавише (фаза 0).
+	var depth := clampf(a[1] as float, 0.0, 1.0) if a.size() > 1 else 1.0
+	dst[Hands.PINKY] = [_shift_key(to), depth, 1, "шифт"]
+	_hands_curs[to] = dst
 
 
 ## Цели демонстрации подсказки: для каждой подсвеченной клавиши — её
