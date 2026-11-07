@@ -9,7 +9,10 @@ extends SceneTree
 ##   1. Ладонь с предплечьем — ЗАПЕЧЁННЫЙ полярный контур поля
 ##      (hands_shape.gd), предплечье уходит ЗА КРАЙ ЭКРАНА в любой позе:
 ##      контур пересекает границу экрана ровно дважды, а не заканчивается
-##      обрубком внутри. Радиусы гладкие (шишах — это скачок радиуса).
+##      обрубком внутри. Радиусы гладкие (шишах — это скачок радиуса) и
+##      ДОТЯГИВАЮТСЯ вдоль каждого пальца до корня: 06.11.2026 автор
+##      увидел залом там, где палец переходит в ладонь, — контур печётся
+##      уже с заготовками корней (`HandModel.field_roots`).
 ##   2. Пальцы — ленты из FK модели: ширина ленты = 2·радиус кожи,
 ##      все суставы внутри, соседние пальцы не слипаются в рукавицу,
 ##      подушечки стоят на своих клавишах в КАЖДОЙ запечённой позе.
@@ -182,9 +185,14 @@ func _shape_data_checks() -> void:
 				table.size(), presses.size()])
 		_check(table.has(""), "%s: rest pose is baked" % side)
 		var bad := 0
-		var bump := 0
-		var bump_pose := ""
 		var worst := 0.0
+		var bumps := 0
+		var bump_pose := ""
+		var jumps := 0
+		var jump_pose := ""
+		var worst_jump := 0.0
+		var roots := 0
+		var root_pose := ""
 		for k in table.keys():
 			var a: Array = table[k] as Array
 			if a.size() != Shape.N:
@@ -195,26 +203,32 @@ func _shape_data_checks() -> void:
 				if not is_finite(f) or f <= 0.0:
 					bad += 1
 				worst = maxf(worst, f)
-			# ШИШАХ (автор 05.11.2026) — ЛОКАЛЬНЫЙ выступ или вмятина на
-			# ладони: радиус вырос и тут же упал. Такого нет ни в одной
-			# запечённой позе — иначе дефект вернулся бы в большинстве
-			# поз, как и было до правки модели.
-			var b := 0
-			for i in Shape.N:
-				var x := float(a[(i - 1 + Shape.N) % Shape.N])
-				var y := float(a[i])
-				var z := float(a[(i + 1) % Shape.N])
-				if maxf(maxf(x, y), z) >= 95.0:
-					continue
-				if (y > x + 1.5 and y > z + 1.5) or (y < x - 1.5 and y < z - 1.5):
-					b += 1
-			if b > 0:
-				bump += 1
+			var flat: Array = HandsPoses.HOME[side] as Array
+			if String(k) != "":
+				flat = presses[k] as Array
+			var rule := _palm_rule(a, flat)
+			if int(rule["bumps"]) > 0:
+				bumps += 1
 				if bump_pose == "":
 					bump_pose = String(k)
-		_check(bump == 0,
-			"%s: no bump or notch on the palm in any baked pose (%d poses, e.g. '%s')"
-			% [side, bump, bump_pose])
+			if int(rule["jumps"]) > 0:
+				jumps += 1
+				if jump_pose == "":
+					jump_pose = String(k)
+			worst_jump = maxf(worst_jump, float(rule["worst"]))
+			if int(rule["roots"]) > 0:
+				roots += 1
+				if root_pose == "":
+					root_pose = String(k)
+		_check(bumps == 0,
+			"%s: the visible palm is smooth in every baked pose (%d poses, e.g. '%s')"
+			% [side, bumps, bump_pose])
+		_check(jumps == 0,
+			"%s: the visible palm has no steps (worst %.1f mm, %d poses, e.g. '%s')"
+			% [side, worst_jump, jumps, jump_pose])
+		_check(roots == 0,
+			"%s: the palm reaches into every finger root in every pose (%d poses, e.g. '%s')"
+			% [side, roots, root_pose])
 		_check(bad == 0, "%s: every baked ray is a positive number (%d bad)"
 			% [side, bad])
 		_check(worst > 300.0,
@@ -222,6 +236,140 @@ func _shape_data_checks() -> void:
 
 
 ## ------------------------------------------------------- ладонь и предплечье
+
+## КОРЕНЬ ПАЛЬЦА В КОНТУРЕ ЛАДОНИ (автор 06.11.2026: «на бэкспейсе контур
+## там, где палец переходит в ладонь, имеет неестественный изгиб»).
+##
+## Причина — стык двух мер: ладонь печётся из поля БЕЗ пальцев, пальцы
+## рисуются лентами, и жёсткое объединение (Geometry2D.merge_polygons)
+## оставляло на пересечении острый залом. Модель же сваривает палец с
+## ладонью фаской 6 мм (Sdf.smin в field()), и настоящий силуэт там
+## скруглён. Правка живёт В ПОЛЕ — `HandModel.field_roots()`: контур
+## ладони печётся уже с заготовками первых 13 мм каждого пальца. Здесь
+## держатся ДВА СЛЕДСТВИЯ правки, оба меряются числом:
+##
+##   1. ГДЕ КОНТУР ВИДЕН (луч не накрыт лентой пальца) — он гладкий:
+##      нет шага > 8 мм и нет местного выступа/вмятины > 1.5 мм. Под
+##      лентой радиуса не видно, и заготовка корня там законно торчит:
+##      она лежит ВНУТРИ ленты (те же оси и радиусы), поэтому силуэт
+##      пальца не расширяет — только скругляет его основание.
+##   2. Контур ДОТЯГИВАЕТСЯ вдоль каждого пальца до конца заготовки.
+##      Тогда лента продолжает его касательной, а не пересекает под
+##      углом. Сними заготовки — краснеет каждая поза (проверено: на
+##      прежних данных 108 из 108).
+const ROOT_STUB := 13.0
+
+
+func _palm_rule(radii: Array, flat: Array) -> Dictionary:
+	var n := radii.size()
+	var bands := _pose_bands(flat)
+	var vis := []
+	vis.resize(n)
+	for i in n:
+		vis[i] = not _under_band(_ray_pt(radii, i), bands)
+	var jumps := 0
+	var worst := 0.0
+	for i in n:
+		if not vis[i] or not vis[(i + 1) % n]:
+			continue
+		var b := float(radii[i])
+		var c := float(radii[(i + 1) % n])
+		if maxf(b, c) >= 95.0:
+			continue
+		worst = maxf(worst, absf(b - c))
+		if absf(b - c) > 8.0:
+			jumps += 1
+	var bumps := 0
+	for i in n:
+		if not vis[i] or not vis[(i - 1 + n) % n] or not vis[(i + 1) % n]:
+			continue
+		var a := float(radii[(i - 1 + n) % n])
+		var b := float(radii[i])
+		var c := float(radii[(i + 1) % n])
+		if maxf(maxf(a, b), c) >= 95.0:
+			continue
+		if (b > a + 1.5 and b > c + 1.5) or (b < a - 1.5 and b < c - 1.5):
+			bumps += 1
+	var poly := _palm_mm(radii)
+	var roots := 0
+	for b in bands:
+		if not _stub_inside(poly, b as Dictionary):
+			roots += 1
+	return {"jumps": jumps, "worst": worst, "bumps": bumps, "roots": roots}
+
+
+func _ray_pt(radii: Array, i: int) -> Vector2:
+	var c: Vector2 = Shape.CENTER
+	var a := TAU * float(i) / float(radii.size())
+	return c + Vector2(cos(a), sin(a)) * float(radii[i])
+
+
+func _palm_mm(radii: Array) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	out.resize(radii.size())
+	for i in radii.size():
+		out[i] = _ray_pt(radii, i)
+	return out
+
+
+## Цепь каждого пальца в СИСТЕМЕ КИСТИ — той же, в которой запечена ладонь
+## (ладони игра кладёт `xf * (x, y, 0)`, ленты — `xf * pts`).
+func _pose_bands(flat: Array) -> Array:
+	var out := []
+	for ray in Hands3D.FINGERS:
+		var pts := Hands3D.finger_fk(ray, Hands3D.finger_angles(flat, ray))
+		out.append({"pts": pts, "rs": Hands3D.SKIN_R[ray] as Array, "ray": ray})
+	return out
+
+
+## Точка накрыта лентой пальца: расстояние до цепи в плоскости xy минус
+## радиус кожи (лента — объединение тех же усечённых конусов, и её
+## проекция вдоль локальной z есть ровно эта капсула).
+func _under_band(q: Vector2, bands: Array) -> bool:
+	for b in bands:
+		var d: Dictionary = b as Dictionary
+		var pts: PackedVector3Array = d["pts"] as PackedVector3Array
+		var rs: Array = d["rs"] as Array
+		for i in 3:
+			var a := Vector2(pts[i].x, pts[i].y)
+			var z := Vector2(pts[i + 1].x, pts[i + 1].y)
+			var az := z - a
+			var t := 0.0
+			if az.length_squared() > 0.000001:
+				t = clampf((q - a).dot(az) / az.length_squared(), 0.0, 1.0)
+			var r := lerpf(float(rs[i]), float(rs[i + 1]), t)
+			if q.distance_to(a + az * t) <= r + 0.5:
+				return true
+	return false
+
+
+## Заготовка корня пальца лежит внутри контура ладони — по ОСИ пальца.
+##
+## Почему по оси, а не по бокам: контур ладони снимается с поля лучом и
+## берёт ПЕРВЫЙ выход (bake_outline.gd `_ray`), потому что впадина между
+## пальцами — граница, а не провал. Из-за этого «карман» между двумя
+## соседними корнями в полярную меру не попадает и не должен: его всё
+## равно накрывает лента пальца. Ось же пальца обязана быть внутри
+## контура при любой позе — иначе лента начинается вне ладони, и на
+## стыке появляется залом (замерено на прежних данных: все четыре
+## пальца во всех 108 позах, на новых — ни одного).
+func _stub_inside(poly: PackedVector2Array, b: Dictionary) -> bool:
+	var pts: PackedVector3Array = b["pts"] as PackedVector3Array
+	var a := Vector2(pts[0].x, pts[0].y)
+	var tip := Vector2(pts[1].x, pts[1].y)
+	var seg := tip - a
+	var l := seg.length()
+	if l < 0.001:
+		return true
+	var k := clampf(ROOT_STUB / l, 0.0, 1.0)
+	for j in 4:
+		var q := a + seg * (k * float(j) / 3.0)
+		if not Geometry2D.is_point_in_polygon(q, poly):
+			print("  ROOT %s: %.1f,%.1f is outside the palm (mcp %.1f,%.1f, pip %.1f,%.1f)"
+				% [str(b["ray"]), q.x, q.y, a.x, a.y, tip.x, tip.y])
+			return false
+	return true
+
 
 ## Ладонь с предплечьем: гладкие радиусы, кисть уходит ЗА КРАЙ экрана,
 ## подушечки покоя стоят на дом-клавишах.
@@ -239,28 +387,25 @@ func _palm_checks(bs: Array, view: Vector2, tag: String) -> void:
 		_check(radii.size() == Shape.N,
 			"%s %s: rest contour has 256 radii (%d)" % [tag, side, radii.size()])
 		# ШИШАХ — это ЛОКАЛЬНЫЙ выступ: радиус вырос и тут же упал (или
-		# наоборот — вмятина). Соседние лучи на ладони (r < 95 мм, до
-		# перехода в предплечье) обязаны идти плавно; обрыв к предплечью
-		# законный — там стенка трубы почти радиальна (скачок 79 мм на
-		# переходе), и мерить его гладкостью бессмысленно.
-		var bad := 0
-		var bump := 0
-		var jump := 0.0
-		for i in radii.size():
-			var a := float(radii[(i - 1 + radii.size()) % radii.size()])
-			var b := float(radii[i])
-			var c := float(radii[(i + 1) % radii.size()])
-			if maxf(maxf(a, b), c) >= 95.0:
-				continue
-			jump = maxf(jump, absf(b - c))
-			if absf(b - c) > 8.0:
-				bad += 1
-			if (b > a + 1.5 and b > c + 1.5) or (b < a - 1.5 and b < c - 1.5):
-				bump += 1
-		_check(bad == 0, "%s %s: palm radii are smooth (%d jumps, max %.1f mm)"
-			% [tag, side, bad, jump])
-		_check(bump == 0,
-			"%s %s: no bump or notch on the palm contour (%d)" % [tag, side, bump])
+		# наоборот — вмятина). Меряется ТОЛЬКО ВИДИМАЯ часть контура: под
+		# лентой пальца радиуса не видно, и заготовка корня там законно
+		# торчит наружу (см. _palm_rule). Обрыв к предплечью законный — там
+		# стенка трубы почти радиальна, и мерить его гладкостью бессмысленно.
+		var st := Hands.pose_of(bs, h, rest, {})
+		var flat: Array = st["flat"] as Array
+		var rule := _palm_rule(radii, flat)
+		_check(int(rule["jumps"]) == 0,
+			"%s %s: the visible palm has no steps (worst %.1f mm, %d)"
+			% [tag, side, float(rule["worst"]), int(rule["jumps"])])
+		_check(int(rule["bumps"]) == 0,
+			"%s %s: no bump or notch on the visible palm (%d)"
+			% [tag, side, int(rule["bumps"])])
+		# КОРЕНЬ ПАЛЬЦА: контур ладони обязан дорасти вдоль пальца до
+		# конца заготовки — тогда лента продолжает его касательной, а не
+		# пересекает под углом (залом на бэкспейсе, автор 06.11.2026).
+		_check(int(rule["roots"]) == 0,
+			"%s %s: the palm reaches into every finger root (%d)"
+			% [tag, side, int(rule["roots"])])
 		# Предплечье вниз: радиус огромный в ОБЕИХ нижних четвертях.
 		var down := 0.0
 		for i in [radii.size() * 3 / 4 - 2, radii.size() * 3 / 4 + 2]:
@@ -284,8 +429,6 @@ func _palm_checks(bs: Array, view: Vector2, tag: String) -> void:
 			"%s %s: forearm leaves the screen (%d crossings, lowest %.0f of %.0f)"
 			% [tag, side, cross, low, view.y])
 		# Подушечки покоя — на дом-клавишах.
-		var st := Hands.pose_of(bs, h, rest, {})
-		var flat: Array = st["flat"] as Array
 		var off: Vector2 = st["shift"] as Vector2
 		var root_x := float(HandsPoses.ROOT_MM[side])
 		var homes: Dictionary = Hands.HOME_KEY[h] as Dictionary
