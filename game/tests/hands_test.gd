@@ -112,6 +112,7 @@ func _hands_test() -> void:
 		_mirror_checks(board, tag)
 		_space_checks(board, tag)
 		_tap_checks(board, tag)
+		_multi_checks(board, Vector2(w, hh), tag)
 	_press_checks(bs)
 	_idle_checks()
 	_hint_checks(bs)
@@ -933,6 +934,120 @@ func _tap_checks(bs: Array, tag: String) -> void:
 		_check(absf(off.x - rs.x) <= 0.5 and absf(off.y - rs.y) <= 0.5,
 			"%s: the twitch on '%s' does not move the hand (%.1f,%.1f)"
 				% [tag, sig, off.x - rs.x, off.y - rs.y])
+
+
+## ------------------------------------------- несколько нажатий на кисти
+
+## НЕСКОЛЬКО НАЖАТИЙ НА ОДНОЙ КИСТИ (автор 07.11.2026: «если одновременно,
+## или, может быть, просто с коротким интервалом нажать сразу несколько
+## клавиш, то кисть принимает какую-то странную форму, а может вообще уйти
+## с экрана»).
+##
+## Запечённая поза — ЦЕЛАЯ кисть, и складывать их нельзя: два нажатия по 1
+## давали 2·38° в пальце и 2·(−12°) в плече — кисть выгибало в блин, а
+## сдвиг складывал поправки и уводил её за экран (кадр до правки: левой
+## кисти на экране нет вовсе). Правило: плечо — ВЫПУКЛАЯ комбинация
+## (среднее, сумма весов не больше 1), каждый нажатый палец — СВОЯ поза,
+## сдвиг — СРЕДНЕЕ поправок. Меряем оба симптома: форму (углы) и экран
+## (кончики).
+func _multi_checks(bs: Array, view: Vector2, tag: String) -> void:
+	var rest := Hands.rest_both(bs)
+	var pitch := Hands.pitch_of(bs)
+	if rest.is_empty() or pitch <= 0.0:
+		_check(false, tag + ": multi: rest pose is built")
+		return
+	var combos := [
+		[Hands.LEFT, {Hands.PINKY: ["ё", 1.0], Hands.INDEX: ["м", 1.0]}],
+		[Hands.LEFT, {Hands.PINKY: ["ф", 1.0], Hands.INDEX: ["а", 1.0]}],
+		[Hands.LEFT, {Hands.RING: ["ч", 0.6], Hands.MIDDLE: ["с", 1.0]}],
+		[Hands.LEFT, {Hands.PINKY: ["ё", 1.0], Hands.RING: ["ч", 1.0],
+			Hands.MIDDLE: ["с", 1.0], Hands.INDEX: ["м", 1.0]}],
+		[Hands.RIGHT, {Hands.PINKY: ["0", 1.0], Hands.INDEX: ["т", 1.0]}],
+		[Hands.RIGHT, {Hands.PINKY: ["ж", 1.0], Hands.INDEX: ["о", 1.0]}],
+		[Hands.RIGHT, {Hands.PINKY: ["0", 1.0], Hands.RING: ["щ", 1.0],
+			Hands.MIDDLE: ["л", 1.0], Hands.INDEX: ["т", 1.0]}],
+	]
+	var bad_arm := 0
+	var bad_finger := 0
+	var bad_shift := 0
+	var bad_tip := 0
+	var worst_tip := 0.0
+	var screen := Rect2(Vector2.ZERO, view).grow(2.0)
+	for item in combos:
+		var arr: Array = item as Array
+		var h: int = arr[0]
+		var m: Dictionary = arr[1]
+		var side := Hands.side_name(h)
+		var pd: Dictionary = HandsPoses.PRESS[side] as Dictionary
+		var base: Array = rest[h] as Array
+		var poses := {}
+		for f in m.keys():
+			poses[f] = [pd[String((m[f] as Array)[0])],
+				float((m[f] as Array)[1])]
+		var flat := Hands3D.blend_many(base, poses)
+		# 1. Плечо — выпуклая комбинация участвующих поз: сумма весов
+		# больше единицы выносила угол за обе границы (старый дефект).
+		for i in Hands3D.ARM_JOINTS.size():
+			var lo := float(base[i])
+			var hi := lo
+			for f in poses.keys():
+				var p: Array = (poses[f] as Array)[0]
+				lo = minf(lo, float(p[i]))
+				hi = maxf(hi, float(p[i]))
+			if float(flat[i]) < lo - 1e-4 or float(flat[i]) > hi + 1e-4:
+				bad_arm += 1
+		# 2. Каждый нажатый палец — СВОЯ поза на свой вес: два пальца
+		# гнутся оба, а не по половине.
+		for f in poses.keys():
+			var p: Array = (poses[f] as Array)[0]
+			var w := float((poses[f] as Array)[1])
+			var lo := 8 + (int(f) - 1) * 4
+			var hi := lo + 4
+			if int(f) == Hands.THUMB:
+				lo = 24
+				hi = 29
+			for i in range(lo, hi):
+				var want := lerpf(float(base[i]), float(p[i]), w)
+				if absf(float(flat[i]) - want) > 1e-4:
+					bad_finger += 1
+		# 3. Сдвиг — СРЕДНЕЕ одиночных поправок, а не их сумма: сумма
+		# уводила кисть с экрана.
+		var want_off := Vector2.ZERO
+		for f in poses.keys():
+			var sig := String((m[f] as Array)[0])
+			var one := Hands.pose_of(bs, h, rest, {h: {f: [sig, 1.0]}})
+			want_off += one["shift"] as Vector2
+		want_off /= float(poses.size())
+		var st := Hands.pose_of(bs, h, rest, {h: m})
+		var off: Vector2 = st["shift"] as Vector2
+		if off.distance_to(want_off) > 0.5:
+			bad_shift += 1
+			if bad_shift <= 3:
+				print("MULTI: %s shift %s, expected %s" % [tag, str(off),
+					str(want_off)])
+		# 4. Кисть не уезжает: все кончики на экране.
+		for f in [Hands.THUMB, Hands.INDEX, Hands.MIDDLE, Hands.RING,
+				Hands.PINKY]:
+			var tip := _pad_px(rest, h, flat, off, f)
+			var out := maxf(maxf(-tip.x, tip.x - view.x),
+				maxf(-tip.y, tip.y - view.y))
+			worst_tip = maxf(worst_tip, out)
+			if not screen.has_point(tip):
+				bad_tip += 1
+				if bad_tip <= 3:
+					print("MULTI: %s tip %.0f,%.0f off screen" % [tag,
+						tip.x, tip.y])
+	_check(bad_arm == 0,
+		"%s: simultaneous presses keep the arm convex (%d angles)"
+			% [tag, bad_arm])
+	_check(bad_finger == 0,
+		"%s: every pressed finger keeps its own pose (%d angles)"
+			% [tag, bad_finger])
+	_check(bad_shift == 0,
+		"%s: the shift is the mean of the presses (%d bad)" % [tag, bad_shift])
+	_check(bad_tip == 0,
+		"%s: simultaneous presses keep the hand on screen (%d tips, worst %.0f)"
+			% [tag, bad_tip, worst_tip])
 
 
 ## --------------------------------------------------- только свой палец

@@ -101,9 +101,20 @@ static func blend(a: Array, b: Array, t: float) -> Array:
 	return out
 
 
-## Средневзвешенная поза по нескольким нажатиям: {луч: [поза, вес]}.
-## Сумма весов ограничена единицей: покой — это тоже участник с весом
-## 1 − Σw, иначе одно недожатое нажатие тянуло бы кисть на себя целиком.
+## Поза по нескольким нажатиям: {палец: [поза, вес]}.
+##
+## ПЛЕЧО — средневзвешенное: покой участвует с весом 1 − Σw, поэтому одно
+## недожатое нажатие не тянет кисть на себя целиком. Сумма весов НЕ БОЛЬШЕ
+## единицы (`den`): без нормировки два одновременных нажатия по 1
+## складывали углы (2·38° и 2·(−12°)) — кисть выгибало дугой и уносило с
+## экрана (автор 07.11.2026: «если одновременно… нажать сразу несколько
+## клавиш, то кисть принимает какую-то странную форму, а может вообще уйти
+## с экрана»).
+##
+## ПАЛЬЦЫ — каждый СВОИ: нажатые гнутся оба, а не по половине. Это и есть
+## смысл запечённых поз: в позе нажатия чужой палец стоит в покое
+## (bake_poses._still_idle), поэтому два нажатия на одной кисти не спорят за
+## один и тот же угол — спорит только плечо, а его ведёт среднее.
 static func blend_many(base: Array, poses: Dictionary) -> Array:
 	var out: Array = []
 	for i in base.size():
@@ -113,14 +124,35 @@ static func blend_many(base: Array, poses: Dictionary) -> Array:
 	var wsum := 0.0
 	for k in poses.keys():
 		wsum += clampf(float((poses[k] as Array)[1]), 0.0, 1.0)
-	var k0 := clampf(1.0 - wsum, 0.0, 1.0)
-	for i in out.size():
+	var den := maxf(1.0, wsum)
+	var k0 := 1.0 - wsum / den
+	var arm_n := mini(out.size(), ARM_JOINTS.size())
+	for i in arm_n:
 		var v := float(base[i]) * k0
 		for k in poses.keys():
 			var e: Array = poses[k] as Array
 			var p: Array = e[0] as Array
-			v += float(p[i]) * clampf(float(e[1]), 0.0, 1.0)
+			v += float(p[i]) * clampf(float(e[1]), 0.0, 1.0) / den
 		out[i] = v
+	# Блоки пальцев — те же, что у finger_angles/thumb_angles: [8..23]
+	# II..V по четыре угла, [24..28] большой.
+	for k in poses.keys():
+		var e: Array = poses[k] as Array
+		var p: Array = e[0] as Array
+		var w := clampf(float(e[1]), 0.0, 1.0)
+		var f := int(k)
+		var lo := -1
+		var hi := -1
+		if f == 0:
+			lo = 24
+			hi = 29
+		elif f >= 1 and f <= 4:
+			lo = 8 + (f - 1) * 4
+			hi = lo + 4
+		if lo < 0:
+			continue
+		for i in range(lo, mini(hi, out.size())):
+			out[i] = lerpf(float(base[i]), float(p[i]), w)
 	return out
 
 

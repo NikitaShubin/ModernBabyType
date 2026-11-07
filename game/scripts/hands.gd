@@ -341,9 +341,11 @@ static func _rest_shift(bs: Array, h: int, flat: Array,
 ## удержания, руки они не касаются).
 ##
 ## Каждый палец берёт СВОИ четыре угла из своей запечённой позы, плечо —
-## средневзвешенное (сумма весов ≤ 1), сдвиг — туда, где подушечка этой
-## позы оказывается на клавише игры (у широких клавиш — ближайшая точка
-## с отступом, а не центр: иначе большой уезжал бы на середину пробела).
+## средневзвешенное (сумма весов ≤ 1), сдвиг — СРЕДНЕЕ по нажатиям (не
+## сумма: иначе две клавиши сразу складывали поправки и кисть уезжала за
+## экран), каждая поправка — туда, где подушечка этой позы оказывается на
+## клавише игры (у широких клавиш — ближайшая точка с отступом, а не
+## центр: иначе большой уезжал бы на середину пробела).
 ##
 ## ПРОБЕЛ — исключение (автор 07.11.2026: «при нажатии пробела правым
 ## пальцем перемещается вся рука, хотя это бессмысленно»): подушечка
@@ -397,7 +399,12 @@ static func pose_of(bs: Array, h: int, rest: Dictionary,
 		shift += (pad_target(bs, r, at, pitch) - at) * w
 		sw += w
 	var total := clampf(sw, 0.0, 1.0)
-	var off := rest_shift * (1.0 - total) + shift
+	# Сдвиг кисти — СРЕДНЕЕ по нажатиям, а не сумма: два одновременных
+	# нажатия складывали поправки и уводили кисть с экрана (автор
+	# 07.11.2026). При одном нажатии среднее равно самой поправке — прежнее
+	# поведение не меняется.
+	var avg := rest_shift if sw <= 0.0001 else shift / sw
+	var off := rest_shift * (1.0 - total) + avg * total
 	return {"flat": _tap_pose(Hands3D.blend_many(base, poses), per),
 		"shift": off, "map": map}
 
@@ -658,9 +665,9 @@ static func _biggest(polys: Array) -> PackedVector2Array:
 
 
 ## Радиусы контура на кадр: покой, подтянутый к позам нажатий ровно теми
-## же весами, какими Hands3D.blend_many собирает позу (сумма весов ≤ 1).
-## Промежуточная поза — тоже честный контур: топология у всех поз одна,
-## поэтому радиусы смешиваются поэлементно.
+## же весами, какими Hands3D.blend_many собирает плечо (сумма весов не
+## больше единицы). Промежуточная поза — тоже честный контур: топология у
+## всех поз одна, поэтому радиусы смешиваются поэлементно.
 static func shape_radii(h: int, presses: Dictionary) -> PackedFloat32Array:
 	var side := side_name(h)
 	var table: Dictionary = Shape.RADII[side] as Dictionary
@@ -678,14 +685,15 @@ static func shape_radii(h: int, presses: Dictionary) -> PackedFloat32Array:
 			continue
 		acc[label] = float(acc.get(label, 0.0)) + w
 		wsum += w
-	var k0 := clampf(1.0 - wsum, 0.0, 1.0)
+	var den := maxf(1.0, wsum)
+	var k0 := 1.0 - wsum / den
 	var out := PackedFloat32Array()
 	out.resize(base.size())
 	for i in out.size():
 		var v := float(base[i]) * k0
 		for lb in acc.keys():
 			var arr: Array = table[lb] as Array
-			v += float(arr[i]) * float(acc[lb])
+			v += float(arr[i]) * float(acc[lb]) / den
 		out[i] = v
 	return out
 
