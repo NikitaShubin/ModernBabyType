@@ -93,6 +93,10 @@ const FINGER_MAP := {
 	".": [RIGHT, PINKY], "ShiftR": [RIGHT, PINKY], "←": [RIGHT, PINKY],
 	"↵": [RIGHT, PINKY], "Ctrl": [RIGHT, PINKY], "Win": [RIGHT, PINKY],
 	"Alt": [RIGHT, PINKY], "глобус": [RIGHT, THUMB],
+	# Стрелки — кластер правее правого Ctrl, под правой кистью. В наборе
+	# они пока НЕ участвуют (Kbd._is_blocked), палец нужен карте, чтобы
+	# доска оставалась покрытой целиком.
+	"◀": [RIGHT, PINKY], "↕": [RIGHT, PINKY], "▶": [RIGHT, PINKY],
 	# голый пробел: в игре рука большого несёт подпись («пробел:Л» /
 	# «пробел:П»); это дефолт — покоящийся большой левой.
 	"пробел": [LEFT, THUMB],
@@ -177,15 +181,19 @@ static func hint_point(bs: Array, sig: String) -> Vector2:
 
 
 ## Прямоугольник подписи: половины пробела («пробел:Л»/«пробел:П») —
-## своя половина; остальное — клавиша доски по подписи.
+## своя половина; остальное — клавиша доски по подписи. Граница половин —
+## `Kbd.space_split` (середина между ладонями), а не середина клавиши:
+## правая подушечка большого стоит на ~0.8 ширины пробела.
 static func sig_rect(bs: Array, sig: String) -> Rect2:
 	if sig.begins_with("пробел:") and not sig.ends_with(":"):
 		var sp := key_rect(bs, "пробел")
 		if sp.size == Vector2.ZERO:
 			return Rect2()
+		var split := Kbd.space_split(bs)
 		var half_l := sig.ends_with("Л")
-		return Rect2(sp.position.x + sp.size.x * (0.0 if half_l else 0.5),
-			sp.position.y, sp.size.x * 0.5, sp.size.y)
+		var x0 := sp.position.x if half_l else split
+		var x1 := split if half_l else sp.end.x
+		return Rect2(x0, sp.position.y, x1 - x0, sp.size.y)
 	return key_rect(bs, sig)
 
 
@@ -336,6 +344,14 @@ static func _rest_shift(bs: Array, h: int, flat: Array,
 ## средневзвешенное (сумма весов ≤ 1), сдвиг — туда, где подушечка этой
 ## позы оказывается на клавише игры (у широких клавиш — ближайшая точка
 ## с отступом, а не центр: иначе большой уезжал бы на середину пробела).
+##
+## ПРОБЕЛ — исключение (автор 07.11.2026: «при нажатии пробела правым
+## пальцем перемещается вся рука, хотя это бессмысленно»): подушечка
+## большого уже лежит на пробеле, и кисть не едет вовсе — сдвиг остаётся
+## покойным (`rest_shift`), ход несёт только сам палец. Половины пробела
+## (`sig_rect`) нужны подсказке, а не позе. Клавиша берётся ЦЕЛАЯ, без
+## отступа от края: отступ в полпитча у половины пробела (а она уже
+## клавиши) выталкивал кисть.
 static func pose_of(bs: Array, h: int, rest: Dictionary,
 		presses: Dictionary) -> Dictionary:
 	if rest.is_empty() or not rest.has(h):
@@ -345,6 +361,7 @@ static func pose_of(bs: Array, h: int, rest: Dictionary,
 	var map: Dictionary = rest["map"] as Dictionary
 	var base: Array = rest[h] as Array
 	var pitch := pitch_of(bs)
+	var rest_shift: Vector2 = (rest["shift"] as Dictionary).get(h, Vector2.ZERO)
 	var per: Dictionary = presses.get(h, {}) as Dictionary
 	var poses := {}
 	var wsum := 0.0
@@ -364,6 +381,14 @@ static func pose_of(bs: Array, h: int, rest: Dictionary,
 		var p: Array = pd[label] as Array
 		poses[f] = [p, w]
 		wsum += w
+		if label.begins_with("пробел:"):
+			# Кисть на пробеле НЕ едет: подушечка большого уже на клавише,
+			# и «поправка» увела бы всю руку (замер до правки: правая —
+			# на 77 px при 1600 и на 166 px при 3120). Движется только
+			# сам палец — позой нажатия и подрагиванием (_tap_pose).
+			shift += rest_shift * w
+			sw += w
+			continue
 		var r := sig_rect(bs, label)
 		if r.size == Vector2.ZERO:
 			continue
@@ -371,11 +396,47 @@ static func pose_of(bs: Array, h: int, rest: Dictionary,
 		var at := to_px(map, Hands3D.pad(p, side, root_x, ray))
 		shift += (pad_target(bs, r, at, pitch) - at) * w
 		sw += w
-	var rest_shift: Vector2 = (rest["shift"] as Dictionary).get(h, Vector2.ZERO)
 	var total := clampf(sw, 0.0, 1.0)
 	var off := rest_shift * (1.0 - total) + shift
-	return {"flat": Hands3D.blend_many(base, poses), "shift": off,
-		"map": map}
+	return {"flat": _tap_pose(Hands3D.blend_many(base, poses), per),
+		"shift": off, "map": map}
+
+
+## МЕЛКОЕ ПОДРАГИВАНИЕ НАЖАТОГО ПАЛЬЦА (автор 07.11.2026: «при нажатии на
+## любую клавишу, которая уже находится под пальцем, желательно видеть
+## мелкое подрагивание этого пальца. Иначе нет ощущения нажатия»).
+##
+## У дом-клавиш запечённая поза нажатия почти совпадает с покоем, и кадр
+## не меняется — нажатие не видно. Правило ОДНО и на все клавиши: к
+## сгибу нажимающего пальца добавляется маленькая добавка по его же ходу.
+## На дальней клавише палец и так едет на десятки градусов — добавка в
+## ней тонет; на дом-клавише она и есть весь ход. Так «подрагивание»
+## включается ровно там, где без него нечего смотреть, и не требует
+## отдельного признака «клавиша под пальцем».
+const TAP_MCP := 2.6
+const TAP_PIP := 1.6
+
+
+static func _tap_pose(flat: Array, per: Dictionary) -> Array:
+	var out := flat.duplicate()
+	for f in per.keys():
+		var e: Array = per[f] as Array
+		if e.size() < 2:
+			continue
+		var w := clampf(float(e[1]), 0.0, 1.0)
+		if w <= 0.0001:
+			continue
+		var finger := int(f)
+		if finger == THUMB:
+			out[27] = float(out[27]) + TAP_MCP * w
+			out[28] = float(out[28]) + TAP_PIP * w
+			continue
+		if finger < INDEX or finger > PINKY:
+			continue
+		var i := 8 + (finger - 1) * 4
+		out[i] = float(out[i]) + TAP_MCP * w
+		out[i + 1] = float(out[i + 1]) + TAP_PIP * w
+	return out
 
 
 ## Точка посадки на клавишу: малая — центр; широкая — ближайшая к

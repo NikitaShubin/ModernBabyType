@@ -515,6 +515,15 @@ func _legend_roundtrip() -> void:
 	)
 	for gone in ["-", "\\"]:
 		_check(not bottom.has(gone), "«%s» left the bottom row" % gone)
+	# Стрелки — правее правого Ctrl (автор 07.11.2026: «вставим таки в
+	# виртуальную клавиатуру стрелки влево вверх-вниз вправо… сами кнопки
+	# эти пока давай сделаем неактивными»). Вверх и вниз — ОДНА клавиша.
+	var n := bottom.size()
+	_check(bottom[n - 3] == "◀" and bottom[n - 2] == "↕" and bottom[n - 1] == "▶",
+		"the arrow cluster closes the bottom row: %s" % [str(bottom)])
+	for a in ["◀", "↕", "▶"]:
+		_check(K._is_blocked(a), "the arrow «%s» is inactive" % a)
+		_check(K._act_of(a) == "", "the arrow «%s» types nothing" % a)
 
 
 ## Раскладка взята с настоящей таблицы (скомпилированная карта этой

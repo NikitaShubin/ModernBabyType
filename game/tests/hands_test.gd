@@ -110,6 +110,8 @@ func _hands_test() -> void:
 		_palm_checks(board, Vector2(w, hh), tag)
 		_finger_checks(board, tag)
 		_mirror_checks(board, tag)
+		_space_checks(board, tag)
+		_tap_checks(board, tag)
 	_press_checks(bs)
 	_idle_checks()
 	_hint_checks(bs)
@@ -816,6 +818,123 @@ func _press_checks(bs: Array) -> void:
 	_check(bad_move == 0, "every press moves the hand (%d still)" % bad_move)
 
 
+## --------------------------------------------------- пробел и подрагивание
+
+## Дом-клавиши обеих кистей (та же карта, что HOME_KEY в hands.gd):
+## [подпись, рука, палец].
+const HOME_PRESS := [
+	["ф", Hands.LEFT, Hands.PINKY], ["а", Hands.LEFT, Hands.INDEX],
+	["в", Hands.LEFT, Hands.MIDDLE], ["ы", Hands.LEFT, Hands.RING],
+	["о", Hands.RIGHT, Hands.INDEX], ["л", Hands.RIGHT, Hands.MIDDLE],
+	["д", Hands.RIGHT, Hands.RING], ["ж", Hands.RIGHT, Hands.PINKY]]
+
+
+## Точка кончика пальца на экране в данной позе (со сдвигом кисти).
+func _tip_px(rest: Dictionary, h: int, flat: Array, shift: Vector2,
+		finger: int) -> Vector2:
+	var map: Dictionary = rest["map"] as Dictionary
+	if finger == Hands.THUMB:
+		var d := Hands3D.thumb_fk(Hands3D.thumb_angles(flat))
+		return Hands.to_px(map, (d["pts"] as PackedVector3Array)[3]) + shift
+	var ray := String(Hands3D.RAY_OF[finger])
+	var fk := Hands3D.finger_fk(ray, Hands3D.finger_angles(flat, ray))
+	return Hands.to_px(map, fk[3]) + shift
+
+
+## Подушечка большого в покое на экране (с поправкой покоя).
+func _thumb_rest_px(rest: Dictionary, h: int) -> Vector2:
+	var side := Hands.side_name(h)
+	var root_x := float(HandsPoses.ROOT_MM[side])
+	var map: Dictionary = rest["map"] as Dictionary
+	return Hands.to_px(map, Hands3D.pad(rest[h] as Array, side, root_x, "I")) \
+		+ ((rest["shift"] as Dictionary)[h] as Vector2)
+
+
+## Подушечка пальца на экране в данной позе (со сдвигом кисти).
+func _pad_px(rest: Dictionary, h: int, flat: Array, shift: Vector2,
+		finger: int) -> Vector2:
+	var side := Hands.side_name(h)
+	var root_x := float(HandsPoses.ROOT_MM[side])
+	var ray := "I" if finger == Hands.THUMB else String(Hands3D.RAY_OF[finger])
+	var map: Dictionary = rest["map"] as Dictionary
+	return Hands.to_px(map, Hands3D.pad(flat, side, root_x, ray)) + shift
+
+
+## ПРОБЕЛ (автор 07.11.2026: «при нажатии пробела правым пальцем
+## перемещается вся рука, хотя это бессмысленно»). Правило: подушечка
+## большого уже лежит на пробеле, поэтому кисть при нажатии не едет
+## вовсе — движется только палец. Граница половин пробела при этом не
+## середина клавиши, а ось между кистями: подушечки больших делят её
+## пополам, и каждая стоит на своей половине.
+func _space_checks(bs: Array, tag: String) -> void:
+	var rest := Hands.rest_both(bs)
+	var sp := Hands.key_rect(bs, "пробел")
+	if rest.is_empty() or sp.size.x <= 0.0:
+		_check(false, tag + ": space: rest pose is built")
+		return
+	var split := Kbd.space_split(bs)
+	_check(split > sp.position.x and split < sp.end.x,
+		"%s: the space split stays inside the key (%.1f)" % [tag, split])
+	var lp := _thumb_rest_px(rest, Hands.LEFT)
+	var rp := _thumb_rest_px(rest, Hands.RIGHT)
+	_check(absf((lp.x + rp.x) * 0.5 - split) <= 2.0,
+		"%s: the split is the middle between the resting thumbs (%.1f vs %.1f)"
+			% [tag, split, (lp.x + rp.x) * 0.5])
+	_check(lp.x < split and rp.x > split,
+		"%s: each thumb rests on its own half of the space" % tag)
+	# Пробел обязан держать ОБЕ подушечки с запасом: при тройной ширине
+	# правая стояла на самом краю (замер 07.11.2026: подушечка 259 против
+	# края 257.9), и четвёртая единица ширины это лечит.
+	var edge := 0.25 * Hands.pitch_of(bs)
+	for h in [Hands.LEFT, Hands.RIGHT]:
+		var sig := "пробел:" + ("Л" if h == Hands.LEFT else "П")
+		var rs: Vector2 = (rest["shift"] as Dictionary)[h]
+		var st := Hands.pose_of(bs, h, rest, {h: {Hands.THUMB: [sig, 1.0]}})
+		var off: Vector2 = st["shift"] as Vector2
+		_check(absf(off.x - rs.x) <= 0.5 and absf(off.y - rs.y) <= 0.5,
+			"%s: pressing '%s' does not move the hand (%.1f,%.1f)"
+				% [tag, sig, off.x - rs.x, off.y - rs.y])
+		var pad := _pad_px(rest, h, st["flat"] as Array, off, Hands.THUMB)
+		var pad0 := _thumb_rest_px(rest, h)
+		_check(pad.x >= sp.position.x + edge and pad.x <= sp.end.x - edge,
+			"%s: the pressed thumb stays on the space with a margin (%.1f not in %.1f..%.1f)"
+				% [tag, pad.x, sp.position.x + edge, sp.end.x - edge])
+		_check(pad0.x >= sp.position.x + edge and pad0.x <= sp.end.x - edge,
+			"%s: the resting thumb sits on the space with a margin (%.1f not in %.1f..%.1f)"
+				% [tag, pad0.x, sp.position.x + edge, sp.end.x - edge])
+
+
+## ПОДРАГИВАНИЕ (автор 07.11.2026: «при нажатии на любую клавишу, которая
+## уже находится под пальцем, желательно видеть мелкое подрагивание этого
+## пальца. Иначе нет ощущения нажатия»). У дом-клавиш запечённая поза
+## почти равна покою, и без подрагивания кадр не меняется. Меряем ДВИЖЕНИЕ
+## КОНЧИКА (его видит глаз) и то, что кисть при этом стоит на месте.
+func _tap_checks(bs: Array, tag: String) -> void:
+	var pitch := Hands.pitch_of(bs)
+	var rest := Hands.rest_both(bs)
+	if rest.is_empty() or pitch <= 0.0:
+		_check(false, tag + ": tap: rest pose is built")
+		return
+	for item in HOME_PRESS:
+		var sig := String(item[0])
+		var h: int = item[1]
+		var f: int = item[2]
+		var rs: Vector2 = (rest["shift"] as Dictionary)[h]
+		var a := _tip_px(rest, h, rest[h] as Array, rs, f)
+		var st := Hands.pose_of(bs, h, rest, {h: {f: [sig, 1.0]}})
+		var off: Vector2 = st["shift"] as Vector2
+		var b := _tip_px(rest, h, st["flat"] as Array, off, f)
+		var d := b.distance_to(a)
+		_check(d >= 0.12 * pitch,
+			"%s: pressing the home key '%s' twitches its fingertip (%.1f px)"
+				% [tag, sig, d])
+		_check(d <= 0.5 * pitch,
+			"%s: the twitch on '%s' stays small (%.1f px)" % [tag, sig, d])
+		_check(absf(off.x - rs.x) <= 0.5 and absf(off.y - rs.y) <= 0.5,
+			"%s: the twitch on '%s' does not move the hand (%.1f,%.1f)"
+				% [tag, sig, off.x - rs.x, off.y - rs.y])
+
+
 ## --------------------------------------------------- только свой палец
 
 ## Нажатие двигает ТОЛЬКО свой палец (автор 06.11.2026: при «в»/«л»
@@ -900,10 +1019,20 @@ func _hint_checks(bs: Array) -> void:
 	var hl := Hands.hint_point(bs, "пробел:Л")
 	var hr := Hands.hint_point(bs, "пробел:П")
 	_check(hl.x < hr.x, "space halves are left-to-right")
-	_check(absf((hl.x + hr.x) * 0.5 - sp.get_center().x) < 0.01,
-		"space halves are centred on the space bar")
 	_check(absf(hl.y - sp.get_center().y) < 0.01,
 		"space halves keep the row height")
+	# Граница половин — НЕ середина клавиши, а ось между кистями
+	# (автор 07.11.2026). Половинки обязаны смыкаться ровно на ней.
+	var split := Kbd.space_split(bs)
+	var rl := Hands.sig_rect(bs, "пробел:Л")
+	var rr := Hands.sig_rect(bs, "пробел:П")
+	_check(absf(rl.position.x - sp.position.x) < 0.01
+		and absf(rl.end.x - split) < 0.01
+		and absf(rr.position.x - split) < 0.01
+		and absf(rr.end.x - sp.end.x) < 0.01,
+		"the space halves tile the key around the split (%.1f)" % split)
+	_check(split > sp.get_center().x,
+		"the split sits right of the key centre, at the hands' axis")
 
 
 ## ------------------------------------------------------------- контур

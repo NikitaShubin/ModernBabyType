@@ -44,9 +44,16 @@ const ROWS_RU: Array = [
 ## на настоящей (требование автора 10.2026). Всё это в наборе не
 ## участвует: подпись приглушена, нажатие мимо. В меню последней
 ## клавишей вместо Ctrl — ввод (↵): имя надо чем-то заканчивать.
+## Стрелки — правее правого Ctrl, как на настоящей (автор 07.11.2026:
+## «вставим таки в виртуальную клавиатуру стрелки влево вверх-вниз
+## вправо; объединение стрелок вверх-вниз можно сделать размером с
+## обычную клавишу»). Вверх и вниз — ОДНА клавиша «↕», иначе кластер
+## занимал бы четыре. В наборе стрелки пока не участвуют (автор: «сами
+## кнопки эти пока давай сделаем неактивными»).
 static func bottom_row(_enter: bool) -> Array:
 	# Глобус — между правыми Alt и Ctrl (автор 10.2026).
-	return ["Ctrl", "Win", "Alt", "пробел", "Alt", "глобус", "Ctrl"]
+	return ["Ctrl", "Win", "Alt", "пробел", "Alt", "глобус", "Ctrl",
+		"◀", "↕", "▶"]
 
 
 ## Знаки с цифр в русской раскладке (ЙЦУКЕН, «Русская» в Windows):
@@ -479,16 +486,20 @@ static func is_plain_letter(s: String) -> bool:
 ## подпись приглушена, тап мимо (автор 10.2026: «всё заблокировано —
 ## в наборе не участвует, подпись приглушена, тап мимо»).
 static func _is_blocked(label: String) -> bool:
-	return label in ["Ctrl", "Win", "Alt", "Tab", "Caps"]
+	return label in ["Ctrl", "Win", "Alt", "Tab", "Caps", "◀", "↕", "▶"]
 
 
 ## Ширина клавиши в единицах питча: стандарт ANSI. Tab 1.5, Caps 1.75,
 ## левый Shift 2.25 — отсюда и ступеньки рядов (см. buttons): буквы
 ## верхнего ряда стоят на 1.5 питча, среднего — на 1.75, нижнего — на
-## 2.25. Стереть — двойное, пробел — тройной.
+## 2.25. Стереть — двойное, пробел — ЧЕТЫРЁХКРАТНЫЙ (автор 07.11.2026
+## добавил в низ стрелки, и при прежнем тройном пробеле на телефоне
+## правая подушечка большого оказывалась за его правым краем: она стоит
+## на ~0.8 ширины пробела. Четыре единицы держат обе подушечки на
+## клавише и заодно приводят служебные клавиши низа к ширине букв).
 static func _span(label: String) -> float:
 	if label == "пробел":
-		return 3.0
+		return 4.0
 	if label == "←":
 		return 2.0
 	if label == "Tab":
@@ -506,6 +517,39 @@ static func _span(label: String) -> float:
 ## питчей (M*(p+gap)), и ступеньки держатся точно, без накопления ошибки.
 static func _mod_w(m: float, p: float, gap: float) -> float:
 	return m * p + (m - 1.0) * gap
+
+
+## Клавиша доски по подписи (мера buttons()); пусто — клавиши нет.
+static func _rect_of(bs: Array, s: String) -> Rect2:
+	for b in bs:
+		if String(b["s"]) == s:
+			return b["r"] as Rect2
+	return Rect2()
+
+
+## Линия раздела пробела между кистями — НЕ половина клавиши, а середина
+## между ладонями (автор 07.11.2026: «разрешим пробел не поровну, а по
+## линии строго между дефолтным положением рук»).
+##
+## Мера — середина между «п» и «р»: дом-группа «ф…ж» симметрична
+## относительно неё, а подушечки больших в покое делят её ровно пополам
+## (замер: 540x1140 — 225.6 и 254.8 при оси 240.2; 1600x1000 — 695.6 и
+## 761.0 при 728.3; 3120x2080 — 1335.9 и 1473.4 при 1404.7; держит
+## hands_test). Раньше делили пополам саму клавишу, и правая подушечка
+## (она на ~0.6 питча ЛЕВЕЕ середины пробела) попадала в правую половину
+## только через сдвиг всей кисти: 77 px при 1600 и 166 px при 3120.
+static func space_split(bs: Array) -> float:
+	var sp := _rect_of(bs, "пробел")
+	if sp.size.x <= 0.0:
+		return 0.0
+	var l := _rect_of(bs, "п")
+	var r := _rect_of(bs, "р")
+	if l.size.x <= 0.0 or r.size.x <= 0.0:
+		return sp.get_center().x
+	# Ось не выходит за клавишу: обе половины обязаны быть живыми.
+	var m := sp.size.x * 0.15
+	return clampf((l.get_center().x + r.get_center().x) * 0.5,
+		sp.position.x + m, sp.end.x - m)
 
 
 ## Высота клавиатуры в пикселях: кнопки чуть выше ширины (×1.15, как у
@@ -885,7 +929,9 @@ static func draw(
 	var key_fs := maxi(fs, int(rh * 0.40))
 	var sub_fs := maxi(int(float(fs) * 0.55), int(rh * 0.22))
 	var dim := ink_dim if ink_dim.a > 0.0 else ink
-	for b in buttons(area, shift, enter):
+	var bs := buttons(area, shift, enter)
+	var split := space_split(bs)
+	for b in bs:
 		var r := b["r"] as Rect2
 		var s := String(b["s"])
 		var box := sb_on if (s == "Shift" or s == "ShiftR") and shift else sb
@@ -897,7 +943,7 @@ static func draw(
 			box = hi_sb
 		ci.draw_style_box(box, r)
 		if hi_sb != null and not exact and hi_side != "" and s == "пробел":
-			_draw_half(ci, r, hi_side, hi_sb)
+			_draw_half(ci, r, hi_side, hi_sb, split)
 		if s == "глобус":
 			_draw_globe(ci, r.get_center(), minf(r.size.x, r.size.y) * 0.30, ink)
 			continue
@@ -998,27 +1044,31 @@ static func _hi_side_for(s: String, hi: Array) -> String:
 
 ## Половина пробела с мягкой границей: залитая половина плюс градиентная
 ## полоса в сторону другой (6 полосок с падающей прозрачностью).
-static func _draw_half(ci: CanvasItem, r: Rect2, side: String, sb: StyleBox) -> void:
-	var half := r.size.x * 0.5
+## Граница — НЕ середина клавиши, а `space_split` (середина между
+## ладонями): правая подушечка большого стоит на ~0.8 ширины пробела.
+static func _draw_half(ci: CanvasItem, r: Rect2, side: String, sb: StyleBox,
+		split: float) -> void:
+	var x := clampf(split, r.position.x, r.end.x)
 	var base := Color(1, 1, 1)
 	if sb is StyleBoxFlat:
 		base = (sb as StyleBoxFlat).bg_color
 	if side == "Л":
-		ci.draw_style_box(sb, Rect2(r.position.x, r.position.y, half, r.size.y))
+		ci.draw_style_box(sb, Rect2(r.position.x, r.position.y,
+			x - r.position.x, r.size.y))
 		for i in 6:
 			var t := float(i) / 6.0
 			var c := base
 			c.a *= (1.0 - t) * 0.6
 			var w := 22.0 / 6.0
-			ci.draw_rect(Rect2(r.position.x + half + float(i) * w, r.position.y, w + 1.0, r.size.y), c)
+			ci.draw_rect(Rect2(x + float(i) * w, r.position.y, w + 1.0, r.size.y), c)
 	else:
-		ci.draw_style_box(sb, Rect2(r.position.x + half, r.position.y, half, r.size.y))
+		ci.draw_style_box(sb, Rect2(x, r.position.y, r.end.x - x, r.size.y))
 		for i in 6:
 			var t := float(i) / 6.0
 			var c := base
 			c.a *= (1.0 - t) * 0.6
 			var w := 22.0 / 6.0
-			ci.draw_rect(Rect2(r.position.x + half - (float(i) + 1.0) * w, r.position.y, w + 1.0, r.size.y), c)
+			ci.draw_rect(Rect2(x - (float(i) + 1.0) * w, r.position.y, w + 1.0, r.size.y), c)
 
 
 ## Тактильный рисочек на «а» и «о»: на настоящей клавиатуре под указательными
