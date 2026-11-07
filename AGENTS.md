@@ -28,8 +28,15 @@
   Правило «важное не в `/tmp`» сейчас особенно строгое: там жил и был
   потерян ключ pollinations и 8 кадров AnimateDiff.
 - `.venv/`, `game/dist/`, `game/.godot/` — в `.gitignore`, в коммиты не идут.
-  `tools/` в `.gitignore` целиком, кроме `tools/docker/`, `tools/icons/`
-  и `tools/x11test.py`: эти три в репозитории, остальное пересоздаётся.
+  `tools/` в `.gitignore` целиком, кроме того, без чего не продолжить работу
+  с чистого клона: `tools/docker/` (образ и сборка), `tools/icons/`
+  (генератор иконок), `tools/x11test.py` и `tools/verify_vis.py` (стенд),
+  `tools/plugin/mbt-install/` (нативный плагин установки APK — без него
+  обновление из игры не собрать), `tools/emulator/run-emu.sh` и
+  `tools/emulator/avd/mbt.config.ini` (профиль AVD: геометрия телефона),
+  `tools/hand3d/` (3D-исследование кистей — ИСХОДНИК запечённых поз и
+  силуэта; кэши `cache/`, кадры `out/` и `.godot/` не идут). Остальное —
+  кэши, шаблоны и SDK: пересоздаётся скриптами.
 - История: в начале сессии `gdtoolkit` был однократно поставлен мимо `.venv`
   (в user-site), затем полностью откачен (`pip uninstall`, проверено).
   Дальше — только `.venv`.
@@ -1657,10 +1664,17 @@ setxkbmap -display :99 us  # вернуть раскладку после тес
   просьбе автора), свежий `game/dist/ModernBabyType.apk` ставится сам.
   Без окна (себе для скриншотов): `run-emu.sh --headless`, кадры через
   `adb exec-out screencap -p`.
-- SDK и образы лежат в `tools/emulator/sdk` (в `.gitignore`, пересоздаются
-  sdkmanager'ом; AVD зовётся `mbt`, Play Store-образ — там Gboard с русским).
-  KVM пробрасывается устройством + `--group-add` (пользователя в группе `kvm`
-  нет — так задумано, наружу ничего не ставится).
+- SDK и образы лежат в `tools/emulator/sdk` (в `.gitignore`), AVD — в
+  `tools/emulator/avd` (тоже, кроме профиля `mbt.config.ini`). **С чистого
+  клона стенд ставится сам**: `run-emu.sh` качает `platform-tools`,
+  `emulator` и `system-images;android-34;default;x86_64` через `sdkmanager`
+  (разово, ~2.5 ГБ), создаёт AVD через `avdmanager` и кладёт поверх
+  профиль стенда — телефон 1080x2280, dpi 420, `swiftshader_indirect`
+  (без профиля гость поднимается другим экраном, и кадры с тапами не
+  совпадают с тем, что видел автор). AVD зовётся `mbt`, Play Store-образ
+  (`--play`) — там Gboard с русским. KVM пробрасывается устройством +
+  `--group-add` (пользователя в группе `kvm` нет — так задумано, наружу
+  ничего не ставится).
 - Русская раскладка и экранная клавиатура: в образах кириллицы НЕТ вообще
   (русских KCM в системе нет — ни в AOSP, ни в Play; `-change_locale`
   не помогает). Проверено до конца 05.10.2026 на Play-образе: Gboard

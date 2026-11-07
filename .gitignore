@@ -26,10 +26,30 @@ tools/*
 !tools/icons/
 !tools/x11test.py
 !tools/verify_vis.py
-!tools/emulator/run-emu.sh
 !tools/plugin/
 tools/plugin/*
 !tools/plugin/mbt-install/
+# Стенд эмулятора: СКРИПТ и ПРОФИЛЬ AVD (геометрия телефона 1080x2280,
+# dpi 420) — в репозитории, иначе с чистого клона стенд не поднять.
+# SDK, образы и сам AVD — нет: sdkmanager/avdmanager качают и создают их
+# заново (run-emu.sh делает это сам, см. AGENTS.md §6).
+!tools/emulator/
+tools/emulator/*
+!tools/emulator/run-emu.sh
+!tools/emulator/avd/
+tools/emulator/avd/*
+!tools/emulator/avd/mbt.config.ini
+# 3D-исследование кистей — ИСХОДНИК запечённых поз и силуэта
+# (hands_poses.gd, hands_shape.gd печёт из него). Кэши, кадры и меши
+# пересоздаются скриптами печи — они не нужны.
+!tools/hand3d/
+tools/hand3d/*
+!tools/hand3d/*.gd
+!tools/hand3d/*.tscn
+!tools/hand3d/*.md
+!tools/hand3d/*.py
+!tools/hand3d/*.sh
+!tools/hand3d/project.godot
 
 # Gradle-сборка Android: генерированное (90МБ godot-lib, ассеты,
 # .import-мусор). Наш AAR кладётся туда скриптом из
