@@ -193,6 +193,16 @@ func _shape_data_checks() -> void:
 		var worst_jump := 0.0
 		var roots := 0
 		var root_pose := ""
+		var knuckles := 0
+		var knuckle_pose := ""
+		var knuckle_worst := -999.0
+		var knuckle_ray := ""
+		var narrows := 0
+		var narrow_pose := ""
+		var narrow_worst := 999.0
+		var narrow_ray := ""
+		var joints_out := 0
+		var joints_pose := ""
 		for k in table.keys():
 			var a: Array = table[k] as Array
 			if a.size() != Shape.N:
@@ -220,6 +230,24 @@ func _shape_data_checks() -> void:
 				roots += 1
 				if root_pose == "":
 					root_pose = String(k)
+			if int(rule["knuckle"]) > 0:
+				knuckles += 1
+				if knuckle_pose == "":
+					knuckle_pose = String(k)
+			if float(rule["knuckle_worst"]) > knuckle_worst:
+				knuckle_worst = float(rule["knuckle_worst"])
+				knuckle_ray = String(rule["knuckle_ray"])
+			if int(rule["narrow"]) > 0:
+				narrows += 1
+				if narrow_pose == "":
+					narrow_pose = String(k)
+			if float(rule["narrow_worst"]) < narrow_worst:
+				narrow_worst = float(rule["narrow_worst"])
+				narrow_ray = String(rule["narrow_ray"])
+			if int(rule["joints"]) > 0:
+				joints_out += int(rule["joints"])
+				if joints_pose == "":
+					joints_pose = String(k)
 		_check(bumps == 0,
 			"%s: the visible palm is smooth in every baked pose (%d poses, e.g. '%s')"
 			% [side, bumps, bump_pose])
@@ -229,6 +257,19 @@ func _shape_data_checks() -> void:
 		_check(roots == 0,
 			"%s: the palm reaches into every finger root in every pose (%d poses, e.g. '%s')"
 			% [side, roots, root_pose])
+		var kw := "none exposed"
+		if knuckle_worst > -900.0:
+			kw = "%+.2f mm on %s" % [knuckle_worst, knuckle_ray]
+		var nw := "%+.2f mm on %s" % [narrow_worst, narrow_ray]
+		_check(knuckles == 0,
+			"%s: no knuckle is wider than its finger (worst visible %s, %d poses, e.g. '%s')"
+			% [side, kw, knuckles, knuckle_pose])
+		_check(narrows == 0,
+			"%s: the palm is never narrower than its finger at the knuckle (worst %s, %d poses, e.g. '%s')"
+			% [side, nw, narrows, narrow_pose])
+		_check(joints_out == 0,
+			"%s: every finger joint stays inside the drawn hand (%d outside, e.g. '%s')"
+			% [side, joints_out, joints_pose])
 		_check(bad == 0, "%s: every baked ray is a positive number (%d bad)"
 			% [side, bad])
 		_check(worst > 300.0,
@@ -242,11 +283,10 @@ func _shape_data_checks() -> void:
 ##
 ## Причина — стык двух мер: ладонь печётся из поля БЕЗ пальцев, пальцы
 ## рисуются лентами, и жёсткое объединение (Geometry2D.merge_polygons)
-## оставляло на пересечении острый залом. Модель же сваривает палец с
-## ладонью фаской 6 мм (Sdf.smin в field()), и настоящий силуэт там
-## скруглён. Правка живёт В ПОЛЕ — `HandModel.field_roots()`: контур
-## ладони печётся уже с заготовками первых 13 мм каждого пальца. Здесь
-## держатся ДВА СЛЕДСТВИЯ правки, оба меряются числом:
+## оставляло на пересечении острый залом. Правка живёт В ПОЛЕ —
+## `HandModel.field_roots()`: контур ладони печётся уже с заготовками
+## первых 13 мм каждого пальца. Здесь держатся ТРИ СЛЕДСТВИЯ правки, все
+## меряются числом:
 ##
 ##   1. ГДЕ КОНТУР ВИДЕН (луч не накрыт лентой пальца) — он гладкий:
 ##      нет шага > 8 мм и нет местного выступа/вмятины > 1.5 мм. Под
@@ -257,7 +297,22 @@ func _shape_data_checks() -> void:
 ##      Тогда лента продолжает его касательной, а не пересекает под
 ##      углом. Сними заготовки — краснеет каждая поза (проверено: на
 ##      прежних данных 108 из 108).
+##   3. КОСТЯШКА НЕ ШИРЕ СВОЕГО ПАЛЬЦА (автор 07.11.2026: «у основания
+##      мизинца костяшка слишком выпирает даже в покое»). Головка пясти
+##      в модели несла ОДИН радиус на все лучи (10.4 мм), а кожа мизинца
+##      — 8.6: ладонь у самого стыка была на 1.8 мм шире пальца, и
+##      силуэт получал бугор. Плюс фаска smin(6) выносила поверхность
+##      ещё на 1.5 мм. Теперь радиус головки — кожа СВОЕГО пальца, а
+##      объединение жёсткое: ладонь и заготовка делят ОДНУ сферу в
+##      костяшке. Здесь это держится с двух сторон: видимый выступ
+##      (луч не накрыт ничьей лентой) ≤ 0.5 мм и ладонь не УЖЕ пальца
+##      (расстояние от головки до контура ≥ радиуса кожи − 0.5 мм).
+##      Плюс каждый сустав каждого пальца обязан лежать ВНУТРИ
+##      нарисованной кисти — иначе кисть «костлявая».
 const ROOT_STUB := 13.0
+## Зона корня вокруг оси пальца и допуск выступа, мм.
+const KNUCKLE_ZONE := 14.0
+const KNUCKLE_TOL := 0.5
 
 
 func _palm_rule(radii: Array, flat: Array) -> Dictionary:
@@ -292,10 +347,57 @@ func _palm_rule(radii: Array, flat: Array) -> Dictionary:
 			bumps += 1
 	var poly := _palm_mm(radii)
 	var roots := 0
+	var knuckle := 0
+	var knuckle_worst := -999.0
+	var knuckle_ray := ""
+	var narrow := 0
+	var narrow_worst := 999.0
+	var narrow_ray := ""
+	var joints := 0
 	for b in bands:
-		if not _stub_inside(poly, b as Dictionary):
+		var bd: Dictionary = b as Dictionary
+		var pts: PackedVector3Array = bd["pts"] as PackedVector3Array
+		var rs: Array = bd["rs"] as Array
+		var ray := String(bd["ray"])
+		if not _stub_inside(poly, bd):
 			roots += 1
-	return {"jumps": jumps, "worst": worst, "bumps": bumps, "roots": roots}
+		# Костяшка: контур ладони в зоне корня не выходит за ленту пальца.
+		var mcp := Vector2(pts[0].x, pts[0].y)
+		var axis := (mcp - Shape.CENTER).angle()
+		for i in n:
+			var a := TAU * float(i) / float(n)
+			if absf(wrapf(a - axis, -PI, PI)) > deg_to_rad(KNUCKLE_ZONE):
+				continue
+			if not vis[i]:
+				continue
+			var rb := _band_r(Vector2(cos(a), sin(a)), pts, rs)
+			if rb <= 0.0:
+				continue
+			var lip := float(radii[i]) - rb
+			if lip > knuckle_worst:
+				knuckle_worst = lip
+				knuckle_ray = ray
+			if lip > KNUCKLE_TOL:
+				knuckle += 1
+		# Обратная сторона: ладонь в костяшке не УЖЕ своего пальца, иначе
+		# основание ленты торчит из ладони и на стыке залом.
+		var gap := _poly_margin(poly, mcp) - float(rs[0])
+		if gap < narrow_worst:
+			narrow_worst = gap
+			narrow_ray = ray
+		if gap < -KNUCKLE_TOL:
+			narrow += 1
+		# Сустав внутри нарисованной кисти с запасом кожи.
+		for j in pts.size():
+			var q := Vector2(pts[j].x, pts[j].y)
+			if not Geometry2D.is_point_in_polygon(q, poly) \
+					and not _under_band(q, bands, -1.0):
+				joints += 1
+	return {"jumps": jumps, "worst": worst, "bumps": bumps, "roots": roots,
+		"knuckle": knuckle, "knuckle_worst": knuckle_worst,
+		"knuckle_ray": knuckle_ray, "narrow": narrow,
+		"narrow_worst": narrow_worst, "narrow_ray": narrow_ray,
+		"joints": joints}
 
 
 func _ray_pt(radii: Array, i: int) -> Vector2:
@@ -325,7 +427,7 @@ func _pose_bands(flat: Array) -> Array:
 ## Точка накрыта лентой пальца: расстояние до цепи в плоскости xy минус
 ## радиус кожи (лента — объединение тех же усечённых конусов, и её
 ## проекция вдоль локальной z есть ровно эта капсула).
-func _under_band(q: Vector2, bands: Array) -> bool:
+func _under_band(q: Vector2, bands: Array, pad: float = 0.5) -> bool:
 	for b in bands:
 		var d: Dictionary = b as Dictionary
 		var pts: PackedVector3Array = d["pts"] as PackedVector3Array
@@ -338,9 +440,77 @@ func _under_band(q: Vector2, bands: Array) -> bool:
 			if az.length_squared() > 0.000001:
 				t = clampf((q - a).dot(az) / az.length_squared(), 0.0, 1.0)
 			var r := lerpf(float(rs[i]), float(rs[i + 1]), t)
-			if q.distance_to(a + az * t) <= r + 0.5:
+			if q.distance_to(a + az * t) <= r + pad:
 				return true
 	return false
+
+
+## Радиус ленты пальца по лучу из центра полярной меры. 0 — луч проходит
+## мимо ленты (или выходит через торец, а не через бок первого сегмента:
+## там ладонь законно шире, это не костяшка).
+func _band_r(dir: Vector2, pts: PackedVector3Array, rs: Array) -> float:
+	var r := 0.0
+	var entered := false
+	var prev := 0.0
+	var hit := -1.0
+	while r <= 440.0:
+		var inside := _band_d(Shape.CENTER + dir * r, pts, rs) <= 0.0
+		if not entered:
+			if inside:
+				entered = true
+			r += 2.5
+			continue
+		if not inside:
+			hit = r
+			break
+		prev = r
+		r += 2.5
+	if hit < 0.0:
+		return 0.0
+	var lo := prev
+	var hi := hit
+	for i in 10:
+		var mid := (lo + hi) * 0.5
+		if _band_d(Shape.CENTER + dir * mid, pts, rs) <= 0.0:
+			lo = mid
+		else:
+			hi = mid
+	var q := Shape.CENTER + dir * lo
+	var a := Vector2(pts[0].x, pts[0].y)
+	var ab := Vector2(pts[1].x, pts[1].y) - a
+	var t := (q - a).dot(ab) / maxf(ab.length_squared(), 0.000001)
+	if t < 0.15 or t > 0.95:
+		return 0.0
+	return lo
+
+
+func _band_d(q: Vector2, pts: PackedVector3Array, rs: Array) -> float:
+	var best := 1.0e9
+	for i in 3:
+		var a := Vector2(pts[i].x, pts[i].y)
+		var b := Vector2(pts[i + 1].x, pts[i + 1].y)
+		var ab := b - a
+		var t := 0.0
+		if ab.length_squared() > 0.000001:
+			t = clampf((q - a).dot(ab) / ab.length_squared(), 0.0, 1.0)
+		var r := lerpf(float(rs[i]), float(rs[i + 1]), t)
+		best = minf(best, q.distance_to(a + ab * t) - r)
+	return best
+
+
+## Расстояние от точки до ближайшего ребра контура — «полуширина» ладони
+## в самом узком направлении от этой точки.
+func _poly_margin(poly: PackedVector2Array, q: Vector2) -> float:
+	var best := 1.0e9
+	for i in poly.size():
+		var a := poly[i]
+		var b := poly[(i + 1) % poly.size()]
+		var ab := b - a
+		var t := 0.0
+		if ab.length_squared() > 0.000001:
+			t = clampf((q - a).dot(ab) / ab.length_squared(), 0.0, 1.0)
+		best = minf(best, q.distance_to(a + ab * t))
+	return best
 
 
 ## Заготовка корня пальца лежит внутри контура ладони — по ОСИ пальца.
