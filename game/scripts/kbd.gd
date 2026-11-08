@@ -898,6 +898,36 @@ static func _act_of(s: String) -> String:
 	return s
 
 
+## Панель клавиши с учётом заливки пальца. Вспышка нажатия, подсказка и
+## зажатый шифт её ВЫТЕСНЯЮТ: «ты нажал», «жми сюда» и «шифт включён»
+## говорят важнее цвета пальца, и спорить с ними заливкой нельзя.
+## Чистая (без канвы): тест меряет меру, а не картинку.
+static func key_box(s: String, tint_key: String, base: StyleBox,
+		tint: Dictionary, press_sb: StyleBox, press_key: String,
+		hi_sb: StyleBox, exact: bool, shift_on: bool) -> StyleBox:
+	if press_sb != null and s == press_key:
+		return press_sb
+	if exact:
+		return hi_sb
+	if shift_on:
+		return base
+	if tint.has(tint_key):
+		return tint[tint_key]
+	return base
+
+
+## Пробел — две половинки (левый и правый большой): у каждой своя заливка,
+## стык по `space_split`, а не по середине клавиши. Внутренние кромки без
+## рамки и без скруглений (см. Ui.finger_half_sb) — клавиша читается одной.
+static func _draw_space_tint(ci: CanvasItem, r: Rect2, left_sb: StyleBox,
+		right_sb: StyleBox, split: float) -> void:
+	var x := clampf(split, r.position.x, r.end.x)
+	ci.draw_style_box(left_sb, Rect2(r.position.x, r.position.y,
+		x - r.position.x, r.size.y))
+	ci.draw_style_box(right_sb, Rect2(x, r.position.y,
+		r.end.x - x, r.size.y))
+
+
 ## Нарисовать кнопки на канве вызывателя. Шрифт и стиль — вызывателя.
 ## Кегль — от высоты ряда (палец!), служебные чуть мельче. Глобус —
 ## векторный (круг + меридиан): шрифтового эмодзи в DejaVu нет.
@@ -907,7 +937,7 @@ static func draw(
 	enter: bool, font: Font, fs: int, sb: StyleBox, sb_on: StyleBox, ink: Color,
 	hi: Array = [], hi_sb: StyleBox = null, ink_dim: Color = Color(0, 0, 0, 0),
 	morph := 1.0, morph_from := "", morph_shift := false,
-	press_sb: StyleBox = null, press_key := ""
+	press_sb: StyleBox = null, press_key := "", tint: Dictionary = {}
 ) -> void:
 	# hi — подписи клавиш, которые игра подсвечивает после простоя
 	# (вместо текстовой подсказки «Нажми К»). hi_sb рисует их вызыватель
@@ -934,14 +964,25 @@ static func draw(
 	for b in bs:
 		var r := b["r"] as Rect2
 		var s := String(b["s"])
-		var box := sb_on if (s == "Shift" or s == "ShiftR") and shift else sb
-		if press_sb != null and s == press_key:
-			box = press_sb
+		var shift_on := (s == "Shift" or s == "ShiftR") and shift
 		var hi_side := _hi_side_for(s, hi)
 		var exact := hi_sb != null and s in hi
-		if exact:
-			box = hi_sb
-		ci.draw_style_box(box, r)
+		# Системные клавиши низа стоят по обе стороны пробела с ОДНОЙ
+		# подписью (Ctrl/Win/Alt): сторону заливки даёт место клавиши.
+		var tint_key := s
+		if tint.has(s + ":Л"):
+			tint_key = s + (":Л" if r.get_center().x < split else ":П")
+		# Нажатие, подсказка и зажатый шифт ВЫТЕСНЯЮТ заливку пальца (см.
+		# key_box): цвет пальца — «какой рукой жать», а они — «что сейчас».
+		var overridden := (
+			(press_sb != null and s == press_key) or exact or shift_on
+		)
+		var box := key_box(s, tint_key, sb_on if shift_on else sb, tint,
+			press_sb, press_key, hi_sb, exact, shift_on)
+		if s == "пробел" and not overridden and tint.has("пробел:Л"):
+			_draw_space_tint(ci, r, tint["пробел:Л"], tint["пробел:П"], split)
+		else:
+			ci.draw_style_box(box, r)
 		if hi_sb != null and not exact and hi_side != "" and s == "пробел":
 			_draw_half(ci, r, hi_side, hi_sb, split)
 		if s == "глобус":

@@ -118,6 +118,7 @@ func _hands_test() -> void:
 	_hint_checks(bs)
 	_outline_checks(bs)
 	_one_object_checks(bs)
+	_tint_checks(bs)
 
 
 ## ---------------------------------------------------------------- карта
@@ -1234,6 +1235,144 @@ func _inside_contour(poly: PackedVector2Array, part: PackedVector2Array,
 	if uni.size() != 1:
 		return false
 	return absf(Hands._poly_area(uni[0]) - poly_area) < 1.0
+
+
+## ------------------------------------------------- клавиши по пальцам
+
+## Цвет клавиши — по пальцу, который её жмёт (автор 08.11.2026: «фоны
+## клавиш едва заметно раскрашивались по цветам, отличающим разные
+## пальцы»). Держим:
+##   * у КАЖДОЙ клавиши доски есть цвет (новая клавиша без пальца
+##     краснит — иначе она молча осталась бы нейтральной);
+##   * круг идёт вдоль доски: в каждом ряду букв и цифр номера не убывают
+##     слева направо, значит цвет — спутник места, а не случайный набор;
+##   * между указательными — прыжок в ТРИ шага: граница их зон видна
+##     (автор: «Зеркально значит границ между зонами двух указательных
+##     пальцев видно не будет, а это крайне важно»);
+##   * системные клавиши низа получают СТОРОНУ по месту: подпись у них
+##     одна, а клавиши две;
+##   * заливки строятся один раз и перекрашиваются темой НА МЕСТЕ;
+##   * у пробела две половины, скруглены только внешние углы;
+##   * вспышка нажатия, подсказка и зажатый шифт заливку вытесняют.
+##
+## Headless картинку не рисует — меряем чистые меры: номера круга,
+## панели и правило выбора (Kbd.key_box).
+func _tint_checks(bs: Array) -> void:
+	for b in bs:
+		var s0 := String(b["s"])
+		_check(Hands.tint_index(s0) >= 0, "key '%s' has a finger tint" % s0)
+	for pair in [["ё", 0], ["ф", 0], ["ы", 1], ["в", 2], ["а", 3], ["п", 3],
+			["пробел", 4], ["глобус", 5], ["р", 6], ["о", 6], ["л", 7],
+			["д", 8], ["ж", 9], ["э", 9], ["0", 9], ["ShiftR", 9]]:
+		var want := int((pair as Array)[1])
+		var got := Hands.tint_index(String((pair as Array)[0]))
+		_check(got == want,
+			"tint of '%s' is %d, want %d" % [(pair as Array)[0], got, want])
+	# Сторона в подписи: тот же палец, но своя рука.
+	_check(Hands.tint_index("Ctrl:Л") == 0 and Hands.tint_index("Ctrl:П") == 9,
+		"Ctrl gets a side: left pinky / right pinky")
+	_check(Hands.tint_index("Win:Л") == 0 and Hands.tint_index("Win:П") == 9,
+		"Win gets a side too")
+	_check(Hands.tint_index("Alt:Л") == 0 and Hands.tint_index("Alt:П") == 9,
+		"Alt gets a side too")
+	_check(Hands.tint_index("пробел:Л") == 4 and Hands.tint_index("пробел:П") == 5,
+		"space halves are the two thumbs")
+	_check(Hands.tint_index("нет-такой") == -1, "an unknown key has no tint")
+	# Граница указательных — три шага круга.
+	_check(Hands.tint_index("р") - Hands.tint_index("п") == 3,
+		"the index|index boundary is three hue steps")
+
+	var tints := Hands.key_tints(false, 10.0, Ui.LINE_DAY, 2.0)
+	_check(not tints.has("пробел"), "the space has no whole-key tint")
+	var split := Kbd.space_split(bs)
+	var rows := {}
+	for b in bs:
+		var r0: Rect2 = b["r"]
+		var key := int(round(r0.position.y))
+		if not rows.has(key):
+			rows[key] = []
+		(rows[key] as Array).append(b)
+	var ys: Array = rows.keys()
+	ys.sort()
+	for ri in ys.size():
+		var key := int(ys[ri])
+		var row: Array = rows[key]
+		row.sort_custom(func(a, c):
+			return (a["r"] as Rect2).position.x < (c["r"] as Rect2).position.x)
+		var prev := -1
+		# Порядок круга держим на ЧЕТЫРЁХ верхних рядах (цифры и буквы):
+		# низ — карта клавиш, а не зона пальцев.
+		var top_rows := ri < 4
+		for b in row:
+			var s := String(b["s"])
+			var tint_key := s
+			if tints.has(s + ":Л"):
+				var cx: float = (b["r"] as Rect2).get_center().x
+				tint_key = s + (":Л" if cx < split else ":П")
+			_check(tints.has(tint_key),
+				"row %d: '%s' has a tint box" % [key, s])
+			if not tints.has(tint_key):
+				continue
+			var cur := Hands.tint_index(tint_key)
+			# Низ доски в проверку порядка не входит: глобус (правый
+			# большой) стоит между правыми Alt и Ctrl — это карта, а не
+			# сбой порядка.
+			if top_rows:
+				_check(cur >= prev, "row %d: tint goes back (%d after %d) at '%s'"
+					% [key, cur, prev, s])
+			prev = cur
+
+	# Заливки — из палитры, построены один раз, темой меняются на месте.
+	var day_pal: Array = Ui.FINGER_DAY
+	var night_pal: Array = Ui.FINGER_NIGHT
+	for s in tints:
+		var i := Hands.tint_index(String(s))
+		_check(i >= 0, "tint box '%s' maps to a finger" % s)
+		if i < 0:
+			continue
+		var sb: StyleBoxFlat = tints[s]
+		_check(sb.bg_color == day_pal[i], "tint box '%s' is the day colour" % s)
+	var first: StyleBoxFlat = tints["ф"]
+	Hands.repaint_tints(tints, true)
+	_check(first.bg_color == night_pal[0], "night repaint recolours the same box")
+	_check(first.border_color == Ui.LINE_NIGHT, "night repaint recolours the border")
+	_check(tints["ф"] == first, "night repaint keeps the same StyleBox")
+	Hands.repaint_tints(tints, false)
+	_check(first.bg_color == day_pal[0], "day repaint returns the day colour")
+	_check(first.border_color == Ui.LINE_DAY, "day repaint returns the day border")
+
+	# Пробел: две половины, скруглены ВНЕШНИЕ углы, внутренних рамок нет.
+	var sp_l: StyleBoxFlat = tints["пробел:Л"]
+	var sp_r: StyleBoxFlat = tints["пробел:П"]
+	_check(sp_l.corner_radius_top_left > 0 and sp_l.corner_radius_bottom_left > 0,
+		"space left half is rounded on its outer left corners")
+	_check(sp_l.corner_radius_top_right == 0 and sp_l.corner_radius_bottom_right == 0,
+		"space left half has square inner corners")
+	_check(sp_l.border_width_right == 0, "space left half has no inner border")
+	_check(sp_r.corner_radius_top_right > 0 and sp_r.corner_radius_bottom_right > 0,
+		"space right half is rounded on its outer right corners")
+	_check(sp_r.corner_radius_top_left == 0 and sp_r.corner_radius_bottom_left == 0,
+		"space right half has square inner corners")
+	_check(sp_r.border_width_left == 0, "space right half has no inner border")
+	_check(sp_l.bg_color == day_pal[4] and sp_r.bg_color == day_pal[5],
+		"space halves carry the two thumb colours")
+
+	# Выбор панели: цвет пальца — обычное состояние, но «ты нажал»,
+	# «жми сюда» и зажатый шифт важнее.
+	var base := Ui.panel_sb(Color.WHITE, 10.0)
+	var tint_sb: StyleBox = tints["ф"]
+	var press := Ui.panel_sb(Color.RED, 10.0)
+	var hi := Ui.panel_sb(Color.YELLOW, 10.0)
+	_check(Kbd.key_box("ф", "ф", base, tints, press, "", hi, false, false) == tint_sb,
+		"a plain key is painted by its finger")
+	_check(Kbd.key_box("ф", "ф", base, tints, press, "ф", hi, false, false) == press,
+		"a pressed key keeps the press flash")
+	_check(Kbd.key_box("ф", "ф", base, tints, press, "", hi, true, false) == hi,
+		"a hinted key keeps the hint")
+	_check(Kbd.key_box("Shift", "Shift", base, tints, press, "", hi, false, true) == base,
+		"the held shift keeps its accent")
+	_check(Kbd.key_box("нет-такой", "нет-такой", base, tints, press, "", hi, false, false) == base,
+		"an unknown key stays neutral")
 
 
 ## Рисование ОБЕИХ кистей — только из _draw(): CanvasItem иначе ругается

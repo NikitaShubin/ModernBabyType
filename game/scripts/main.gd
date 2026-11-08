@@ -223,6 +223,9 @@ var kb_press_sb: StyleBoxFlat
 var kb_press_ok_sb: StyleBoxFlat
 var kb_press_err_sb: StyleBoxFlat
 var kb_hi_sb: StyleBoxFlat
+## Заливки клавиш по пальцам (Hands.key_tints): строятся раз, темой
+## перекрашиваются на месте. Цвет пальца — подпись «какой рукой жать».
+var kb_tints: Dictionary = {}
 
 
 ## Простой, после которого клавиатура сама подсвечивает нужную клавишу
@@ -413,6 +416,9 @@ func _ready() -> void:
 	kb_press_ok_sb = Ui.panel_sb(Ui.OK_DAY, 10.0, Ui.OK_EDGE_DAY, 2.5, false)
 	kb_press_err_sb = Ui.panel_sb(Ui.DANGER_DAY, 10.0, Ui.DANGER_EDGE_DAY, 2.5, false)
 	kb_hi_sb = Ui.panel_sb(Ui.HINT_KEY_DAY, 10.0, Ui.LINE_DAY, 2.0, false)
+	# Клавиши по пальцам: палитра из Ui, карта — у Hands (там же руки,
+	# которым она принадлежит). Строится раз — в кадре новых панелей нет.
+	kb_tints = Hands.key_tints(false, 10.0, Ui.LINE_DAY, 2.0)
 	card_p = _panel_node(card_sb)
 	hud_p = _panel_node(pill_sb)
 	hint_p = _panel_node(pill_sb)
@@ -508,6 +514,8 @@ func _apply_night() -> void:
 		kb_press_err_sb.border_color = Ui.DANGER_EDGE_DAY
 		kb_on_sb.border_color = Ui.ACCENT_EDGE_DAY
 		# Днём буквы тёмные на светлой карточке — контур не нужен.
+	# Клавиши по пальцам — той же темой: панели те же, меняется заливка.
+	Hands.repaint_tints(kb_tints, night)
 	if meadow != null:
 		meadow.night = night
 		meadow._apply_sky()
@@ -2911,7 +2919,8 @@ func _draw_own_kb() -> void:
 	Kbd.draw(
 		self, area, kb_lang, kb_shift, _kb_enter_shown(), mono,
 		int(30.0 * k), kb_key_sb, kb_on_sb, _ui_ink(), hi, kb_hi_sb, _ui_dim(),
-		kb_morph, kb_morph_from, kb_morph_shift, _press_sb(), kb_press
+		kb_morph, kb_morph_from, kb_morph_shift, _press_sb(), kb_press,
+		kb_tints
 	)
 	# Скелет кистей ПОВЕРХ доски (полупрозрачно — подписи читаются):
 	# каким пальцем какую клавишу жать, и куда пальцы едут по подсказке.

@@ -142,6 +142,91 @@ static func hand_of(s: String) -> int:
 	return finger_of(s)[0] as int
 
 
+## Номер цвета клавиши в палитре `Ui.FINGER_DAY/FINGER_NIGHT`: круг идёт
+## вдоль доски слева направо, поэтому у левой руки пальцы в карте обратны
+## порядку (мизинец 4 … большой 0), а у правой — совпадают.
+## Подпись может нести сторону («Ctrl:Л»/«Ctrl:П», «пробел:Л»/«пробел:П»):
+## низ доски — единственное место, где подпись сторону не говорит, а
+## клавиша стоит с двух сторон пробела. −1 — пальца нет.
+static func tint_index(s: String) -> int:
+	var side := ""
+	var base := s
+	if s.ends_with(":Л") or s.ends_with(":П"):
+		side = s.right(1)
+		base = s.left(s.length() - 2)
+	var f := finger_of(base)
+	if (f[0] as int) < 0:
+		return -1
+	var finger: int = f[1]
+	var hand: int = f[0]
+	if side == "Л":
+		hand = LEFT
+	elif side == "П":
+		hand = RIGHT
+	return (4 - finger) if hand == LEFT else (5 + finger)
+
+
+## Заливки клавиш по пальцам — одна на всю доску, готовая к рисованию.
+## Строится раз при создании экрана (в кадре новых панелей нет), меняется
+## темой на месте (`repaint_tints`).
+##
+## Пробел здесь ДВУМЯ половинами («пробел:Л»/«пробел:П»): на нём два
+## больших пальца, и каждый своего цвета — иначе один из них безымянный.
+## Системные клавиши низа (Ctrl/Win/Alt) тоже получают СТОРОНУ: подпись
+## у них одна на две физические клавиши, а стоят они по обе стороны
+## пробела — без стороны левая «Ctrl» красилась бы правым мизинцем и
+## ряд кончался бы не тем цветом, с которого начался.
+static func key_tints(night: bool, radius: float, border: Color,
+		bw: float) -> Dictionary:
+	var out := {}
+	for row in Kbd.all_rows(true):
+		for label in row:
+			var s := String(label)
+			# У пробела заливка не целая, а двумя половинами (ниже):
+			# голая запись «пробел» в словаре только мешала бы.
+			if s == "пробел":
+				continue
+			var i := tint_index(s)
+			if i < 0:
+				continue
+			out[s] = Ui.finger_sb(i, night, radius, border, bw)
+	# Подпись, стоящая в низу ДВАЖДЫ (Ctrl/Alt, а в левой половине ещё и
+	# Win), сторону по себе не говорит: заливку берём по месту клавиши.
+	var twice := {}
+	for label in Kbd.bottom_row(true):
+		var s := String(label)
+		twice[s] = int(twice.get(s, 0)) + 1
+	for label in Kbd.bottom_row(true):
+		var s := String(label)
+		if int(twice[s]) < 2 or s == "пробел":
+			continue
+		var f := finger_of(s)
+		if (f[0] as int) < 0:
+			continue
+		# Тот же палец на своей руке: слева — левой, справа — правой.
+		out[s + ":Л"] = Ui.finger_sb(4 - int(f[1]), night, radius, border, bw)
+		out[s + ":П"] = Ui.finger_sb(5 + int(f[1]), night, radius, border, bw)
+	out["пробел:Л"] = Ui.finger_half_sb(
+		tint_index("пробел:Л"), "Л", night, radius, border, bw)
+	out["пробел:П"] = Ui.finger_half_sb(
+		tint_index("пробел:П"), "П", night, radius, border, bw)
+	return out
+
+
+## Перекрасить те же панели в другую тему на месте: узлы держат те же
+## StyleBox, поэтому день↔ночь не рождает ни одной новой панели.
+static func repaint_tints(boxes: Dictionary, night: bool) -> void:
+	var pal: Array = Ui.FINGER_NIGHT if night else Ui.FINGER_DAY
+	var border := Ui.LINE_NIGHT if night else Ui.LINE_DAY
+	for s in boxes:
+		var i := tint_index(String(s))
+		if i < 0:
+			continue
+		var sb: StyleBoxFlat = boxes[s]
+		sb.bg_color = pal[i]
+		sb.border_color = border
+
+
 ## Подпись клавиши ДОСКИ по подписи события: строчная буква (латиница —
 ## через свою русскую пару), «пробел:Л/П» как есть. По ней ищется и
 ## прямоугольник клавиши, и запечённая поза нажатия.
