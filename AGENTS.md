@@ -1412,11 +1412,12 @@
 ```bash
 source .venv/bin/activate
 .venv/bin/gdparse game/scripts/balance.gd game/scripts/save.gd game/scripts/main.gd \
-  game/scripts/menu.gd game/tests/logic_test.gd game/tests/profiles_test.gd \
+  game/scripts/menu.gd game/scripts/hands.gd game/scripts/hands3d.gd \
+  game/tests/logic_test.gd game/tests/profiles_test.gd game/tests/hands_test.gd \
   game/tests/marks_test.gd game/tests/combo_test.gd game/tests/chase_test.gd \
   game/tests/shot_driver.gd game/tests/visual_driver.gd \
   game/tests/menu_driver.gd
-tools/docker/build-game.sh --test-only          # десять тестов, параллельно
+tools/docker/build-game.sh --test-only          # одиннадцать тестов, параллельно
 tools/docker/build-game.sh --all                # тесты + 4 платформы
 tools/docker/build-game.sh --preset Android     # одна платформа
 tools/docker/build-game.sh --shot               # кадры анимации
@@ -1442,7 +1443,9 @@ tools/docker/build-game.sh --visual             # кадры партии + мо
   событий: IME, автозамена, Backspace, шторм ошибок, конец уровня),
   `CHASE_TEST` (инвариант погони),
 `THEME_TEST` (контраст палитры), `UPDATE_TEST` (обновление),
-  `END_TEST` (уровень проходится на узких экранах). Все десять
+  `END_TEST` (уровень проходится на узких экранах), `HANDS_TEST` (кисти:
+  карта пальцев на всю доску, данные силуэта на 108 позах, зеркало,
+  нажатия, мультинажатие — без кадра, чистыми мерами). Все одиннадцать
   обязательны к запуску. Сторож в `build-game.sh` ловит и мёртвый код: системная клавиатура,
 `?123` и долгое нажатие ДЛЯ НАБОРА (по его именам `LONG_PRESS_MS`,
 `_lp_*` — у меню своё долгое нажатие на строке, `ROW_PRESS_T`, и общая
@@ -1703,7 +1706,10 @@ setxkbmap -display :99 us  # вернуть раскладку после тес
   парсер эмулятора его ест) для эффекта требует окна и живых X-клавиш,
   headless+sendevent его не проверяют. Файл хост-карты:
   `tools/emulator/keys/ru-host-charmap.txt`, гостевая:
-  `tools/emulator/keys/qwerty2.kcm` (обе лежат запасными).
+  `tools/emulator/keys/qwerty2.kcm` (обе лежат запасными; **в
+  репозитории их нет** — это заготовки экспериментов, стенду они не
+  нужны, и с чистого клона каталог `tools/emulator/keys/` просто
+  создаётся заново, если понадобится).
   Вызов экранной клавиатуры из игры на стенде невозможен — гейт движка:
   Godot 4.3 (`GodotEditText.showKeyboard`) молча запрещает `showSoftInput`,
   когда в конфигурации гостя числится железная клавиатура, а эмулятор
@@ -1716,7 +1722,9 @@ setxkbmap -display :99 us  # вернуть раскладку после тес
   (без `./build-game.sh`, у него только релиз; вызов БЕЗ ведущего `godot`
   — entrypoint образа уже им является, дубль ломает путь вывода).
   В `tools/emulator/keys/` лежат heliboard.apk и simple-keyboard.apk
-  (запасные; у Simple Keyboard русского нет).
+  (запасные; у Simple Keyboard русского нет). В репозитории их нет (это
+  скачанные сборки, не наши) — кладутся в каталог вручную, если
+  понадобятся.
   `adb shell input tap` в госте НЕ работает (даже по системным кнопкам),
   зато настоящие клики мышью в окне доходят как тачи (проверено через
   `getevent`: есть ABS_X/ABS_Y + down/up) — ими же жать Allow в диалоге
