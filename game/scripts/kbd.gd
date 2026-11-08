@@ -901,19 +901,38 @@ static func _act_of(s: String) -> String:
 ## Панель клавиши с учётом заливки пальца. Вспышка нажатия, подсказка и
 ## зажатый шифт её ВЫТЕСНЯЮТ: «ты нажал», «жми сюда» и «шифт включён»
 ## говорят важнее цвета пальца, и спорить с ними заливкой нельзя.
-## Чистая (без канвы): тест меряет меру, а не картинку.
+## `hot` — клавиши ЗОНЫ подсказки (весь палец, которому она адресована):
+## они заметнее обычных заливок, но младше самой подсказки — подсвеченная
+## клавиша поверх своей зоны. Чистая (без канвы): тест меряет меру, а не
+## картинку.
 static func key_box(s: String, tint_key: String, base: StyleBox,
 		tint: Dictionary, press_sb: StyleBox, press_key: String,
-		hi_sb: StyleBox, exact: bool, shift_on: bool) -> StyleBox:
+		hi_sb: StyleBox, exact: bool, shift_on: bool,
+		hot: Dictionary = {}) -> StyleBox:
 	if press_sb != null and s == press_key:
 		return press_sb
 	if exact:
 		return hi_sb
 	if shift_on:
 		return base
+	if hot.has(tint_key):
+		return hot[tint_key]
 	if tint.has(tint_key):
 		return tint[tint_key]
 	return base
+
+
+## Панель половины пробела: своя у левого и правого большого. Зона
+## подсказки (hot) старше обычной заливки — у подсказанного большого
+## горит ровно его половина.
+static func space_half_box(hot: Dictionary, tint: Dictionary,
+		key: String) -> StyleBox:
+	var sb: StyleBox = null
+	if hot.has(key):
+		sb = hot[key]
+	elif tint.has(key):
+		sb = tint[key]
+	return sb
 
 
 ## Пробел — две половинки (левый и правый большой): у каждой своя заливка,
@@ -937,7 +956,8 @@ static func draw(
 	enter: bool, font: Font, fs: int, sb: StyleBox, sb_on: StyleBox, ink: Color,
 	hi: Array = [], hi_sb: StyleBox = null, ink_dim: Color = Color(0, 0, 0, 0),
 	morph := 1.0, morph_from := "", morph_shift := false,
-	press_sb: StyleBox = null, press_key := "", tint: Dictionary = {}
+	press_sb: StyleBox = null, press_key := "", tint: Dictionary = {},
+	hot: Dictionary = {}
 ) -> void:
 	# hi — подписи клавиш, которые игра подсвечивает после простоя
 	# (вместо текстовой подсказки «Нажми К»). hi_sb рисует их вызыватель
@@ -948,6 +968,8 @@ static func draw(
 	# буквы напечатаны обе раскладки, активная светится ярче.
 	# press_sb — заливка нажатой клавиши: человек должен видеть, что
 	# попал в ту самую клавишу (или промахнулся мимо всех).
+	# hot — панели клавиш ЗОНЫ подсказки (весь палец, которому она
+	# адресована): заметнее обычных, но младше самой подсветки.
 	# morph (0..1), morph_from и morph_shift — перелёт: старая
 	# центральная подпись уходит в свой угол, новая выходит из своего
 	# в центр (требование автора 10.2026). morph_from пустой или
@@ -978,9 +1000,14 @@ static func draw(
 			(press_sb != null and s == press_key) or exact or shift_on
 		)
 		var box := key_box(s, tint_key, sb_on if shift_on else sb, tint,
-			press_sb, press_key, hi_sb, exact, shift_on)
-		if s == "пробел" and not overridden and tint.has("пробел:Л"):
-			_draw_space_tint(ci, r, tint["пробел:Л"], tint["пробел:П"], split)
+			press_sb, press_key, hi_sb, exact, shift_on, hot)
+		if s == "пробел" and not overridden:
+			var l_sb := space_half_box(hot, tint, "пробел:Л")
+			var r_sb := space_half_box(hot, tint, "пробел:П")
+			if l_sb != null and r_sb != null:
+				_draw_space_tint(ci, r, l_sb, r_sb, split)
+			else:
+				ci.draw_style_box(box, r)
 		else:
 			ci.draw_style_box(box, r)
 		if hi_sb != null and not exact and hi_side != "" and s == "пробел":

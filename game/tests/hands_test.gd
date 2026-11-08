@@ -1392,6 +1392,74 @@ func _tint_checks(bs: Array) -> void:
 	_check(Kbd.key_box("нет-такой", "нет-такой", base, tints, press, "", hi, false, false) == base,
 		"an unknown key stays neutral")
 
+	# ЗОНА ПОДСКАЗКИ (автор 08.11.2026: «при подсказке всю секцию делать
+	# ещё заметнее. Чтобы было понято в какой зоне и каким пальцем надо
+	# нажимать»). Те же клавиши доски, но свои панели: заливка горячее,
+	# рамка — ЦВЕТОМ ПАЛЬЦА (общий `LINE_*` у всех зон не дал бы секции).
+	var hot := Hands.key_tints(false, 10.0, Ui.LINE_DAY, 2.0, true)
+	var hot_day: Array = Ui.FINGER_HOT_DAY
+	var hot_night: Array = Ui.FINGER_HOT_NIGHT
+	var edge_day: Array = Ui.FINGER_EDGE_DAY
+	var edge_night: Array = Ui.FINGER_EDGE_NIGHT
+	_check(hot.size() == tints.size(),
+		"hot tints cover the board (%d vs %d)" % [hot.size(), tints.size()])
+	var differ := 0
+	for s in tints:
+		if hot.get(s) == tints[s]:
+			differ += 1
+	_check(differ == 0, "%d hot keys reuse the calm panel" % differ)
+	for s in hot:
+		var i := Hands.tint_index(String(s))
+		_check(i >= 0, "hot box '%s' maps to a finger" % s)
+		if i < 0:
+			continue
+		var hs: StyleBoxFlat = hot[s]
+		_check(hs.bg_color == hot_day[i],
+			"hot box '%s' is the hot day colour" % s)
+		_check(hs.border_color == edge_day[i],
+			"hot box '%s' carries its finger edge in day" % s)
+		_check((tints[s] as StyleBoxFlat).bg_color == day_pal[i],
+			"hot panel left the calm box alone at '%s'" % s)
+	_check((hot["пробел:Л"] as StyleBoxFlat).bg_color == hot_day[4]
+			and (hot["пробел:П"] as StyleBoxFlat).bg_color == hot_day[5],
+		"hot space halves carry the two thumbs")
+	_check((hot["пробел:Л"] as StyleBoxFlat).border_width_right == 0
+			and (hot["пробел:П"] as StyleBoxFlat).border_width_left == 0,
+		"hot space halves keep their inner edges bare")
+	var hfirst: StyleBoxFlat = hot["ф"]
+	Hands.repaint_tints(hot, true, true)
+	_check(hfirst.bg_color == hot_night[0], "hot night repaint recolours the fill")
+	_check(hfirst.border_color == edge_night[0], "hot night repaint recolours the edge by finger")
+	_check(hot["ф"] == hfirst, "hot night repaint keeps the same StyleBox")
+	_check(first.bg_color == day_pal[0],
+		"hot repaint did not touch the calm panel")
+	Hands.repaint_tints(hot, false, true)
+	_check(hfirst.bg_color == hot_day[0], "hot day repaint returns the hot fill")
+	_check(hfirst.border_color == edge_day[0], "hot day repaint returns the finger edge")
+	# Порядок: нажатие > подсказка > шифт > ЗОНА > цвет пальца. Подсказка
+	# и вспышка говорят «что сейчас», зона — «каким пальцем», цвет —
+	# «какой рукой»; спорить с верхними им нельзя. В игре приходит ТОЛЬКО
+	# зона (`_hot_zone`), поэтому чужая клавиша остаётся обычной.
+	var zone := {}
+	for s in hot:
+		if Hands.tint_index(String(s)) == 0:
+			zone[s] = hot[s]
+	_check(zone.has("ф") and not zone.has("ы"), "the zone is one finger wide")
+	_check(Kbd.key_box("ф", "ф", base, tints, press, "", hi, false, false, zone) == hot["ф"],
+		"a key of the hinted finger is painted hot")
+	_check(Kbd.key_box("ф", "ф", base, tints, press, "", hi, true, false, zone) == hi,
+		"the hinted key itself stays above its hot zone")
+	_check(Kbd.key_box("ф", "ф", base, tints, press, "ф", hi, false, false, zone) == press,
+		"the press flash stays above the hot zone")
+	_check(Kbd.key_box("Shift", "Shift", base, tints, press, "", hi, false, true, zone) == base,
+		"the held shift stays above the hot zone")
+	_check(Kbd.key_box("ы", "ы", base, tints, press, "", hi, false, false, zone) == tints["ы"],
+		"a key of another finger keeps its calm tint")
+	_check(Kbd.space_half_box(hot, tints, "пробел:Л") == hot["пробел:Л"],
+		"the hot half of the space wins over the calm one")
+	_check(Kbd.space_half_box({}, tints, "пробел:П") == tints["пробел:П"],
+		"without a zone the space half keeps its calm tint")
+
 
 ## Рисование ОБЕИХ кистей — только из _draw(): CanvasItem иначе ругается
 ## «Drawing is only allowed inside this node's _draw()». Узел делает три

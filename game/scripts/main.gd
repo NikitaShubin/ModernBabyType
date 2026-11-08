@@ -226,6 +226,12 @@ var kb_hi_sb: StyleBoxFlat
 ## Заливки клавиш по пальцам (Hands.key_tints): строятся раз, темой
 ## перекрашиваются на месте. Цвет пальца — подпись «какой рукой жать».
 var kb_tints: Dictionary = {}
+## Те же клавиши, но в цвете ЗОНЫ ПОДСКАЗКИ (Hands.key_tints hot):
+## заметнее обычных, с рамкой своего пальца. В кадре берётся ПОДМНОЖЕСТВО
+## зоны подсказки (`_hot_zone`), панели те же — новых нет.
+var kb_tints_hot: Dictionary = {}
+var _hot_keys: Dictionary = {}
+var _hot_sig := ""
 
 
 ## Простой, после которого клавиатура сама подсвечивает нужную клавишу
@@ -419,6 +425,7 @@ func _ready() -> void:
 	# Клавиши по пальцам: палитра из Ui, карта — у Hands (там же руки,
 	# которым она принадлежит). Строится раз — в кадре новых панелей нет.
 	kb_tints = Hands.key_tints(false, 10.0, Ui.LINE_DAY, 2.0)
+	kb_tints_hot = Hands.key_tints(false, 10.0, Ui.LINE_DAY, 2.0, true)
 	card_p = _panel_node(card_sb)
 	hud_p = _panel_node(pill_sb)
 	hint_p = _panel_node(pill_sb)
@@ -516,6 +523,7 @@ func _apply_night() -> void:
 		# Днём буквы тёмные на светлой карточке — контур не нужен.
 	# Клавиши по пальцам — той же темой: панели те же, меняется заливка.
 	Hands.repaint_tints(kb_tints, night)
+	Hands.repaint_tints(kb_tints_hot, night, true)
 	if meadow != null:
 		meadow.night = night
 		meadow._apply_sky()
@@ -2905,6 +2913,36 @@ func _opp_shift(s: String) -> String:
 	return "ShiftR" if Kbd.hand_of(s) == "Л" else "Shift"
 
 
+## Клавиши ЗОНЫ подсказки: палец каждой подсвеченной клавиши, а к нему —
+## все клавиши доски того же пальца (у пробела — только своя половина,
+## большой другой руки остаётся обычным). Автор 08.11.2026: «при
+## подсказке всю секцию делать ещё заметнее. Чтобы было понято в какой
+## зоне и каким пальцем надо нажимать». Панели берутся из `kb_tints_hot`
+## (построены раз), сам словарь пересобирается только на СМЕНУ набора:
+## в кадре новых панелей нет.
+func _hot_zone(hi: Array) -> Dictionary:
+	var sig := ""
+	for s in hi:
+		sig += String(s) + "|"
+	if sig == _hot_sig:
+		return _hot_keys
+	_hot_sig = sig
+	_hot_keys = {}
+	if hi.is_empty():
+		return _hot_keys
+	var zones := {}
+	for s in hi:
+		var i := Hands.tint_index(String(s))
+		if i >= 0:
+			zones[i] = true
+	if zones.is_empty():
+		return _hot_keys
+	for key in kb_tints_hot:
+		if zones.has(Hands.tint_index(String(key))):
+			_hot_keys[key] = kb_tints_hot[key]
+	return _hot_keys
+
+
 func _draw_own_kb() -> void:
 	if not _own_shown():
 		return
@@ -2920,7 +2958,7 @@ func _draw_own_kb() -> void:
 		self, area, kb_lang, kb_shift, _kb_enter_shown(), mono,
 		int(30.0 * k), kb_key_sb, kb_on_sb, _ui_ink(), hi, kb_hi_sb, _ui_dim(),
 		kb_morph, kb_morph_from, kb_morph_shift, _press_sb(), kb_press,
-		kb_tints
+		kb_tints, _hot_zone(hi)
 	)
 	# Скелет кистей ПОВЕРХ доски (полупрозрачно — подписи читаются):
 	# каким пальцем какую клавишу жать, и куда пальцы едут по подсказке.

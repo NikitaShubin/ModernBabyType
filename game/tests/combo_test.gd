@@ -3668,6 +3668,7 @@ func _fill_cases() -> void:
 	_cases_list.append(["_case_hands_hold", Callable(self, "_case_hands_hold"), 0])
 	_cases_list.append(["_case_hands_hint_demo", Callable(self, "_case_hands_hint_demo"), 0])
 	_cases_list.append(["_case_hands_shift_hand", Callable(self, "_case_hands_shift_hand"), 0])
+	_cases_list.append(["_case_hint_zone", Callable(self, "_case_hint_zone"), 0])
 # (конец списка кейсов)
 ## Холмы по рецепту автора (18.10.2026 после релиза: «не уменьшать
 ## радиусы, а опустить вниз центры, радиусы вернуть большими»): при
@@ -4085,6 +4086,78 @@ func _case_hands_shift_hand() -> void:
 		"%s: a letter on the other hand put a shift on its hand" % tag)
 	_main._hands_held.clear()
 	_main._hands_curs.clear()
+	_common(tag)
+
+
+## ЗОНА ПОДСКАЗКИ (автор 08.11.2026: «Возможно, ещё стоит при подсказке
+## всю секцию делать ещё заметнее. Чтобы было понято в какой зоне и
+## каким пальцем надо нажимать»). Модель, а не картинка: headless не
+## рисует, `_draw_own_kb` не зовём — меряем ровно то, что он отдаёт в
+## `Kbd.draw`, то есть `_hot_zone(_hint_keys())`.
+func _case_hint_zone() -> void:
+	_fresh(1, 1)
+	var tag := "hint zone"
+	_main.grace_t = 9999.0
+	_main.enemy_cps = B.BASE_CPS
+	_check(_advance_to(0.3), "%s: could not advance (coverage)" % tag)
+	_main.press_ema = 0.6
+	# Без подсказки зоны нет — доска в обычных заливках.
+	_main.idle_t = 0.0
+	_check(_main._hint_keys().is_empty(), "%s: a hint before the delay" % tag)
+	_check(_main._hot_zone([]).is_empty(), "%s: a hot zone without a hint" % tag)
+	# Один палец — ровно его клавиши: «а» — левый указательный (зона 3).
+	var zone: Dictionary = _main._hot_zone(["а"])
+	_check(not zone.is_empty(), "%s: the hinted finger lit nothing" % tag)
+	if zone.is_empty():
+		return
+	var bad := 0
+	for key in zone:
+		if Hands.tint_index(String(key)) != Hands.tint_index("а"):
+			bad += 1
+	_check(bad == 0, "%s: %d keys of another finger went hot" % [tag, bad])
+	for key in ["п", "к", "е", "4", "5", "м", "и"]:
+		_check(zone.has(key),
+			"%s: the whole finger is hot — «%s» is missing" % [tag, key])
+	for key in ["ы", "ф", "в", "о", "6"]:
+		_check(not zone.has(key),
+			"%s: a key of another finger went hot: «%s»" % [tag, key])
+	# Панель приходит ГОРЯЧАЯ, а не обычная: это и есть «заметнее».
+	_check((zone["а"] as StyleBoxFlat).bg_color == (Ui.FINGER_HOT_DAY as Array)[3],
+		"%s: the zone kept the calm fill" % tag)
+	# Две клавиши — две зоны: шифт противоположной руки и сама буква.
+	var two: Dictionary = _main._hot_zone(["ShiftR", "н"])
+	_check(Hands.tint_index("ShiftR") == 9 and Hands.tint_index("н") == 6,
+		"%s: ShiftR/н are not the right pinky and right index" % tag)
+	_check(two.has("ShiftR") and two.has("ж"),
+		"%s: the shift zone of the hint is incomplete" % tag)
+	_check(two.has("н") and two.has("ь"),
+		"%s: the letter zone of the hint is incomplete" % tag)
+	_check(not two.has("Shift"),
+		"%s: the other hand's shift went hot too" % tag)
+	# Пробел: горит ровно половина большого, которым жать.
+	var sp: Dictionary = _main._hot_zone(["пробел:Л"])
+	_check(sp.has("пробел:Л"), "%s: the hinted left thumb is not hot" % tag)
+	_check(not sp.has("пробел:П"),
+		"%s: the left thumb lit the right half too" % tag)
+	# Живой цикл: подсказка по простою зажигает зону, ввод — гасит.
+	_main.idle_t = _main._hint_delay() + 0.5
+	var hi: Array = _main._hint_keys()
+	_check(not hi.is_empty(), "%s: no hint after the delay" % tag)
+	var live: Dictionary = _main._hot_zone(hi)
+	_check(not live.is_empty(), "%s: the hint did not light its zone" % tag)
+	for s in hi:
+		var key := Hands.key_label(String(s))
+		if Hands.tint_index(key) < 0:
+			continue
+		_check(live.has(key),
+			"%s: the hinted «%s» is not in its own zone" % [tag, key])
+	_tick(tag)
+	# Ввод гасит подсказку (и её зону) — простой в ноль, состояние цело.
+	_main._poke_idle()
+	_tick(tag)
+	_check(_main._hint_keys().is_empty(), "%s: the hint survived a keypress" % tag)
+	_check(_main._hot_zone(_main._hint_keys()).is_empty(),
+		"%s: the zone stayed hot after typing" % tag)
 	_common(tag)
 
 

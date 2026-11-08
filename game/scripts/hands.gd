@@ -180,7 +180,7 @@ static func tint_index(s: String) -> int:
 ## пробела — без стороны левая «Ctrl» красилась бы правым мизинцем и
 ## ряд кончался бы не тем цветом, с которого начался.
 static func key_tints(night: bool, radius: float, border: Color,
-		bw: float) -> Dictionary:
+		bw: float, hot := false) -> Dictionary:
 	var out := {}
 	for row in Kbd.all_rows(true):
 		for label in row:
@@ -192,7 +192,7 @@ static func key_tints(night: bool, radius: float, border: Color,
 			var i := tint_index(s)
 			if i < 0:
 				continue
-			out[s] = Ui.finger_sb(i, night, radius, border, bw)
+			out[s] = Ui.finger_sb(i, night, radius, border, bw, hot)
 	# Подпись, стоящая в низу ДВАЖДЫ (Ctrl/Alt, а в левой половине ещё и
 	# Win), сторону по себе не говорит: заливку берём по месту клавиши.
 	var twice := {}
@@ -207,19 +207,21 @@ static func key_tints(night: bool, radius: float, border: Color,
 		if (f[0] as int) < 0:
 			continue
 		# Тот же палец на своей руке: слева — левой, справа — правой.
-		out[s + ":Л"] = Ui.finger_sb(4 - int(f[1]), night, radius, border, bw)
-		out[s + ":П"] = Ui.finger_sb(5 + int(f[1]), night, radius, border, bw)
+		out[s + ":Л"] = Ui.finger_sb(4 - int(f[1]), night, radius, border, bw, hot)
+		out[s + ":П"] = Ui.finger_sb(5 + int(f[1]), night, radius, border, bw, hot)
 	out["пробел:Л"] = Ui.finger_half_sb(
-		tint_index("пробел:Л"), "Л", night, radius, border, bw)
+		tint_index("пробел:Л"), "Л", night, radius, border, bw, hot)
 	out["пробел:П"] = Ui.finger_half_sb(
-		tint_index("пробел:П"), "П", night, radius, border, bw)
+		tint_index("пробел:П"), "П", night, radius, border, bw, hot)
 	return out
 
 
 ## Перекрасить те же панели в другую тему на месте: узлы держат те же
 ## StyleBox, поэтому день↔ночь не рождает ни одной новой панели.
-static func repaint_tints(boxes: Dictionary, night: bool) -> void:
-	var pal: Array = Ui.FINGER_NIGHT if night else Ui.FINGER_DAY
+static func repaint_tints(boxes: Dictionary, night: bool, hot := false) -> void:
+	var pal: Array = (Ui.FINGER_HOT_NIGHT if hot else Ui.FINGER_NIGHT) if night \
+		else (Ui.FINGER_HOT_DAY if hot else Ui.FINGER_DAY)
+	var edges: Array = Ui.FINGER_EDGE_NIGHT if night else Ui.FINGER_EDGE_DAY
 	var border := Ui.LINE_NIGHT if night else Ui.LINE_DAY
 	for s in boxes:
 		var i := tint_index(String(s))
@@ -227,7 +229,7 @@ static func repaint_tints(boxes: Dictionary, night: bool) -> void:
 			continue
 		var sb: StyleBoxFlat = boxes[s]
 		sb.bg_color = pal[i]
-		sb.border_color = border
+		sb.border_color = (edges[i] as Color) if hot else border
 
 
 ## Подпись клавиши ДОСКИ по подписи события: строчная буква (латиница —

@@ -235,6 +235,36 @@ func _a_idle_hint() -> void:
 	_main._relayout()
 
 
+## ЗОНА ПОДСКАЗКИ: горит ВЕСЬ палец, а не одна клавиша (автор 08.11.2026:
+## «Возможно, ещё стоит при подсказке всю секцию делать ещё заметнее.
+## Чтобы было понято в какой зоне и каким пальцем надо нажимать»).
+## Текст свой, чтобы под курсором стояла известная буква: «в» — левый
+## средний (зона 2), «о» — правый указательный (зона 6). Заодно видно,
+## что зона читается и на тёмной теме.
+func _a_zone_hint() -> void:
+	_win(Vector2i(820, 1180))
+	_main._force_touch = true
+	SAVE.set_night_mode(SAVE.NIGHT_DAY)
+	_main.night = false
+	_main._apply_night()
+	_set_text("вывод войск:", "всё было тихо.", 0)
+	_main.press_ema = 0.6
+	_main.idle_t = _main._hint_delay() + 5.0
+	_main._relayout()
+
+
+func _a_zone_hint_night() -> void:
+	_win(Vector2i(820, 1180))
+	_main._force_touch = true
+	SAVE.set_night_mode(SAVE.NIGHT_ON)
+	_main.night = true
+	_main._apply_night()
+	_set_text("открыта дверь:", "он вошёл.", 0)
+	_main.press_ema = 0.6
+	_main.idle_t = _main._hint_delay() + 5.0
+	_main._relayout()
+
+
 ## Легенды клавиш: по центру то, что вводится сейчас, по углам остальные
 ## (требование автора 10.2026 — на цифрах три знака, на ключе слева от
 ## правого шифта четыре). Три кадра: русский без шифта, русский с
@@ -543,4 +573,8 @@ func _plan() -> void:
 		["32-kbd-shift-morph", _a_kb_shift_morph, 2],
 		# 20. Ночь: небо с метеором.
 		["33-night-meteor", _a_night_meteor, 14],
+		# 21. Подсказка красит ВСЮ зону пальца: день (левый средний) и
+		#     ночь (правый указательный).
+		["34-zone-hint", _a_zone_hint, 30],
+		["35-zone-hint-night", _a_zone_hint_night, 30],
 	]
