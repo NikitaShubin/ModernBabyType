@@ -1244,9 +1244,13 @@ func _inside_contour(poly: PackedVector2Array, part: PackedVector2Array,
 ## пальцы»). Держим:
 ##   * у КАЖДОЙ клавиши доски есть цвет (новая клавиша без пальца
 ##     краснит — иначе она молча осталась бы нейтральной);
-##   * круг идёт вдоль доски: в каждом ряду букв и цифр номера не убывают
-##     слева направо, значит цвет — спутник места, а не случайный набор;
-##   * между указательными — прыжок в ТРИ шага: граница их зон видна
+##   * цвет берётся из круга по `Ui.FINGER_SLOT`: в каждом ряду букв и
+##     цифр соседние пальцы стоят на ≥ 3 шага круга (108°), значит цвет —
+##     спутник места, а не случайный набор, и ряд не читается радугой
+##     (автор 08.11.2026: «цвета должны выбираться так, чтобы максимально
+##     контрастировать друг с другом, а у тебя наоборот — наблюдается
+##     плавный градиент»);
+##   * между указательными — такой же прыжок: граница их зон видна
 ##     (автор: «Зеркально значит границ между зонами двух указательных
 ##     пальцев видно не будет, а это крайне важно»);
 ##   * системные клавиши низа получают СТОРОНУ по месту: подпись у них
@@ -1255,7 +1259,7 @@ func _inside_contour(poly: PackedVector2Array, part: PackedVector2Array,
 ##   * у пробела две половины, скруглены только внешние углы;
 ##   * вспышка нажатия, подсказка и зажатый шифт заливку вытесняют.
 ##
-## Headless картинку не рисует — меряем чистые меры: номера круга,
+## Headless картинку не рисует — меряем чистые меры: зоны пальцев,
 ## панели и правило выбора (Kbd.key_box).
 func _tint_checks(bs: Array) -> void:
 	for b in bs:
@@ -1278,9 +1282,13 @@ func _tint_checks(bs: Array) -> void:
 	_check(Hands.tint_index("пробел:Л") == 4 and Hands.tint_index("пробел:П") == 5,
 		"space halves are the two thumbs")
 	_check(Hands.tint_index("нет-такой") == -1, "an unknown key has no tint")
-	# Граница указательных — три шага круга.
-	_check(Hands.tint_index("р") - Hands.tint_index("п") == 3,
-		"the index|index boundary is three hue steps")
+	# Стык указательных идёт тем же ПРЫЖКОМ, что и все соседи по доске:
+	# зоны 3 и 6 стоят в таблице слотов на ≥ 3 шага круга (108°).
+	var slot3 := int(Ui.FINGER_SLOT[3])
+	var slot6 := int(Ui.FINGER_SLOT[6])
+	var gap := mini(absi(slot6 - slot3), 10 - absi(slot6 - slot3))
+	_check(gap >= 3,
+		"the index|index boundary spans %d hue slots, want >= 3" % gap)
 
 	var tints := Hands.key_tints(false, 10.0, Ui.LINE_DAY, 2.0)
 	_check(not tints.has("пробел"), "the space has no whole-key tint")
@@ -1300,8 +1308,14 @@ func _tint_checks(bs: Array) -> void:
 		row.sort_custom(func(a, c):
 			return (a["r"] as Rect2).position.x < (c["r"] as Rect2).position.x)
 		var prev := -1
-		# Порядок круга держим на ЧЕТЫРЁХ верхних рядах (цифры и буквы):
-		# низ — карта клавиш, а не зона пальцев.
+		var prev_slot := -1
+		# ШАГ ЦВЕТА — ПРЫЖОК, А НЕ РАДУГА (автор 08.11.2026: «цвета должны
+		# выбираться так, чтобы максимально контрастировать друг с другом,
+		# а у тебя наоборот — наблюдается плавный градиент»). Держим на
+		# ЧЕТЫРЁХ верхних рядах (цифры и буквы): низ — карта клавиш, а не
+		# зона пальцев. Соседние клавиши РАЗНЫХ пальцев обязаны стоять на
+		# круге не ближе трёх шагов (108°); одна зона на две клавиши
+		# («а»/«п») цвета не меняет — это не градиент, а тот же палец.
 		var top_rows := ri < 4
 		for b in row:
 			var s := String(b["s"])
@@ -1314,13 +1328,17 @@ func _tint_checks(bs: Array) -> void:
 			if not tints.has(tint_key):
 				continue
 			var cur := Hands.tint_index(tint_key)
-			# Низ доски в проверку порядка не входит: глобус (правый
-			# большой) стоит между правыми Alt и Ctrl — это карта, а не
-			# сбой порядка.
-			if top_rows:
-				_check(cur >= prev, "row %d: tint goes back (%d after %d) at '%s'"
-					% [key, cur, prev, s])
+			var cur_slot := -1
+			if cur >= 0:
+				cur_slot = int(Ui.FINGER_SLOT[cur])
+			if top_rows and prev >= 0 and cur != prev:
+				var hop := mini(absi(cur_slot - prev_slot),
+					10 - absi(cur_slot - prev_slot))
+				_check(hop >= 3,
+					"row %d: tints %d and %d are %d hue slots apart at '%s' — gradient, not contrast"
+					% [key, prev, cur, hop, s])
 			prev = cur
+			prev_slot = cur_slot
 
 	# Заливки — из палитры, построены один раз, темой меняются на месте.
 	var day_pal: Array = Ui.FINGER_DAY
