@@ -1341,10 +1341,12 @@ func _tint_checks(bs: Array) -> void:
 			prev_slot = cur_slot
 
 	# Заливки — из палитры, построены один раз, темой меняются на месте.
+	# Номер заливки берём у `paint_index`, а не у пальца: у пробела палец
+	# у каждой половины свой, а цвет ОДИН (автор 08.11.2026).
 	var day_pal: Array = Ui.FINGER_DAY
 	var night_pal: Array = Ui.FINGER_NIGHT
 	for s in tints:
-		var i := Hands.tint_index(String(s))
+		var i := Hands.paint_index(String(s))
 		_check(i >= 0, "tint box '%s' maps to a finger" % s)
 		if i < 0:
 			continue
@@ -1372,8 +1374,22 @@ func _tint_checks(bs: Array) -> void:
 	_check(sp_r.corner_radius_top_left == 0 and sp_r.corner_radius_bottom_left == 0,
 		"space right half has square inner corners")
 	_check(sp_r.border_width_left == 0, "space right half has no inner border")
-	_check(sp_l.bg_color == day_pal[4] and sp_r.bg_color == day_pal[5],
-		"space halves carry the two thumb colours")
+	# ОДИН цвет на всю клавишу — halves красятся цветом самой клавиши, а не
+	# большого (автор 08.11.2026: «пробел пусть будет одного цвета. Его
+	# раскрашивать двумя цветами как-то странно»). Сторона остаётся только
+	# в геометрии: внешние углы скруглены, внутренние — нет.
+	_check(sp_l.bg_color == sp_r.bg_color,
+		"the space halves have different colours")
+	_check(sp_l.bg_color == day_pal[Hands.tint_index("пробел")],
+		"the space does not carry its own single colour")
+	_check(sp_l.border_color == sp_r.border_color,
+		"the space halves have different borders")
+	# Темой перекрашиваются тем же правилом: одна клавиша — один цвет.
+	Hands.repaint_tints(tints, true)
+	_check(sp_l.bg_color == night_pal[Hands.tint_index("пробел")]
+			and sp_l.bg_color == sp_r.bg_color,
+		"night repaint split the space into two colours")
+	Hands.repaint_tints(tints, false)
 
 	# Выбор панели: цвет пальца — обычное состояние, но «ты нажал»,
 	# «жми сюда» и зажатый шифт важнее.
@@ -1418,11 +1434,16 @@ func _tint_checks(bs: Array) -> void:
 			"hot box '%s' is the hot day colour" % s)
 		_check(hs.border_color == edge_day[i],
 			"hot box '%s' carries its finger edge in day" % s)
-		_check((tints[s] as StyleBoxFlat).bg_color == day_pal[i],
+		_check((tints[s] as StyleBoxFlat).bg_color == day_pal[Hands.paint_index(String(s))],
 			"hot panel left the calm box alone at '%s'" % s)
+	# Горячие половины пробела — цвета СВОИХ больших: подсказка красит
+	# именно ту половину, которой жать (обычная заливка у пробела одна).
 	_check((hot["пробел:Л"] as StyleBoxFlat).bg_color == hot_day[4]
 			and (hot["пробел:П"] as StyleBoxFlat).bg_color == hot_day[5],
 		"hot space halves carry the two thumbs")
+	_check((hot["пробел:Л"] as StyleBoxFlat).bg_color != (tints["пробел:Л"] as StyleBoxFlat).bg_color
+			and (hot["пробел:П"] as StyleBoxFlat).bg_color != (tints["пробел:П"] as StyleBoxFlat).bg_color,
+		"a hot space half did not differ from the calm one")
 	_check((hot["пробел:Л"] as StyleBoxFlat).border_width_right == 0
 			and (hot["пробел:П"] as StyleBoxFlat).border_width_left == 0,
 		"hot space halves keep their inner edges bare")

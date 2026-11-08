@@ -77,7 +77,9 @@ static func finger_sb(i: int, night: bool, radius: float, border: Color,
 
 ## Половина пробела: скруглены только ВНЕШНИЕ углы, внутренняя кромка
 ## без рамки. Две половинки стыкуются в одну клавишу — шов не проступает
-## второй вертикальной чертой, а цвет каждого большого виден.
+## второй вертикальной чертой. Цвет у обеих половин ОДИН (см.
+## Hands.paint_index): обычная заливка пробела общая, своя — только у
+## ГОРЯЧЕЙ половины, которую подсветила подсказка.
 static func finger_half_sb(i: int, side: String, night: bool, radius: float,
 		border: Color, bw: float, hot := false) -> StyleBoxFlat:
 	var sb := finger_sb(i, night, 0.0, border, bw, hot)

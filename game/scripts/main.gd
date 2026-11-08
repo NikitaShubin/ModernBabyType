@@ -2943,6 +2943,26 @@ func _hot_zone(hi: Array) -> Dictionary:
 	return _hot_keys
 
 
+## Мигание зоны подсказки — тем же тактом, что у подсказанной клавиши
+## (автор 08.11.2026: «подсветка всех кнопок стоит делать мигающей, как
+## конкретную нажимаемую кнопку»). Пульсирует ПРОЗРАЧНОСТЬ всей секции —
+## заливки И рамки: цвет пальца не меняется, а секция то зажигается, то
+## уходит в доску, как сама подсказка (у неё alpha 0.45..0.80). Ниже
+## 0.40 не опускаем: подпись клавиши должна читаться и в «погасшей» фазе.
+func _pulse_zone(zone: Dictionary, pulse: float) -> void:
+	if zone.is_empty():
+		return
+	var a := 0.40 + 0.60 * pulse
+	for key in zone:
+		var sb: StyleBoxFlat = zone[key]
+		var f: Color = sb.bg_color
+		f.a = a
+		sb.bg_color = f
+		var e: Color = sb.border_color
+		e.a = a
+		sb.border_color = e
+
+
 func _draw_own_kb() -> void:
 	if not _own_shown():
 		return
@@ -2953,12 +2973,14 @@ func _draw_own_kb() -> void:
 		var c: Color = kb_hi_sb.bg_color
 		c.a = 0.45 + 0.35 * pulse
 		kb_hi_sb.bg_color = c
+	var zone := _hot_zone(hi)
+	_pulse_zone(zone, pulse)
 	var area := _own_rect()
 	Kbd.draw(
 		self, area, kb_lang, kb_shift, _kb_enter_shown(), mono,
 		int(30.0 * k), kb_key_sb, kb_on_sb, _ui_ink(), hi, kb_hi_sb, _ui_dim(),
 		kb_morph, kb_morph_from, kb_morph_shift, _press_sb(), kb_press,
-		kb_tints, _hot_zone(hi)
+		kb_tints, zone
 	)
 	# Скелет кистей ПОВЕРХ доски (полупрозрачно — подписи читаются):
 	# каким пальцем какую клавишу жать, и куда пальцы едут по подсказке.

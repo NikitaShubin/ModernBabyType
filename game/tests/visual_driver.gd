@@ -251,6 +251,16 @@ func _a_zone_hint() -> void:
 	_main.press_ema = 0.6
 	_main.idle_t = _main._hint_delay() + 5.0
 	_main._relayout()
+	# Фаза мигания зоны — от `time` (sin(time·5)): ставим её на пик, чтобы
+	# кадр показывал «зажглось». Сдвиг на пару кадров около пика её не
+	# сбивает (производная там нулевая).
+	_main.time = PI / 10.0
+
+
+func _a_zone_hint_dim() -> void:
+	# Та же сцена, другая фаза мигания: секция погасла.
+	_a_zone_hint()
+	_main.time = 3.0 * PI / 10.0
 
 
 func _a_zone_hint_night() -> void:
@@ -263,6 +273,7 @@ func _a_zone_hint_night() -> void:
 	_main.press_ema = 0.6
 	_main.idle_t = _main._hint_delay() + 5.0
 	_main._relayout()
+	_main.time = PI / 10.0
 
 
 ## Легенды клавиш: по центру то, что вводится сейчас, по углам остальные
@@ -573,8 +584,11 @@ func _plan() -> void:
 		["32-kbd-shift-morph", _a_kb_shift_morph, 2],
 		# 20. Ночь: небо с метеором.
 		["33-night-meteor", _a_night_meteor, 14],
-		# 21. Подсказка красит ВСЮ зону пальца: день (левый средний) и
-		#     ночь (правый указательный).
-		["34-zone-hint", _a_zone_hint, 30],
-		["35-zone-hint-night", _a_zone_hint_night, 30],
+		# 21. Подсказка красит ВСЮ зону пальца и мигает: день (левый
+		#     средний) в двух фазах — зажглось и погасло, — и ночь
+		#     (правый указательный). Ожидание короткое: фазу задаёт
+		#     `time`, и за 3 кадра она не уезжает (пик и впадина плоские).
+		["34-zone-hint", _a_zone_hint, 3],
+		["35-zone-hint-dim", _a_zone_hint_dim, 3],
+		["36-zone-hint-night", _a_zone_hint_night, 3],
 	]

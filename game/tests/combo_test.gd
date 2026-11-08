@@ -4139,6 +4139,26 @@ func _case_hint_zone() -> void:
 	_check(sp.has("пробел:Л"), "%s: the hinted left thumb is not hot" % tag)
 	_check(not sp.has("пробел:П"),
 		"%s: the left thumb lit the right half too" % tag)
+	# Мигание зоны — тем же тактом, что у подсказанной клавиши (автор
+	# 08.11.2026: «подсветка всех кнопок стоит делать мигающей, как
+	# конкретную нажимаемую кнопку»). Фаза двигает прозрачность ВСЕЙ
+	# секции — заливки и рамки: цвет пальца не меняется.
+	var blink: Dictionary = _main._hot_zone(["а"])
+	var bsb: StyleBoxFlat = blink["а"]
+	_main._pulse_zone(blink, 0.0)
+	var a_dim: float = bsb.bg_color.a
+	var e_dim: float = bsb.border_color.a
+	_main._pulse_zone(blink, 1.0)
+	var a_lit: float = bsb.bg_color.a
+	var e_lit: float = bsb.border_color.a
+	_check(a_dim < 0.7 and a_lit > 0.95,
+		"%s: the zone does not blink (%.2f..%.2f)" % [tag, a_dim, a_lit])
+	_check(e_dim < 0.7 and e_lit > 0.95,
+		"%s: the zone edge does not blink with it" % tag)
+	_check(bsb.border_color == (Ui.FINGER_EDGE_DAY as Array)[3],
+		"%s: the blinking zone lost its finger edge" % tag)
+	_check(bsb.bg_color == (Ui.FINGER_HOT_DAY as Array)[3],
+		"%s: the lit zone is not its hot colour" % tag)
 	# Живой цикл: подсказка по простою зажигает зону, ввод — гасит.
 	_main.idle_t = _main._hint_delay() + 0.5
 	var hi: Array = _main._hint_keys()

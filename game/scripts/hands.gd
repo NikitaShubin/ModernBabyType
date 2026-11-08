@@ -173,8 +173,10 @@ static func tint_index(s: String) -> int:
 ## Строится раз при создании экрана (в кадре новых панелей нет), меняется
 ## темой на месте (`repaint_tints`).
 ##
-## Пробел здесь ДВУМЯ половинами («пробел:Л»/«пробел:П»): на нём два
-## больших пальца, и каждый своего цвета — иначе один из них безымянный.
+## Пробел здесь ДВУМЯ половинами («пробел:Л»/«пробел:П») — но ОДНИМ
+## цветом (см. `paint_index`). Половины нужны геометрией: у них скруглены
+## только внешние углы, и подсказка красит нужную половину. Пока игра не
+## подсказывает, клавиша читается одной — как и положено.
 ## Системные клавиши низа (Ctrl/Win/Alt) тоже получают СТОРОНУ: подпись
 ## у них одна на две физические клавиши, а стоят они по обе стороны
 ## пробела — без стороны левая «Ctrl» красилась бы правым мизинцем и
@@ -210,10 +212,22 @@ static func key_tints(night: bool, radius: float, border: Color,
 		out[s + ":Л"] = Ui.finger_sb(4 - int(f[1]), night, radius, border, bw, hot)
 		out[s + ":П"] = Ui.finger_sb(5 + int(f[1]), night, radius, border, bw, hot)
 	out["пробел:Л"] = Ui.finger_half_sb(
-		tint_index("пробел:Л"), "Л", night, radius, border, bw, hot)
+		paint_index("пробел:Л", hot), "Л", night, radius, border, bw, hot)
 	out["пробел:П"] = Ui.finger_half_sb(
-		tint_index("пробел:П"), "П", night, radius, border, bw, hot)
+		paint_index("пробел:П", hot), "П", night, radius, border, bw, hot)
 	return out
+
+
+## Индекс ЗАЛИВКИ клавиши (не пальца). У пробела обычная заливка ОДНА на
+## всю клавишу (автор 08.11.2026: «пробел пусть будет одного цвета. Его
+## раскрашивать двумя цветами как-то странно»): обе половины красятся
+## цветом самой клавиши — левого большого (в карте «пробел» → LEFT/THUMB),
+## хотя жмут её любым. ГОРЯЧАЯ заливка (`hot`) — своя у каждой половины:
+## подсказка красит ИМЕННО ту, которой жать, и её цвет — цвет её большого.
+static func paint_index(s: String, hot := false) -> int:
+	if not hot and s.begins_with("пробел"):
+		return tint_index("пробел")
+	return tint_index(s)
 
 
 ## Перекрасить те же панели в другую тему на месте: узлы держат те же
@@ -224,7 +238,7 @@ static func repaint_tints(boxes: Dictionary, night: bool, hot := false) -> void:
 	var edges: Array = Ui.FINGER_EDGE_NIGHT if night else Ui.FINGER_EDGE_DAY
 	var border := Ui.LINE_NIGHT if night else Ui.LINE_DAY
 	for s in boxes:
-		var i := tint_index(String(s))
+		var i := paint_index(String(s), hot)
 		if i < 0:
 			continue
 		var sb: StyleBoxFlat = boxes[s]
