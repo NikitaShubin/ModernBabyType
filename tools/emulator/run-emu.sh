@@ -5,8 +5,9 @@
 #   * окно эмулятора — на :0 ТОЛЬКО по просьбе автора; для себя стенд
 #     поднимается с --display :99 (виртуальный экран) или --headless;
 #   * SDK и образы — tools/emulator/sdk (в .gitignore), AVD —
-#     tools/emulator/avd; скрипт поднимает их САМ (sdkmanager/avdmanager),
-#     с чистого клона стенд ставится одной командой;
+#     tools/emulator/avd; скрипт поднимает их САМ (sdkmanager качает
+#     образы, AVD собирается из профиля), с чистого клона стенд ставится
+#     одной командой;
 #   * KVM пробрасывается устройством + --group-add: пользователя в
 #     группе kvm нет, наружу ничего не ставится;
 #   * свежий game/dist/ModernBabyType.apk ставится сам;
@@ -97,29 +98,33 @@ ensure_sdk() {
 		' || die "sdkmanager не смог поставить SDK"
 }
 
-# AVD: avdmanager создаёт каталог, затем поверх кладётся ПРОФИЛЬ стенда
-# (tools/emulator/avd/<имя>.config.ini — геометрия телефона 1080x2280,
-# dpi 420, swiftshader). Без профиля гость поднимается другим экраном, и
-# кадры/тапы не совпадают с тем, что видел автор.
+# AVD: собирается ПРЯМО ИЗ ПРОФИЛЯ (tools/emulator/avd/<имя>.config.ini —
+# геометрия телефона 1080x2280, dpi 420, swiftshader), без avdmanager:
+# он ищет системные образы в том SDK, из которого запущен (образ движка),
+# и наш tools/emulator/sdk не видит. Эмулятору хватает config.ini и
+# <имя>.ini, остальное (userdata, hardware-qemu.ini) он создаёт сам при
+# первом запуске. Без профиля гость поднимается другим экраном, и кадры
+# с тапами не совпадают с тем, что видел автор.
 ensure_avd() {
 	[ -d "$AVD_HOME/$AVD.avd" ] && return 0
-	echo "run-emu: создаю AVD $AVD"
-	mkdir -p "$AVD_HOME"
-	docker run --rm --user "$(id -u):$(id -g)" -v "$ROOT:/work" -w /work \
-		-e HOME=/tmp/mbt-home \
-		-e ANDROID_SDK_ROOT=/work/tools/emulator/sdk \
-		-e ANDROID_HOME=/work/tools/emulator/sdk \
-		-e ANDROID_AVD_HOME=/work/tools/emulator/avd \
-		--entrypoint bash "$IMAGE" -lc "
-			set -e
-			echo no | /usr/lib/android-sdk/cmdline-tools/latest/bin/avdmanager \
-				create avd -n $AVD -k 'system-images;android-34;default;x86_64' \
-				--device pixel --force
-		" || die "avdmanager не смог создать AVD"
-	if [ -f "$AVD_HOME/$AVD.config.ini" ]; then
-		cp "$AVD_HOME/$AVD.config.ini" "$AVD_HOME/$AVD.avd/config.ini"
-	fi
+	[ -f "$AVD_HOME/$AVD.config.ini" ] ||
+		die "нет профиля $AVD_HOME/$AVD.config.ini"
+	echo "run-emu: создаю AVD $AVD из профиля"
+	mkdir -p "$AVD_HOME/$AVD.avd"
+	cp "$AVD_HOME/$AVD.config.ini" "$AVD_HOME/$AVD.avd/config.ini"
+	# Путь в .ini — КОНТЕЙНЕРНЫЙ: эмулятор всегда живёт в контейнере, где
+	# репозиторий смонтирован в /work.
+	cat >"$AVD_HOME/$AVD.ini" <<EOF
+avd.ini.encoding=UTF-8
+path=/work/tools/emulator/avd/$AVD.avd
+target=android-34
+EOF
 }
+
+# Без образа ни sdkmanager, ни эмулятор не запустятся: собирается он тем же
+# скриптом, что и вся сборка (Dockerfile — источник правды).
+docker image inspect "$IMAGE" >/dev/null 2>&1 ||
+	die "нет образа $IMAGE — собери: tools/docker/build-game.sh --test-only"
 
 ensure_sdk
 ensure_avd
