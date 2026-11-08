@@ -25,14 +25,25 @@
 # (сварка smin пробована и отвергнута: она выносит запястье наружу на
 # 3.6 мм — «бугор» вместо полки).
 #
-# Запуск (headless; шардами по 8 — ~7 мин, целиком — ~1 час):
+# Запуск (headless; шардами по 8 — ~7 мин, целиком — ~1 час). Каталог
+# частей по умолчанию /tmp/opencode — он ОБЯЗАН быть смонтирован: шарды
+# пишут туда, а контейнер запускается с --rm — без монтирования части
+# исчезнут вместе с ним, и merge_shape.py на хосте не найдёт ни одного
+# файла. Второй путь — держать части в репозитории: MBT_PARTS (например,
+# /work/tools/hand3d/out/parts), /work смонтирован всегда, и в контейнер
+# ничего лишнего пробрасывать не нужно:
+#   mkdir -p /tmp/opencode
 #   for i in 0 1 2 3 4 5 6 7; do
 #     docker run --rm --user $(id -u):$(id -g) -v $PWD:/work \
+#       -v /tmp/opencode:/tmp/opencode \
 #       -e HOME=/tmp/mbt-home -e MBT_SHARD=$i -e MBT_OF=8 \
 #       -w /work/tools/hand3d mbt-godot --headless --path /work/tools/hand3d \
 #       --script res://bake_outline.gd &
 #   done; wait
 #   .venv/bin/python tools/hand3d/merge_shape.py
+# Замена /tmp на репозиторий — те же команды плюс
+#   -e MBT_PARTS=/work/tools/hand3d/out/parts (и себе MBT_PARTS=$PWD/... ,
+#   чтобы merge_shape.py читал тот же каталог).
 #   MBT_N=1 — только поза покоя (быстрая проверка алгоритма).
 #
 # Файл данных — сгенерированный: правки руками затрёт следующее запекание.
@@ -42,7 +53,20 @@ const HandModel := preload("res://hand_model.gd")
 const ArmModel := preload("res://arm_model.gd")
 
 const POSES := "/work/game/scripts/hands_poses.gd"
-const PART := "/tmp/opencode/shape-part-%d.txt"
+## Каталог частей. По умолчанию /tmp/opencode — его монтирует
+## build-game.sh; свой каталог задаётся MBT_PARTS (например,
+## /work/tools/hand3d/out — /work смонтирован всегда, и части переживают
+## контейнер). Каталог должен быть ВИДЕН на хосте, иначе merge_shape.py
+## нечего склеивать.
+const PART_DIR := "/tmp/opencode"
+const PART := "shape-part-%d.txt"
+
+
+static func part_path(shard: int) -> String:
+	var d := OS.get_environment("MBT_PARTS")
+	if d == "":
+		d = PART_DIR
+	return d.path_join(PART % shard)
 
 ## Лучей на контур. 256 — шаг 1.4°: на кончике пальца (r≈160) хорда
 ## 3.9 мм, на запястье 0.7 мм. При 128 кончик пальца выходил
@@ -284,6 +308,12 @@ func _initialize() -> void:
 	if poses.is_empty():
 		quit(1)
 		return
+	var parts_dir := part_path(0).get_base_dir()
+	if DirAccess.make_dir_recursive_absolute(parts_dir) != OK:
+		push_error("bake_outline: не создаётся каталог частей %s" % parts_dir)
+		quit(1)
+		return
+	print("bake_outline: части — %s" % parts_dir)
 	var only := OS.get_environment("MBT_N") == "1"
 	var shard := int(OS.get_environment("MBT_SHARD"))
 	var of := maxi(1, int(OS.get_environment("MBT_OF")))
@@ -327,7 +357,7 @@ func _initialize() -> void:
 
 
 func _write(side: String, label: String, radii: Array, shard: int) -> void:
-	var path := PART % shard
+	var path := part_path(shard)
 	var f := FileAccess.open(path, FileAccess.READ_WRITE)
 	if f == null:
 		f = FileAccess.open(path, FileAccess.WRITE)

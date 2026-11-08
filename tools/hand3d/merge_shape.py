@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Склейка шардов bake_outline.gd в game/scripts/hands_shape.gd.
 
-Шарды пишут строки "side<TAB>label<TAB>r,r,r,..." в /tmp/opencode/shape-part-<i>.txt.
+Шарды пишут строки "side<TAB>label<TAB>r,r,r,..." в /tmp/opencode/shape-part-<i>.txt
+(каталог задаётся MBT_PARTS — им же пользуется bake_outline.gd).
 Скрипт проверяет, что все позы на месте и у всех ровно N радиусов, и пишет
 готовый GDScript. Запуск: .venv/bin/python tools/hand3d/merge_shape.py
 """
@@ -10,7 +11,8 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-PARTS = "/tmp/opencode/shape-part-*.txt"
+PARTS = os.path.join(os.environ.get("MBT_PARTS") or "/tmp/opencode",
+                     "shape-part-*.txt")
 OUT = os.path.join(ROOT, "game", "scripts", "hands_shape.gd")
 POSES = os.path.join(ROOT, "game", "scripts", "hands_poses.gd")
 
