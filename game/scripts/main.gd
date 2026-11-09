@@ -223,17 +223,29 @@ var kb_press_sb: StyleBoxFlat
 var kb_press_ok_sb: StyleBoxFlat
 var kb_press_err_sb: StyleBoxFlat
 var kb_hi_sb: StyleBoxFlat
-## Заливки клавиш по пальцам (Hands.key_tints): строятся раз, темой
-## перекрашиваются на месте. Цвет пальца — подпись «какой рукой жать».
-var kb_tints: Dictionary = {}
-## Те же клавиши, но в цвете ЗОНЫ ПОДСКАЗКИ (Hands.key_tints hot):
-## заметнее обычных, с рамкой своего пальца. В кадре берётся ПОДМНОЖЕСТВО
-## зоны подсказки (`_hot_zone`), панели те же — новых нет.
+## Панели ЗОНЫ ПОДСКАЗКИ (Hands.key_tints): заметнее бумаги, с рамкой
+## своего пальца. В кадре берётся ПОДМНОЖЕСТВО зоны подсказки
+## (`_hot_zone`), панели те же — новых нет.
 var kb_tints_hot: Dictionary = {}
-## Цвета ДОРОЖЕК ЗОН под клавишами (Hands.key_lanes): подложка своего
-## пальца под каждой клавишей, смыкается в сплошную секцию. Строится
-## раз, темой перекрашивается на месте (см. Ui.FINGER_LANE_*).
+## Дорожки зон: ТРИ словаря одной формы (ключи — клавиши). `kb_lanes_idle`
+## — нейтральный покой, `kb_lanes_on` — цвет пальца, `kb_lanes` — ЖИВАЯ
+## смесь, её и рисует доска. Цвет приходит только с подсказкой: в покое
+## доска спокойна (решение 09.11.2026). Переход плавный, глоу на клавишу
+## (`_lane_glow`), в кадре новых объектов нет.
 var kb_lanes: Dictionary = {}
+var kb_lanes_idle: Dictionary = {}
+var kb_lanes_on: Dictionary = {}
+## Глоу дорожки 0..1 по клавишам: 0 — покой, 1 — полный цвет пальца.
+var _lane_glow: Dictionary = {}
+const LANE_GLOW_IN := 9.0
+const LANE_GLOW_OUT := 6.0
+## Легенда «цвет полоски — палец»: показывается на ПЕРВОЙ подсказке и
+## живёт несколько секунд, чтобы её успели прочесть. Флаг общий на
+## устройство (это подсказка интерфейса, а не прогресс игрока) и лежит
+## в [display] — гость тоже не увидит её каждый запуск.
+var lane_tip_t := 0.0
+var lane_tip_seen := false
+const LANE_TIP_T := 3.0
 ## Вторая панель подсказки: у комбинации (шифт + буква) клавиши горят
 ## по очереди, каждой нужна СВОЯ пульсирующая панель. Обе создаются раз.
 var kb_hi_sb2: StyleBoxFlat
@@ -435,11 +447,15 @@ func _ready() -> void:
 	kb_press_err_sb = Ui.panel_sb(Ui.DANGER_DAY, 10.0, Ui.DANGER_EDGE_DAY, 2.5, false)
 	kb_hi_sb = Ui.panel_sb(Ui.HINT_KEY_DAY, 10.0, Ui.LINE_DAY, 2.0, false)
 	kb_hi_sb2 = Ui.panel_sb(Ui.HINT_KEY_DAY, 10.0, Ui.LINE_DAY, 2.0, false)
-	# Клавиши по пальцам: палитра из Ui, карта — у Hands (там же руки,
-	# которым она принадлежит). Строится раз — в кадре новых панелей нет.
-	kb_tints = Hands.key_tints(false, 10.0, Ui.LINE_DAY, 2.0)
-	kb_tints_hot = Hands.key_tints(false, 10.0, Ui.LINE_DAY, 2.0, true)
-	kb_lanes = Hands.key_lanes(false)
+	# Дорожки зон: палитра из Ui, карта — у Hands (там же руки, которым она
+	# принадлежит). Три словаря одной формы, живой начинается с покоя.
+	kb_tints_hot = Hands.key_tints(false, 10.0, 2.0)
+	kb_lanes_idle = Hands.key_lanes_idle(false)
+	kb_lanes_on = Hands.key_lanes(false)
+	kb_lanes = kb_lanes_idle.duplicate()
+	_lane_glow.clear()
+	for lk in kb_lanes:
+		_lane_glow[lk] = 0.0
 	card_p = _panel_node(card_sb)
 	hud_p = _panel_node(pill_sb)
 	hint_p = _panel_node(pill_sb)
@@ -457,6 +473,7 @@ func _ready() -> void:
 	# Аргументы запуска решают режим на старте, до чтения профиля.
 	_cmdline_mode()
 	Ui.force_touch = _force_touch
+	lane_tip_seen = S.get_lane_tip_seen()
 	if not skip_menu:
 		S.drop_legacy_guest()
 
@@ -539,10 +556,11 @@ func _apply_night() -> void:
 		kb_press_err_sb.border_color = Ui.DANGER_EDGE_DAY
 		kb_on_sb.border_color = Ui.ACCENT_EDGE_DAY
 		# Днём буквы тёмные на светлой карточке — контур не нужен.
-	# Клавиши по пальцам — той же темой: панели те же, меняется заливка.
-	Hands.repaint_tints(kb_tints, night)
-	Hands.repaint_tints(kb_tints_hot, night, true)
-	Hands.repaint_lanes(kb_lanes, night)
+	# Дорожки зон — той же темой: палитры те же, живая гаснет в новый покой.
+	Hands.repaint_tints(kb_tints_hot, night)
+	Hands.repaint_lanes(kb_lanes_idle, night, true)
+	Hands.repaint_lanes(kb_lanes_on, night, false)
+	_lane_reset()
 	if meadow != null:
 		meadow.night = night
 		meadow._apply_sky()
@@ -2123,9 +2141,35 @@ func _process(dt: float) -> void:
 		# отпускание может и не прийти, а палец не должен вечно
 		# стоять на клавише невидимой доски.
 		_hands_held.clear()
+	# Подсказка кадра — ОДНА на кисти, дорожки и легенду: три вызова
+	# `_hint_keys` на кадр собирали три одинаковых массива.
+	var hi_now := _hint_keys()
 	if _own_shown() and _hands_tick(
-			dt, _own_rect(), _kb_enter_shown(), _hint_keys()):
+			dt, _own_rect(), _kb_enter_shown(), hi_now):
 		queue_redraw()
+	# Дорожки зон: цвет приходит только с подсказкой и плавно уходит
+	# обратно в покой. Пока что-то движется — держим свой кадр.
+	if _own_shown():
+		if _lane_tick(dt, hi_now):
+			queue_redraw()
+	elif _lane_any():
+		# Доска ушла (меню, финал): секции прошлой партии не возвращаем.
+		_lane_reset()
+		queue_redraw()
+	# Легенда «цвет полоски — палец»: один раз за устройство и с ПЕРВОГО
+	# кадра уровня — слово раньше дела. Полоса у неё общая с подсказкой
+	# клавиш, поэтому на время подсказки легенда уступает (см.
+	# _draw_lane_tip): человек читает легенду в тишине, а первый же
+	# показ клавиши тут же показывает её в действии. Ждать подсказку
+	# часами нельзя: часы шли ТОЛЬКО пока подсказка на экране, а сама
+	# легенда рисовалась только БЕЗ неё — то есть не показывалась вовсе.
+	if not lane_tip_seen and not menu_open and state == "playing" \
+			and _own_shown():
+		lane_tip_t += dt
+		queue_redraw()
+		if lane_tip_t >= LANE_TIP_T:
+			lane_tip_seen = true
+			S.set_lane_tip_seen()
 	# Высота раскладки — всегда своя клавиатура: система больше не
 	# участвует, замеров и подстройки нет, раскладка не прыгает сама.
 	var oh := _own_h()
@@ -2564,6 +2608,40 @@ func _hint_top() -> float:
 	return y_top
 
 
+## Легенда «цвет полоски — палец»: объясняет способ деления на секции
+## один раз, на первой подсказке. Текст живёт в зарезервированной полосе
+## подсказки (своих слов у подсказки больше нет, так что полоса свободна),
+## поэтому ничего не сдвигает и не наезжает. Кегль ужимается под ширину
+## экрана: на телефоне строка обязана влезть целиком.
+func _draw_lane_tip() -> void:
+	if lane_tip_seen or lane_tip_t <= 0.0:
+		return
+	# Словесная подсказка (CapsLock) старше: две пилюли в одной полосе
+	# читались бы как одна фраза.
+	if not _hint_parts().is_empty():
+		return
+	var t := "Цвет полоски — палец"
+	var fs := int(20.0 * k)
+	while fs > 10:
+		var w0 := mono.get_string_size(
+			t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x
+		if w0 <= view_w - 64.0 * k:
+			break
+		fs -= 2
+	var tw := mono.get_string_size(
+		t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs).x
+	var pad := 18.0 * k
+	var cap_h := float(fs) + 18.0 * k
+	var y := _hint_top()
+	var x := view_w * 0.5 - tw * 0.5 - pad
+	draw_style_box(pill_sb, Rect2(x, y, tw + pad * 2.0, cap_h))
+	draw_string(
+		mono,
+		Vector2(view_w * 0.5 - tw * 0.5, y + cap_h * 0.5 + float(fs) * 0.36),
+		t, HORIZONTAL_ALIGNMENT_LEFT, -1.0, fs, _ui_ink()
+	)
+
+
 func _draw_hint() -> void:
 	var parts := _hint_parts()
 	if parts.is_empty():
@@ -2782,6 +2860,7 @@ func _draw() -> void:
 	_draw_progress()
 	_draw_cursor_marker()
 	_draw_hint()
+	_draw_lane_tip()
 	_draw_own_kb()
 	_draw_star_tip()
 	_draw_enemy()
@@ -3005,6 +3084,73 @@ func _pulse_zone(zone: Dictionary, pulse: float) -> void:
 		sb.border_color = e
 
 
+## Дорожки зон в покое ГАСНУТ, а позванные подсказкой РАЗГОРАЮТСЯ.
+## Каждый кадр `_lane_tick` ведёт глоу клавиши к цели (0 — покой, 1 — её
+## палец в зоне подсказки) и подменяет живой цвет дорожки смесью двух
+## палитр. Мёртвая клавиша (Tab/Caps/Ctrl/Win/Alt, стрелки) не зажигается
+## никогда: её палец ничему не учит, а цветной обрубок на краю доски
+## читался бы как сломанная секция. Пробел — ОДНА дорожка: подсказка
+## половины («пробел:Л/П») зажигает её целиком.
+## Возвращает «что-то сдвинулось» — тогда нужен новый кадр.
+func _lane_tick(dt: float, hi: Array) -> bool:
+	if kb_lanes.is_empty():
+		return false
+	var zones := _hot_zones(hi)
+	var moved := false
+	for lk0 in kb_lanes:
+		var lk := String(lk0)
+		var want := 0.0
+		if not Hands.dead_key(lk):
+			if lk == "пробел":
+				if _zone_has(zones, "пробел:Л") or _zone_has(zones, "пробел:П"):
+					want = 1.0
+			elif _zone_has(zones, lk):
+				want = 1.0
+		var g := float(_lane_glow.get(lk, 0.0))
+		if is_equal_approx(g, want):
+			continue
+		var speed := LANE_GLOW_IN if want > g else LANE_GLOW_OUT
+		g = move_toward(g, want, speed * dt)
+		_lane_glow[lk] = g
+		# Концы — ТОЧНЫЕ цвета палитры: lerp с весом 1.0 оставляет в
+		# последних битах мусор, и «доржка вернулась в покой» переставала
+		# быть равенством (ловил combo_test). Внутри перехода — смесь.
+		if g >= 1.0:
+			kb_lanes[lk] = kb_lanes_on[lk]
+		elif g <= 0.0:
+			kb_lanes[lk] = kb_lanes_idle[lk]
+		else:
+			kb_lanes[lk] = (kb_lanes_idle[lk] as Color).lerp(
+				kb_lanes_on[lk] as Color, g)
+		moved = true
+	return moved
+
+
+## Есть ли ключ в какой-нибудь зоне подсказки (зон у комбинации две).
+func _zone_has(zones: Array, key: String) -> bool:
+	for z in zones:
+		if (z as Dictionary).has(key):
+			return true
+	return false
+
+
+## Вернуть дорожки в покой текущей темы (смена темы, уход доски).
+func _lane_reset() -> void:
+	for lk0 in kb_lanes:
+		var lk := String(lk0)
+		_lane_glow[lk] = 0.0
+		kb_lanes[lk] = kb_lanes_idle[lk]
+
+
+## Горит ли хоть одна дорожка (доска ушла — гасим, чтобы не вернуться
+## с цветными секциями прошлой партии).
+func _lane_any() -> bool:
+	for lk0 in kb_lanes:
+		if float(_lane_glow.get(String(lk0), 0.0)) > 0.0:
+			return true
+	return false
+
+
 ## Панели подсказанных клавиш: у каждой своя фаза (шифт — первым, буква —
 ## следом, автор 09.11.2026: последовательность, а не одновременное
 ## нажатие). Заливка НЕПРОЗРАЧНАЯ: под клавишей лежит насыщенная дорожка
@@ -3054,7 +3200,7 @@ func _draw_own_kb() -> void:
 		self, area, kb_lang, kb_shift, _kb_enter_shown(), mono,
 		int(30.0 * k), kb_key_sb, kb_on_sb, _ui_ink(), hi, kb_hi_sb, _ui_dim(),
 		kb_morph, kb_morph_from, kb_morph_shift, _press_sb(), kb_press,
-		kb_tints, _hot_union, kb_lanes, hi_boxes
+		_hot_union, kb_lanes, hi_boxes
 	)
 	# Скелет кистей ПОВЕРХ доски (полупрозрачно — подписи читаются):
 	# каким пальцем какую клавишу жать, и куда пальцы едут по подсказке.

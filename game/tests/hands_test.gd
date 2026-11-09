@@ -1278,28 +1278,32 @@ func _inside_contour(poly: PackedVector2Array, part: PackedVector2Array,
 
 ## ------------------------------------------------- клавиши по пальцам
 
-## Цвет клавиши — по пальцу, который её жмёт (автор 08.11.2026: «фоны
-## клавиш едва заметно раскрашивались по цветам, отличающим разные
-## пальцы»). Держим:
-##   * у КАЖДОЙ клавиши доски есть цвет (новая клавиша без пальца
-##     краснит — иначе она молча осталась бы нейтральной);
-##   * цвет берётся из круга по `Ui.FINGER_SLOT`: в каждом ряду букв и
-##     цифр соседние пальцы стоят на ≥ 3 шага круга (108°), значит цвет —
-##     спутник места, а не случайный набор, и ряд не читается радугой
-##     (автор 08.11.2026: «цвета должны выбираться так, чтобы максимально
+## ПАЛЕЦ КЛАВИШИ ВИДЕН И БЕЗ КРАСКИ, а красится только когда игра ЗОВЁТ.
+## Держим (решение 09.11.2026: «в покое доска спокойна, цвет — когда
+## подсказка зовёт»):
+##   * у КАЖДОЙ клавиши доски есть дорожка-подложка (новая клавиша без
+##     пальца краснит — иначе она молча осталась бы нейтральной);
+##   * в покое дорожки нейтральны и ЧЕРЕДУЮТСЯ светлотой через палец —
+##     граница секции видна без краски;
+##   * цвет пальца берётся из круга по `Ui.FINGER_SLOT`: в каждом ряду
+##     букв и цифр соседние пальцы стоят на ≥ 3 шага круга (108°), значит
+##     цвет — спутник места, а не случайный набор, и ряд не читается
+##     радугой (автор 08.11.2026: «цвета должны... максимально
 ##     контрастировать друг с другом, а у тебя наоборот — наблюдается
 ##     плавный градиент»);
 ##   * между указательными — такой же прыжок: граница их зон видна
 ##     (автор: «Зеркально значит границ между зонами двух указательных
 ##     пальцев видно не будет, а это крайне важно»);
 ##   * системные клавиши низа получают СТОРОНУ по месту: подпись у них
-##     одна, а клавиши две;
-##   * заливки строятся один раз и перекрашиваются темой НА МЕСТЕ;
-##   * у пробела две половины, скруглены только внешние углы;
-##   * вспышка нажатия, подсказка и зажатый шифт заливку вытесняют.
+##     одна, а клавиши две; мёртвые клавиши не зажигаются никогда;
+##   * панели зоны и дорожки строятся один раз и перекрашиваются темой
+##     НА МЕСТЕ;
+##   * у горячей половины пробела цвет СВОЕГО большого, скруглены только
+##     внешние углы;
+##   * вспышка нажатия, подсказка и зажатый шифт зону вытесняют.
 ##
 ## Headless картинку не рисует — меряем чистые меры: зоны пальцев,
-## панели и правило выбора (Kbd.key_box).
+## панели, дорожки и правило выбора (Kbd.key_box).
 func _tint_checks(bs: Array) -> void:
 	for b in bs:
 		var s0 := String(b["s"])
@@ -1329,9 +1333,15 @@ func _tint_checks(bs: Array) -> void:
 	_check(gap >= 3,
 		"the index|index boundary spans %d hue slots, want >= 3" % gap)
 
-	var tints := Hands.key_tints(false, 10.0, Ui.LINE_DAY, 2.0)
-	_check(not tints.has("пробел"), "the space has no whole-key tint")
+	var hot := Hands.key_tints(false, 10.0, 2.0)
+	var hot_day: Array = Ui.FINGER_HOT_DAY
+	var hot_night: Array = Ui.FINGER_HOT_NIGHT
+	var edge_day: Array = Ui.FINGER_EDGE_DAY
+	var edge_night: Array = Ui.FINGER_EDGE_NIGHT
 	var split := Kbd.space_split(bs)
+	# Зона подсказки — ЕДИНСТВЕННАЯ заливка клавиши «по пальцу»: в покое
+	# доска нейтральна (решение 09.11.2026). Панели у зоны уже с рамкой
+	# своего пальца, поэтому отдельных «спокойных» заливок больше нет.
 	var rows := {}
 	for b in bs:
 		var r0: Rect2 = b["r"]
@@ -1348,121 +1358,30 @@ func _tint_checks(bs: Array) -> void:
 			return (a["r"] as Rect2).position.x < (c["r"] as Rect2).position.x)
 		var prev := -1
 		var prev_slot := -1
-		# ШАГ ЦВЕТА — ПРЫЖОК, А НЕ РАДУГА (автор 08.11.2026: «цвета должны
-		# выбираться так, чтобы максимально контрастировать друг с другом,
-		# а у тебя наоборот — наблюдается плавный градиент»). Держим на
-		# ЧЕТЫРЁХ верхних рядах (цифры и буквы): низ — карта клавиш, а не
-		# зона пальцев. Соседние клавиши РАЗНЫХ пальцев обязаны стоять на
-		# круге не ближе трёх шагов (108°); одна зона на две клавиши
-		# («а»/«п») цвета не меняет — это не градиент, а тот же палец.
 		var top_rows := ri < 4
 		for b in row:
 			var s := String(b["s"])
-			var tint_key := s
-			if tints.has(s + ":Л"):
+			var hk := s
+			if hot.has(s + ":Л"):
 				var cx: float = (b["r"] as Rect2).get_center().x
-				tint_key = s + (":Л" if cx < split else ":П")
-			_check(tints.has(tint_key),
-				"row %d: '%s' has a tint box" % [key, s])
-			if not tints.has(tint_key):
+				hk = s + (":Л" if cx < split else ":П")
+			_check(hot.has(hk), "row %d: '%s' has a hot box" % [key, s])
+			if not hot.has(hk):
 				continue
-			var cur := Hands.tint_index(tint_key)
+			var cur := Hands.tint_index(hk)
 			var cur_slot := -1
 			if cur >= 0:
 				cur_slot = int(Ui.FINGER_SLOT[cur])
-			if top_rows and prev >= 0 and cur != prev:
+			if top_rows and prev >= 0 and cur != prev and cur_slot >= 0 and prev_slot >= 0:
 				var hop := mini(absi(cur_slot - prev_slot),
 					10 - absi(cur_slot - prev_slot))
 				_check(hop >= 3,
-					"row %d: tints %d and %d are %d hue slots apart at '%s' — gradient, not contrast"
+					"row %d: fingers %d and %d are %d hue slots apart at '%s' — gradient, not contrast"
 					% [key, prev, cur, hop, s])
 			prev = cur
 			prev_slot = cur_slot
 
-	# Заливки — из палитры, построены один раз, темой меняются на месте.
-	# Номер заливки берём у `paint_index`, а не у пальца: у пробела палец
-	# у каждой половины свой, а цвет ОДИН (автор 08.11.2026).
-	var day_pal: Array = Ui.FINGER_DAY
-	var night_pal: Array = Ui.FINGER_NIGHT
-	for s in tints:
-		var i := Hands.paint_index(String(s))
-		_check(i >= 0, "tint box '%s' maps to a finger" % s)
-		if i < 0:
-			continue
-		var sb: StyleBoxFlat = tints[s]
-		_check(sb.bg_color == day_pal[i], "tint box '%s' is the day colour" % s)
-	var first: StyleBoxFlat = tints["ф"]
-	Hands.repaint_tints(tints, true)
-	_check(first.bg_color == night_pal[0], "night repaint recolours the same box")
-	_check(first.border_color == Ui.LINE_NIGHT, "night repaint recolours the border")
-	_check(tints["ф"] == first, "night repaint keeps the same StyleBox")
-	Hands.repaint_tints(tints, false)
-	_check(first.bg_color == day_pal[0], "day repaint returns the day colour")
-	_check(first.border_color == Ui.LINE_DAY, "day repaint returns the day border")
-
-	# Пробел: две половины, скруглены ВНЕШНИЕ углы, внутренних рамок нет.
-	var sp_l: StyleBoxFlat = tints["пробел:Л"]
-	var sp_r: StyleBoxFlat = tints["пробел:П"]
-	_check(sp_l.corner_radius_top_left > 0 and sp_l.corner_radius_bottom_left > 0,
-		"space left half is rounded on its outer left corners")
-	_check(sp_l.corner_radius_top_right == 0 and sp_l.corner_radius_bottom_right == 0,
-		"space left half has square inner corners")
-	_check(sp_l.border_width_right == 0, "space left half has no inner border")
-	_check(sp_r.corner_radius_top_right > 0 and sp_r.corner_radius_bottom_right > 0,
-		"space right half is rounded on its outer right corners")
-	_check(sp_r.corner_radius_top_left == 0 and sp_r.corner_radius_bottom_left == 0,
-		"space right half has square inner corners")
-	_check(sp_r.border_width_left == 0, "space right half has no inner border")
-	# ОДИН цвет на всю клавишу — halves красятся цветом самой клавиши, а не
-	# большого (автор 08.11.2026: «пробел пусть будет одного цвета. Его
-	# раскрашивать двумя цветами как-то странно»). Сторона остаётся только
-	# в геометрии: внешние углы скруглены, внутренние — нет.
-	_check(sp_l.bg_color == sp_r.bg_color,
-		"the space halves have different colours")
-	_check(sp_l.bg_color == day_pal[Hands.tint_index("пробел")],
-		"the space does not carry its own single colour")
-	_check(sp_l.border_color == sp_r.border_color,
-		"the space halves have different borders")
-	# Темой перекрашиваются тем же правилом: одна клавиша — один цвет.
-	Hands.repaint_tints(tints, true)
-	_check(sp_l.bg_color == night_pal[Hands.tint_index("пробел")]
-			and sp_l.bg_color == sp_r.bg_color,
-		"night repaint split the space into two colours")
-	Hands.repaint_tints(tints, false)
-
-	# Выбор панели: цвет пальца — обычное состояние, но «ты нажал»,
-	# «жми сюда» и зажатый шифт важнее.
-	var base := Ui.panel_sb(Color.WHITE, 10.0)
-	var tint_sb: StyleBox = tints["ф"]
-	var press := Ui.panel_sb(Color.RED, 10.0)
-	var hi := Ui.panel_sb(Color.YELLOW, 10.0)
-	_check(Kbd.key_box("ф", "ф", base, tints, press, "", hi, false, false) == tint_sb,
-		"a plain key is painted by its finger")
-	_check(Kbd.key_box("ф", "ф", base, tints, press, "ф", hi, false, false) == press,
-		"a pressed key keeps the press flash")
-	_check(Kbd.key_box("ф", "ф", base, tints, press, "", hi, true, false) == hi,
-		"a hinted key keeps the hint")
-	_check(Kbd.key_box("Shift", "Shift", base, tints, press, "", hi, false, true) == base,
-		"the held shift keeps its accent")
-	_check(Kbd.key_box("нет-такой", "нет-такой", base, tints, press, "", hi, false, false) == base,
-		"an unknown key stays neutral")
-
-	# ЗОНА ПОДСКАЗКИ (автор 08.11.2026: «при подсказке всю секцию делать
-	# ещё заметнее. Чтобы было понято в какой зоне и каким пальцем надо
-	# нажимать»). Те же клавиши доски, но свои панели: заливка горячее,
-	# рамка — ЦВЕТОМ ПАЛЬЦА (общий `LINE_*` у всех зон не дал бы секции).
-	var hot := Hands.key_tints(false, 10.0, Ui.LINE_DAY, 2.0, true)
-	var hot_day: Array = Ui.FINGER_HOT_DAY
-	var hot_night: Array = Ui.FINGER_HOT_NIGHT
-	var edge_day: Array = Ui.FINGER_EDGE_DAY
-	var edge_night: Array = Ui.FINGER_EDGE_NIGHT
-	_check(hot.size() == tints.size(),
-		"hot tints cover the board (%d vs %d)" % [hot.size(), tints.size()])
-	var differ := 0
-	for s in tints:
-		if hot.get(s) == tints[s]:
-			differ += 1
-	_check(differ == 0, "%d hot keys reuse the calm panel" % differ)
+	# Панели зоны — из палитры, построены один раз, темой меняются НА МЕСТЕ.
 	for s in hot:
 		var i := Hands.tint_index(String(s))
 		_check(i >= 0, "hot box '%s' maps to a finger" % s)
@@ -1473,80 +1392,119 @@ func _tint_checks(bs: Array) -> void:
 			"hot box '%s' is the hot day colour" % s)
 		_check(hs.border_color == edge_day[i],
 			"hot box '%s' carries its finger edge in day" % s)
-		_check((tints[s] as StyleBoxFlat).bg_color == day_pal[Hands.paint_index(String(s))],
-			"hot panel left the calm box alone at '%s'" % s)
-	# Горячие половины пробела — цвета СВОИХ больших: подсказка красит
-	# именно ту половину, которой жать (обычная заливка у пробела одна).
-	_check((hot["пробел:Л"] as StyleBoxFlat).bg_color == hot_day[4]
-			and (hot["пробел:П"] as StyleBoxFlat).bg_color == hot_day[5],
-		"hot space halves carry the two thumbs")
-	_check((hot["пробел:Л"] as StyleBoxFlat).bg_color != (tints["пробел:Л"] as StyleBoxFlat).bg_color
-			and (hot["пробел:П"] as StyleBoxFlat).bg_color != (tints["пробел:П"] as StyleBoxFlat).bg_color,
-		"a hot space half did not differ from the calm one")
-	_check((hot["пробел:Л"] as StyleBoxFlat).border_width_right == 0
-			and (hot["пробел:П"] as StyleBoxFlat).border_width_left == 0,
-		"hot space halves keep their inner edges bare")
 	var hfirst: StyleBoxFlat = hot["ф"]
-	Hands.repaint_tints(hot, true, true)
+	Hands.repaint_tints(hot, true)
 	_check(hfirst.bg_color == hot_night[0], "hot night repaint recolours the fill")
-	_check(hfirst.border_color == edge_night[0], "hot night repaint recolours the edge by finger")
+	_check(hfirst.border_color == edge_night[0],
+		"hot night repaint recolours the edge by finger")
 	_check(hot["ф"] == hfirst, "hot night repaint keeps the same StyleBox")
-	_check(first.bg_color == day_pal[0],
-		"hot repaint did not touch the calm panel")
-	Hands.repaint_tints(hot, false, true)
+	Hands.repaint_tints(hot, false)
 	_check(hfirst.bg_color == hot_day[0], "hot day repaint returns the hot fill")
-	_check(hfirst.border_color == edge_day[0], "hot day repaint returns the finger edge")
-	# Порядок: нажатие > подсказка > шифт > ЗОНА > цвет пальца. Подсказка
-	# и вспышка говорят «что сейчас», зона — «каким пальцем», цвет —
-	# «какой рукой»; спорить с верхними им нельзя. В игре приходит ТОЛЬКО
-	# зона (`_hot_zone`), поэтому чужая клавиша остаётся обычной.
+	_check(hfirst.border_color == edge_day[0],
+		"hot day repaint returns the finger edge")
+
+	# Пробел: две половины ТОЛЬКО в зоне подсказки, цвета СВОИХ больших,
+	# скруглены внешние углы, внутренние кромки без рамки.
+	var sp_l: StyleBoxFlat = hot["пробел:Л"]
+	var sp_r: StyleBoxFlat = hot["пробел:П"]
+	_check(sp_l.bg_color == hot_day[4] and sp_r.bg_color == hot_day[5],
+		"hot space halves carry the two thumbs")
+	_check(sp_l.corner_radius_top_left > 0 and sp_l.corner_radius_bottom_left > 0,
+		"space left half is rounded on its outer left corners")
+	_check(sp_l.corner_radius_top_right == 0 and sp_l.corner_radius_bottom_right == 0,
+		"space left half has square inner corners")
+	_check(sp_l.border_width_right == 0, "space left half has no inner border")
+	_check(sp_r.corner_radius_top_right > 0 and sp_r.corner_radius_bottom_right > 0,
+		"space right half is rounded on its outer right corners")
+	_check(sp_r.corner_radius_top_left == 0 and sp_r.corner_radius_bottom_left == 0,
+		"space right half has square inner corners")
+	_check(sp_r.border_width_left == 0, "space right half has no inner border")
+
+	# Порядок: нажатие > подсказка > шифт > ЗОНА > бумага. В покое у
+	# клавиши заливки «по пальцу» нет вовсе.
+	var base := Ui.panel_sb(Color.WHITE, 10.0)
+	var press := Ui.panel_sb(Color.RED, 10.0)
+	var hi := Ui.panel_sb(Color.YELLOW, 10.0)
+	_check(Kbd.key_box("ф", "ф", base, press, "", hi, false, false) == base,
+		"a plain key is plain paper")
+	_check(Kbd.key_box("ф", "ф", base, press, "ф", hi, false, false) == press,
+		"a pressed key keeps the press flash")
+	_check(Kbd.key_box("ф", "ф", base, press, "", hi, true, false) == hi,
+		"a hinted key keeps the hint")
+	_check(Kbd.key_box("Shift", "Shift", base, press, "", hi, false, true) == base,
+		"the held shift keeps its accent")
+	_check(Kbd.key_box("нет-такой", "нет-такой", base, press, "", hi, false, false) == base,
+		"an unknown key stays neutral")
 	var zone := {}
 	for s in hot:
 		if Hands.tint_index(String(s)) == 0:
 			zone[s] = hot[s]
 	_check(zone.has("ф") and not zone.has("ы"), "the zone is one finger wide")
-	_check(Kbd.key_box("ф", "ф", base, tints, press, "", hi, false, false, zone) == hot["ф"],
+	_check(Kbd.key_box("ф", "ф", base, press, "", hi, false, false, zone) == hot["ф"],
 		"a key of the hinted finger is painted hot")
-	_check(Kbd.key_box("ф", "ф", base, tints, press, "", hi, true, false, zone) == hi,
+	_check(Kbd.key_box("ф", "ф", base, press, "", hi, true, false, zone) == hi,
 		"the hinted key itself stays above its hot zone")
-	_check(Kbd.key_box("ф", "ф", base, tints, press, "ф", hi, false, false, zone) == press,
+	_check(Kbd.key_box("ф", "ф", base, press, "ф", hi, false, false, zone) == press,
 		"the press flash stays above the hot zone")
-	_check(Kbd.key_box("Shift", "Shift", base, tints, press, "", hi, false, true, zone) == base,
+	_check(Kbd.key_box("Shift", "Shift", base, press, "", hi, false, true, zone) == base,
 		"the held shift stays above the hot zone")
-	_check(Kbd.key_box("ы", "ы", base, tints, press, "", hi, false, false, zone) == tints["ы"],
-		"a key of another finger keeps its calm tint")
-	_check(Kbd.space_half_box(hot, tints, "пробел:Л") == hot["пробел:Л"],
-		"the hot half of the space wins over the calm one")
-	_check(Kbd.space_half_box({}, tints, "пробел:П") == tints["пробел:П"],
-		"without a zone the space half keeps its calm tint")
+	_check(Kbd.key_box("ы", "ы", base, press, "", hi, false, false, zone) == base,
+		"a key of another finger stays plain paper")
+	# Системные клавиши низа несут сторону зоны по МЕСТУ клавиши: зона
+	# ПРАВОГО мизинца не должна красить левый Ctrl.
+	var zone_r := {}
+	for s in hot:
+		if Hands.tint_index(String(s)) == 9:
+			zone_r[s] = hot[s]
+	_check(Kbd.key_box("Ctrl", "Ctrl:Л", base, press, "", hi, false, false, zone_r) == base,
+		"the left Ctrl is not in the right-pinky zone")
+	_check(Kbd.key_box("Ctrl", "Ctrl:П", base, press, "", hi, false, false, zone_r) == hot["Ctrl:П"],
+		"the right Ctrl takes the right-pinky zone")
+	_check(hot.has("Ctrl:Л") and hot.has("Ctrl:П"),
+		"the Ctrl sides are separate boxes")
 
 	# ДОРОЖКИ ЗОН — подложка под клавишами (автор 09.11.2026: «либо ещё
 	# заметнее цвета, либо вообще менять способ разделения на сектора»).
-	# У КАЖДОЙ клавиши доски своя дорожка, у одного пальца — ОДИН цвет,
-	# пробел — одна дорожка одного цвета. Дорожки смыкаются: подложка
-	# растёт на ползазора, поэтому соседи одного пальца дают сплошную
-	# полосу, а не две плитки.
-	var lanes := Hands.key_lanes(false)
-	var lane_night: Array = Ui.FINGER_LANE_NIGHT
+	# В покое — нейтральные полосы, чередующиеся через палец; цвет пальца
+	# приходит только с подсказкой (`Hands.key_lanes`).
+	var lanes := Hands.key_lanes_idle(false)
+	var idle_day: Array = Ui.FINGER_LANE_IDLE_DAY
+	var idle_night: Array = Ui.FINGER_LANE_IDLE_NIGHT
 	var lane_day: Array = Ui.FINGER_LANE_DAY
-	var split_l := Kbd.space_split(bs)
+	var lane_night: Array = Ui.FINGER_LANE_NIGHT
 	for b in bs:
 		var s1 := String(b["s"])
 		var lk := s1
 		if lanes.has(s1 + ":Л"):
 			var cx1: float = (b["r"] as Rect2).get_center().x
-			lk = s1 + (":Л" if cx1 < split_l else ":П")
+			lk = s1 + (":Л" if cx1 < split else ":П")
 		_check(lanes.has(lk), "key '%s' has a zone lane" % s1)
 		if not lanes.has(lk):
 			continue
 		var li := Hands.paint_index(lk)
 		_check(li >= 0, "lane '%s' maps to a finger" % lk)
 		if li >= 0:
-			_check((lanes[lk] as Color) == lane_day[li],
-				"lane '%s' is the day colour of its finger" % lk)
+			var want: Color = idle_day[li]
+			# Мёртвая клавиша и в покое покойна, и подсказкой не зажигается.
+			if Hands.dead_key(lk):
+				want = idle_day[li]
+			_check((lanes[lk] as Color) == want,
+				"idle lane '%s' is not the neutral step of its finger" % lk)
 	_check(lanes.has("пробел"), "the space has one whole-key lane")
-	_check((lanes["пробел"] as Color) == lane_day[Hands.tint_index("пробел")],
-		"the space lane is not its single calm colour")
+	_check((lanes["пробел"] as Color) == idle_day[Hands.tint_index("пробел")],
+		"the space lane is not its single neutral colour")
+	# Мёртвые клавиши в ЦВЕТНОМ наборе тоже остаются покойными: цветной
+	# обрубок на краю доски читался бы как сломанная секция.
+	var on := Hands.key_lanes(false)
+	for s in ["Tab", "Ctrl:Л", "Ctrl:П", "Win", "Alt:П", "◀"]:
+		_check(on.has(s), "dead key '%s' still has a lane" % s)
+		if not on.has(s):
+			continue
+		_check((on[s] as Color) == idle_day[Hands.paint_index(s)],
+			"dead key '%s' lights up with its finger" % s)
+	for s in ["ф", "ы", "пробел"]:
+		_check((on[s] as Color) == lane_day[Hands.paint_index(s)],
+			"live key '%s' can be lit by a hint" % s)
 	# Соседи одного пальца: подложки перекрываются — зазор доски
 	# закрыт, сплошная дорожка (мера та же, что у рисования).
 	var ra := Hands.key_rect(bs, "а") as Rect2
@@ -1566,14 +1524,20 @@ func _tint_checks(bs: Array) -> void:
 		and lfl.end.x <= area0.end.x + 0.01,
 		"a lane spills outside the board")
 	# Темой перекрашивается НА МЕСТЕ: словарь тот же, цвета ночные.
-	Hands.repaint_lanes(lanes, true)
-	_check((lanes["ф"] as Color) == lane_night[0],
-		"night repaint does not recolour the lanes")
-	_check(Hands.key_lanes(true)["глобус"] == lane_night[5],
-		"a fresh night lane set is not the night palette")
-	Hands.repaint_lanes(lanes, false)
-	_check((lanes["ф"] as Color) == lane_day[0],
-		"day repaint does not return the lane colour")
+	Hands.repaint_lanes(lanes, true, true)
+	_check((lanes["ф"] as Color) == idle_night[0],
+		"night repaint does not recolour the idle lanes")
+	_check(Hands.key_lanes_idle(true)["глобус"] == idle_night[5],
+		"a fresh night idle set is not the night palette")
+	Hands.repaint_lanes(lanes, false, true)
+	_check((lanes["ф"] as Color) == idle_day[0],
+		"day repaint does not return the idle lane colour")
+	Hands.repaint_lanes(on, true)
+	_check((on["ф"] as Color) == lane_night[0],
+		"night repaint does not recolour the active lanes")
+	Hands.repaint_lanes(on, false)
+	_check((on["ф"] as Color) == lane_day[0],
+		"day repaint does not return the active lane colour")
 
 
 ## Рисование ОБЕИХ кистей — только из _draw(): CanvasItem иначе ругается

@@ -902,15 +902,15 @@ static func _act_of(s: String) -> String:
 	return s
 
 
-## Панель клавиши с учётом заливки пальца. Вспышка нажатия, подсказка и
-## зажатый шифт её ВЫТЕСНЯЮТ: «ты нажал», «жми сюда» и «шифт включён»
-## говорят важнее цвета пальца, и спорить с ними заливкой нельзя.
-## `hot` — клавиши ЗОНЫ подсказки (весь палец, которому она адресована):
-## они заметнее обычных заливок, но младше самой подсказки — подсвеченная
-## клавиша поверх своей зоны. Чистая (без канвы): тест меряет меру, а не
-## картинку.
-static func key_box(s: String, tint_key: String, base: StyleBox,
-		tint: Dictionary, press_sb: StyleBox, press_key: String,
+## Панель клавиши. В покое у клавиши нет заливки «по пальцу» (цвет
+## приходит только с подсказкой), поэтому выбор короче: вспышка нажатия,
+## сама подсказка и зажатый шифт, затем ЗОНА подсказки, иначе — бумага.
+## `hot` — панели клавиш ЗОНЫ подсказки (весь палец, которому она
+## адресована): заметнее бумаги, но младше самой подсказки. `hot_key` —
+## ключ зоны: у системных клавиш низа он несёт сторону (`Ctrl:Л`).
+## Чистая (без канвы): тест меряет меру, а не картинку.
+static func key_box(s: String, hot_key: String, base: StyleBox,
+		press_sb: StyleBox, press_key: String,
 		hi_sb: StyleBox, exact: bool, shift_on: bool,
 		hot: Dictionary = {}) -> StyleBox:
 	if press_sb != null and s == press_key:
@@ -919,44 +919,28 @@ static func key_box(s: String, tint_key: String, base: StyleBox,
 		return hi_sb
 	if shift_on:
 		return base
-	if hot.has(tint_key):
-		return hot[tint_key]
-	if tint.has(tint_key):
-		return tint[tint_key]
+	if hot.has(hot_key):
+		return hot[hot_key]
 	return base
 
 
-## Панель половины пробела: своя у левого и правого большого. Зона
-## подсказки (hot) старше обычной заливки — у подсказанного большого
-## горит ровно его половина.
-static func space_half_box(hot: Dictionary, tint: Dictionary,
-		key: String) -> StyleBox:
-	var sb: StyleBox = null
-	if hot.has(key):
-		sb = hot[key]
-	elif tint.has(key):
-		sb = tint[key]
-	return sb
-
-
-## Пробел — две половинки (левый и правый большой): у каждой своя заливка,
-## стык по `space_split`, а не по середине клавиши. Внутренние кромки без
-## рамки и без скруглений (см. Ui.finger_half_sb) — клавиша читается одной.
-static func _draw_space_tint(ci: CanvasItem, r: Rect2, left_sb: StyleBox,
-		right_sb: StyleBox, split: float) -> void:
-	var x := clampf(split, r.position.x, r.end.x)
-	ci.draw_style_box(left_sb, Rect2(r.position.x, r.position.y,
-		x - r.position.x, r.size.y))
-	ci.draw_style_box(right_sb, Rect2(x, r.position.y,
-		r.end.x - x, r.size.y))
+## Мёртвая (заблокированная) клавиша: в наборе не участвует, подсказка её
+## не зовёт, дорожка у неё всегда покойная.
+static func is_dead(s: String) -> bool:
+	return _is_blocked(s)
 
 
 ## Подложка зоны под клавишей: клавиша растёт на ползазора (+0.5 на
-## слияние), и соседи одного пальца дают сплошную дорожку. Обрезается
-## областью доски: наружу доска не светит радужной рамкой.
+## слияние), и соседи одного пальца дают сплошную дорожку. По вертикали
+## растёт чуть больше: ступенька раскладки (четверть питча) не должна
+## оставлять волосяной разрыв между рядами — дорожка читается СТОЛБИКОМ.
+## Обрезается областью доски: наружу доска не светит радужной рамкой.
 ## ЧИСТАЯ МЕРА — ею же меряет hands_test (headless картинку не рисует).
 static func lane_rect(r: Rect2, area: Rect2) -> Rect2:
-	return r.grow(KEY_GAP * 0.5 + 0.5).intersection(area)
+	var g := KEY_GAP * 0.5 + 0.5
+	var gr := Rect2(r.position - Vector2(g, g + 1.0),
+		r.size + Vector2(g * 2.0, g * 2.0 + 2.0))
+	return gr.intersection(area)
 
 
 ## Нарисовать кнопки на канве вызывателя. Шрифт и стиль — вызывателя.
@@ -968,7 +952,7 @@ static func draw(
 	enter: bool, font: Font, fs: int, sb: StyleBox, sb_on: StyleBox, ink: Color,
 	hi: Array = [], hi_sb: StyleBox = null, ink_dim: Color = Color(0, 0, 0, 0),
 	morph := 1.0, morph_from := "", morph_shift := false,
-	press_sb: StyleBox = null, press_key := "", tint: Dictionary = {},
+	press_sb: StyleBox = null, press_key := "",
 	hot: Dictionary = {}, lane: Dictionary = {}, hi_boxes: Dictionary = {}
 ) -> void:
 	# hi — подписи клавиш, которые игра подсвечивает после простоя
@@ -1027,26 +1011,20 @@ static func draw(
 			hi_box = hi_boxes[s] as StyleBox
 		var exact := hi_box != null and s in hi
 		# Системные клавиши низа стоят по обе стороны пробела с ОДНОЙ
-		# подписью (Ctrl/Win/Alt): сторону заливки даёт место клавиши.
-		var tint_key := s
-		if tint.has(s + ":Л"):
-			tint_key = s + (":Л" if r.get_center().x < split else ":П")
-		# Нажатие, подсказка и зажатый шифт ВЫТЕСНЯЮТ заливку пальца (см.
-		# key_box): цвет пальца — «какой рукой жать», а они — «что сейчас».
-		var overridden := (
-			(press_sb != null and s == press_key) or exact or shift_on
-		)
-		var box := key_box(s, tint_key, sb_on if shift_on else sb, tint,
+		# подписью (Ctrl/Win/Alt): сторону зоны даёт место клавиши.
+		var hot_key := s
+		if hot.has(s + ":Л"):
+			hot_key = s + (":Л" if r.get_center().x < split else ":П")
+		var box := key_box(s, hot_key, sb_on if shift_on else sb,
 			press_sb, press_key, hi_box, exact, shift_on, hot)
-		if s == "пробел" and not overridden:
-			var l_sb := space_half_box(hot, tint, "пробел:Л")
-			var r_sb := space_half_box(hot, tint, "пробел:П")
-			if l_sb != null and r_sb != null:
-				_draw_space_tint(ci, r, l_sb, r_sb, split)
-			else:
-				ci.draw_style_box(box, r)
-		else:
-			ci.draw_style_box(box, r)
+		ci.draw_style_box(box, r)
+		# Пробел — две половины: зона подсказки зажигает ровно половину
+		# своего большого, стык по `space_split`, внутренняя кромка тает.
+		if s == "пробел":
+			if hot.has("пробел:Л"):
+				_draw_half(ci, r, "Л", hot["пробел:Л"] as StyleBox, split)
+			elif hot.has("пробел:П"):
+				_draw_half(ci, r, "П", hot["пробел:П"] as StyleBox, split)
 		if hi_box != null and not exact and hi_side != "" and s == "пробел":
 			_draw_half(ci, r, hi_side, hi_box, split)
 		if s == "глобус":

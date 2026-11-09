@@ -4253,6 +4253,23 @@ func _case_hint_zone() -> void:
 	_check(not hi.is_empty(), "%s: no hint after the delay" % tag)
 	var live: Dictionary = _main._hot_zone(hi)
 	_check(not live.is_empty(), "%s: the hint did not light its zone" % tag)
+	# Дорожки зон: покой нейтрален, подсказка зажигает ТОЛЬКО своих,
+	# после ввода цвет плавно уходит обратно (решение 09.11.2026).
+	# Сравниваем с ЖИВЫМИ словарями главного экрана, а не с литералами
+	# палитры: тема кадра могла быть ночной, а раскладка — уже собранной.
+	_main._lane_reset()
+	var want_idle: Color = _main.kb_lanes_idle["а"]
+	var want_on: Color = _main.kb_lanes_on["а"]
+	var want_other: Color = _main.kb_lanes_idle["ы"]
+	_main._lane_tick(0.2, ["а"])
+	_check(_main.kb_lanes["а"] == want_on,
+		"%s: the hinted finger's lane did not light" % tag)
+	_check(_main.kb_lanes["ы"] == want_other,
+		"%s: a foreign lane lit with the hint" % tag)
+	for i in 40:
+		_main._lane_tick(0.1, [])
+	_check(_main.kb_lanes["а"] == want_idle,
+		"%s: the lane did not go back to idle" % tag)
 	for s in hi:
 		var key := Hands.key_label(String(s))
 		if Hands.tint_index(key) < 0:
@@ -4266,6 +4283,17 @@ func _case_hint_zone() -> void:
 	_check(_main._hint_keys().is_empty(), "%s: the hint survived a keypress" % tag)
 	_check(_main._hot_zone(_main._hint_keys()).is_empty(),
 		"%s: the zone stayed hot after typing" % tag)
+	# Легенда «цвет полоски — палец»: её часы идут С ПЕРВОГО кадра
+	# уровня, а не только пока на экране подсказка. Рисуется она,
+	# наоборот, только БЕЗ подсказки (полоса общая) — на прежнем гейте
+	# легенда не показывалась никогда, и это не ловил ни один тест.
+	_main.lane_tip_seen = false
+	_main.lane_tip_t = 0.0
+	_main.idle_t = 0.0
+	_tick(tag)
+	_check(_main.lane_tip_t > 0.0,
+		"%s: the lane legend clock does not run at level start" % tag)
+	_main.lane_tip_seen = true
 	_common(tag)
 
 

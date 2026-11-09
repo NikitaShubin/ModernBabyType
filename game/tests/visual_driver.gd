@@ -12,6 +12,7 @@ extends SceneTree
 const SAVE_DIR := "/tmp/opencode/"
 const Kbd := preload("res://scripts/kbd.gd")
 const SAVE := preload("res://scripts/save.gd")
+const Ui := preload("res://scripts/ui.gd")
 
 var _main: Node = null
 var _frame := 0
@@ -28,6 +29,15 @@ func _initialize() -> void:
 	var scene: PackedScene = load("res://scenes/main.tscn")
 	_main = scene.instantiate()
 	_main.skip_menu = true
+	# Экран Xvfb — 1280x800, а кадры просят 820x1180. Без этой строки
+	# `Ui.bottom_inset` считает отступ от РЕАЛЬНОГО экрана
+	# (1180 − 800 = 380 px) и поднимает доску на 380 px от настоящего низа
+	# кадра: раскладка (eff_h от kb_h) и доска (own_rect от safe area)
+	# расходятся, и всё, что считается «над доской» — подсказка, легенда
+	# дорожек, — ложится НА клавиши (поймано кадром 38b: пилюля легенды
+	# поверх нижнего ряда). На телефоне safe area = экран, отступ — только
+	# жест внизу; его и ставим.
+	Ui.bottom_override = 12.0
 	root.add_child(_main)
 
 
@@ -255,6 +265,10 @@ func _a_zone_hint() -> void:
 	# кадр показывал «зажглось». Сдвиг на пару кадров около пика её не
 	# сбивает (производная там нулевая).
 	_main.time = PI / 10.0
+	# Дорожки зажигаем ОДНИМ шагом (у кадра нет времени ждать перехода):
+	# это ровно то, что сделает _process за 0.11 с.
+	_main._lane_reset()
+	_main._lane_tick(1.0, _main._hint_keys())
 
 
 func _a_zone_hint_dim() -> void:
@@ -274,13 +288,15 @@ func _a_zone_hint_night() -> void:
 	_main.idle_t = _main._hint_delay() + 5.0
 	_main._relayout()
 	_main.time = PI / 10.0
+	_main._lane_reset()
+	_main._lane_tick(1.0, _main._hint_keys())
 
 
 ## ДОРОЖКИ ЗОН: подложка под клавишами (автор 09.11.2026: «либо ещё
 ## заметнее цвета, либо вообще менять способ разделения на сектора»).
-## Кадр без подсказки: видно ЧИСТОЕ деление доски на сектора — соседние
-## пальцы делят границу посередине зазора, клавиши одного пальца
-## смыкаются в сплошную полосу.
+## Кадр без подсказки: доска В ПОКОЕ — нейтральные полосы, чередующиеся
+## через палец. Соседние пальцы делят границу посередине зазора, клавиши
+## одного пальца смыкаются в сплошную ступень.
 func _a_lanes(night: bool) -> void:
 	_win(Vector2i(820, 1180))
 	_main._force_touch = true
@@ -295,6 +311,7 @@ func _a_lanes(night: bool) -> void:
 	_main.press_ema = 0.6
 	_main.idle_t = 0.0
 	_main._relayout()
+	_main._lane_reset()
 
 
 func _a_lanes_day() -> void:
@@ -303,6 +320,16 @@ func _a_lanes_day() -> void:
 
 func _a_lanes_night() -> void:
 	_a_lanes(true)
+
+
+## ЛЕГЕНДА «ЦВЕТ ПОЛОСКИ — ПАЛЕЦ»: показывается один раз за устройство,
+## в зарезервированной полосе подсказки, где своих слов у подсказки нет.
+## Ставим её руками: часы легенды идут с первого кадра уровня, а кадр
+## драйвера снимается сразу после установки сцены.
+func _a_lane_tip() -> void:
+	_a_lanes(false)
+	_main.lane_tip_seen = false
+	_main.lane_tip_t = 1.0
 
 
 ## КОМБИНАЦИЯ — ПОСЛЕДОВАТЕЛЬНОСТЬ, а не одновременное нажатие (автор
@@ -665,6 +692,9 @@ func _plan() -> void:
 		#     и ночь, без подсказки (чистое деление доски).
 		["37-lanes-day", _a_lanes_day, 3],
 		["38-lanes-night", _a_lanes_night, 3],
+		# 22б. Легенда «Цвет полоски — палец» — полоса подсказки, один
+		#      раз за устройство.
+		["38b-lane-tip", _a_lane_tip, 2],
 		# 23. Комбинация — ПОСЛЕДОВАТЕЛЬНОСТЬ: шифт встал, буква ещё
 		#     поднимается; затем буква садится, шифт держится.
 		["39-combo-hint-rise", _a_combo_hint_rise, 1],

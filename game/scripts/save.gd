@@ -21,6 +21,10 @@ const MAX_NAME_LENGTH := 15
 ## 0 — день, 1 — ночь. Ручной выбор запоминается, по умолчанию система.
 const SECTION_DISPLAY := "display"
 const KEY_NIGHT := "night_mode"
+## Легенда «цвет полоски под клавишами — палец руки» показана хотя бы
+## раз. Это подсказка интерфейса, а не прогресс игрока: гость тоже не
+## должен видеть её каждый запуск, поэтому флаг общий на устройство.
+const KEY_LANE_TIP := "lane_tip_seen"
 ## Системная клавиатура вместо своей (галочка в меню). По умолчанию —
 ## своя: системные IME коверкают ввод composing-перепиской. Кому нужна
 ## привычная — включает, борьба с автозаменой уже встроена (comp-буфер).
@@ -275,6 +279,17 @@ static func get_night_mode() -> int:
 static func set_night_mode(mode: int) -> void:
 	var cfg := _cfg()
 	cfg.set_value(SECTION_DISPLAY, KEY_NIGHT, clampi(mode, NIGHT_AUTO, NIGHT_ON))
+	cfg.save(PATH)
+
+
+## Легенда дорожек: показана ли уже (см. KEY_LANE_TIP).
+static func get_lane_tip_seen() -> bool:
+	return bool(_cfg().get_value(SECTION_DISPLAY, KEY_LANE_TIP, false))
+
+
+static func set_lane_tip_seen() -> void:
+	var cfg := _cfg()
+	cfg.set_value(SECTION_DISPLAY, KEY_LANE_TIP, true)
 	cfg.save(PATH)
 
 
