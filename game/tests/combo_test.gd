@@ -3896,51 +3896,85 @@ func _case_hands_hint_demo() -> void:
 			"%s: the hinted «%s» has no finger target" % [tag, s]
 		)
 		if per.has(f):
+			var tgt: Array = per[f] as Array
 			_check(
-				String(per[f]) == key,
-				"%s: the target for «%s» is not its key («%s»)" % [tag, s, String(per[f])]
+				String(tgt[0]) == key,
+				"%s: the target for «%s» is not its key («%s»)" % [tag, s, String(tgt[0])]
 			)
 			_check(
 				(HandsPoses.PRESS[Hands.side_name(h)] as Dictionary).has(key),
 				"%s: the hinted «%s» has a baked press pose" % [tag, key]
 			)
-	# Цикл демонстрации: за полный период палец доходит до клавиши
-	# (глубина 1) и возвращается в покой (0). Считаем крайние значения.
-	var maxd := 0.0
-	var mind := 1.0
+	# Цикл демонстрации: за полный период КАЖДАЯ клавиша набора доходит
+	# до клавиши (глубина 1) и возвращается в покой (0). КОМБИНАЦИЯ —
+	# ПОСЛЕДОВАТЕЛЬНОСТЬ, а не одновременное нажатие (автор 09.11.2026):
+	# шифт встаёт первым, буква за ним, поэтому глубина у каждой своя
+	# (Hands.hint_depth_at по её номеру в наборе).
+	var n: int = _main._hands_hint_n
+	_check(
+		n == hi.size(),
+		"%s: the hint order holds %d of %d keys" % [tag, n, hi.size()]
+	)
+	var maxd: Array = []
+	var mind: Array = []
+	for i in n:
+		maxd.append(0.0)
+		mind.append(1.0)
 	for _i in 150:
 		_tick(tag)
-		var d: float = Hands.hint_depth(_main._hands_hint_t)
-		maxd = maxf(maxd, d)
-		mind = minf(mind, d)
+		for i in n:
+			var d: float = Hands.hint_depth_at(_main._hands_hint_t, i, n)
+			maxd[i] = maxf(float(maxd[i]), d)
+			mind[i] = minf(float(mind[i]), d)
+	for i in n:
+		_check(
+			float(maxd[i]) > 0.99 and float(mind[i]) < 0.01,
+			"%s: key %d of the combo does not rise and fall (%.2f..%.2f)" % [
+				tag, i, float(mind[i]), float(maxd[i])
+			]
+		)
+	# ПОРЯДОК ВИДЕН: на середине подъёма первой клавиши вторая ещё в покое.
+	var half_rise := Hands.HINT_RISE_T * 0.5
 	_check(
-		maxd > 0.99 and mind < 0.01,
-		"%s: the hint cycle does not rise and fall (%.2f..%.2f)" % [tag, mind, maxd]
+		Hands.hint_depth_at(half_rise, 0, n) > 0.3
+			and Hands.hint_depth_at(half_rise, 1, n) == 0.0,
+		"%s: the combo keys rise simultaneously" % tag
 	)
 	# Ход пальца гаснет вместе с фазой: на середине подъёма вес позы —
-	# ровно глубина. При глубине 1 умножение на неё неотличимо от его
-	# отсутствия, поэтому меряем в середине подъёма.
-	_main._hands_hint_t = Hands.HINT_RISE_T * 0.5
-	var midd: float = Hands.hint_depth(_main._hands_hint_t)
-	_check(
-		midd > 0.3 and midd < 0.7,
-		"%s: the middle of the rise is not half depth (%.2f)" % [tag, midd]
-	)
+	# ровно глубина СВОЕЙ клавиши. При глубине 1 умножение на неё
+	# неотличимо от его отсутствия, поэтому меряем в середине подъёма.
+	_main._hands_hint_t = half_rise
 	var mid_press := _main.call("_hands_presses") as Dictionary
 	for h in _main._hands_hint.keys():
 		var per: Dictionary = _main._hands_hint[h] as Dictionary
 		var got: Dictionary = mid_press.get(h, {}) as Dictionary
 		for f in per.keys():
-			_check(
-				got.has(f) and is_equal_approx(float((got[f] as Array)[1]), midd),
-				"%s: the hinted finger is not weighted by the depth (%s)" % [
-					tag, str(got.get(f, []))
-				]
-			)
+			var idx := int((per[f] as Array)[1])
+			var want: float = Hands.hint_depth_at(_main._hands_hint_t, idx, n)
+			if want <= 0.0:
+				_check(
+					not got.has(f),
+					"%s: a finger is posed before its key rises (%s)" % [
+						tag, str(got.get(f, []))
+					]
+				)
+			else:
+				_check(
+					got.has(f) and is_equal_approx(float((got[f] as Array)[1]), want),
+					"%s: the hinted finger is not weighted by its own depth (%s)" % [
+						tag, str(got.get(f, []))
+					]
+				)
 	# Кисть РЕАЛЬНО едет за подсказкой: на площадке подушечка подсказанного
 	# пальца ушла на клавишу, а не осталась в покое (поза кадра собирается
 	# из _hands_presses, глубина 1 — полный ход).
-	_main._hands_hint_t = Hands.HINT_RISE_T + Hands.HINT_HOLD_T * 0.5
+	var on_key := float(n - 1) * Hands.HINT_STAGGER_T + Hands.HINT_RISE_T \
+		+ Hands.HINT_HOLD_T * 0.5
+	_check(
+		Hands.hint_depth_at(on_key, n - 1, n) >= 0.999,
+		"%s: the last key of the combo is not on its key at %.2f s" % [tag, on_key]
+	)
+	_main._hands_hint_t = on_key
 	var rest0: Dictionary = _main._hands_rest
 	var bs0: Array = _main._hands_bs
 	var hk := Hands.key_label(String(hi[hi.size() - 1]))
@@ -3965,7 +3999,7 @@ func _case_hands_hint_demo() -> void:
 		]
 	)
 	# Возвращаем цикл на площадку: реальное нажатие проверяем на глубине 1.
-	_main._hands_hint_t = Hands.HINT_RISE_T + Hands.HINT_HOLD_T * 0.5
+	_main._hands_hint_t = on_key
 	_main.call("_hands_tick", 0.0, _main._own_rect(), _main._kb_enter_shown(), hi)
 	# Реальное нажатие буквы: её палец перекрывает подсказку (поза
 	# нажатия, а не демонстрация), а на шифте подсказка остаётся живой.
@@ -4134,6 +4168,60 @@ func _case_hint_zone() -> void:
 		"%s: the letter zone of the hint is incomplete" % tag)
 	_check(not two.has("Shift"),
 		"%s: the other hand's shift went hot too" % tag)
+	# Зоны комбинации горят ПО ОЧЕРЕДИ: у каждой клавиши набора своя зона
+	# и своя фаза мигания (автор 09.11.2026: последовательность, а не
+	# одновременное нажатие). Сдвиг фаз — тот же такт, что у вставания
+	# кистей.
+	var zs: Array = _main._hot_zones(["ShiftR", "н"])
+	_check(zs.size() == 2, "%s: a two-key hint made %d zones" % [tag, zs.size()])
+	if zs.size() == 2:
+		var z0: Dictionary = zs[0] as Dictionary
+		var z1: Dictionary = zs[1] as Dictionary
+		_check(z0.has("ShiftR") and not z0.has("н"),
+			"%s: the shift zone swallowed the letter" % tag)
+		_check(z1.has("н") and not z1.has("ShiftR"),
+			"%s: the letter zone swallowed the shift" % tag)
+		_main.time = 0.0
+		var p0: float = _main._hint_pulse(0)
+		var p1: float = _main._hint_pulse(1)
+		_check(not is_equal_approx(p0, p1),
+			"%s: both keys of a combo blink in step" % tag)
+		_main.time = Hands.HINT_STAGGER_T + Hands.HINT_RELEASE_T
+		_check(is_equal_approx(_main._hint_pulse(1), p0),
+			"%s: the second zone does not follow the first" % tag)
+	# Панели подсказки: НЕПРОЗРАЧНЫЕ и с контрастной подписью. Под
+	# клавишей лежит насыщенная дорожка пальца, и полупрозрачное жёлтое
+	# смешивалось с ней в коричневое пятно — цель подсказки переставала
+	# быть самой яркой на доске (кадр 41, «м» на пурпурной дорожке).
+	# Ночная заливка тёмная: под светлые чернила (было 2.21:1).
+	_main.time = 0.0
+	var hb: Dictionary = _main._hint_boxes(["ShiftR", "н"], false)
+	var hd: StyleBoxFlat = hb["ShiftR"] as StyleBoxFlat
+	var day_ink: Color = _main._ui_ink()
+	_check(hd.bg_color.a >= 1.0, "%s: the day hint panel is see-through" % tag)
+	_check(_cr(hd.bg_color, day_ink) >= 4.5,
+		"%s: day hint ink %.2f:1 < 4.5" % [tag, _cr(hd.bg_color, day_ink)])
+	# Мигание днём — ЯРКОСТЬЮ заливки при непрозрачной панели (пауза
+	# светлее жёлтого, пик — сам жёлтый: цель не гаснет).
+	var dim: Color = hd.bg_color
+	_main.time = PI / 10.0  # sin = 1 — пик фазы
+	hb = _main._hint_boxes(["ShiftR", "н"], false)
+	hd = hb["ShiftR"] as StyleBoxFlat
+	_check(dim.v > hd.bg_color.v,
+		"%s: the hint panel does not blink (%.2f..%.2f)" % [
+			tag, dim.v, hd.bg_color.v
+		])
+	_check(_cr(dim, day_ink) >= 4.5,
+		"%s: the hint panel trough lost its ink (%.2f:1)" % [
+			tag, _cr(dim, day_ink)
+		])
+	var hn: Dictionary = _main._hint_boxes(["ShiftR", "н"], true)
+	var hdn: StyleBoxFlat = hn["ShiftR"] as StyleBoxFlat
+	_check(hdn.bg_color.a >= 1.0, "%s: the night hint panel is see-through" % tag)
+	_check(_cr(hdn.bg_color, Ui.UI_TEXT_NIGHT) >= 4.5,
+		"%s: night hint ink %.2f:1 < 4.5" % [
+			tag, _cr(hdn.bg_color, Ui.UI_TEXT_NIGHT)
+		])
 	# Пробел: горит ровно половина большого, которым жать.
 	var sp: Dictionary = _main._hot_zone(["пробел:Л"])
 	_check(sp.has("пробел:Л"), "%s: the hinted left thumb is not hot" % tag)

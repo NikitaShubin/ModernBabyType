@@ -276,6 +276,76 @@ func _a_zone_hint_night() -> void:
 	_main.time = PI / 10.0
 
 
+## ДОРОЖКИ ЗОН: подложка под клавишами (автор 09.11.2026: «либо ещё
+## заметнее цвета, либо вообще менять способ разделения на сектора»).
+## Кадр без подсказки: видно ЧИСТОЕ деление доски на сектора — соседние
+## пальцы делят границу посередине зазора, клавиши одного пальца
+## смыкаются в сплошную полосу.
+func _a_lanes(night: bool) -> void:
+	_win(Vector2i(820, 1180))
+	_main._force_touch = true
+	if night:
+		SAVE.set_night_mode(SAVE.NIGHT_ON)
+		_main.night = true
+	else:
+		SAVE.set_night_mode(SAVE.NIGHT_DAY)
+		_main.night = false
+	_main._apply_night()
+	_set_text("Мама мыла раму:", "мама мыла раму.", 0)
+	_main.press_ema = 0.6
+	_main.idle_t = 0.0
+	_main._relayout()
+
+
+func _a_lanes_day() -> void:
+	_a_lanes(false)
+
+
+func _a_lanes_night() -> void:
+	_a_lanes(true)
+
+
+## КОМБИНАЦИЯ — ПОСЛЕДОВАТЕЛЬНОСТЬ, а не одновременное нажатие (автор
+## 09.11.2026: «нажатие должно быть не одновременным, а последовательным,
+## надо подчёркивать их последовательность в анимации»). Подсказка —
+## шифт + буква «М»: фазу ставим руками, потому что её двигает время
+## кадра, а под llvmpipe за один кадр проходит больше, чем длится сам
+## разнос (0.24 с).
+##
+## t = 0.40 — шифт уже встал, буква ещё поднимается (виден порядок);
+## t = 1.12 — буква уже садится, шифт ещё держится (обратный порядок).
+## Значения взяты с запасом на кадр: фазу двигает и время кадра, а под
+## llvmpipe за кадр проходит до десятых секунды.
+func _a_combo_hint(t: float) -> void:
+	_win(Vector2i(820, 1180))
+	_main._force_touch = true
+	SAVE.set_night_mode(SAVE.NIGHT_DAY)
+	_main.night = false
+	_main._apply_night()
+	_set_text("Мама мыла раму:", "мама мыла раму.", 0)
+	_main.press_ema = 0.6
+	_main.idle_t = _main._hint_delay() + 5.0
+	_main._relayout()
+	var hi: Array = _main._hint_keys()
+	if hi.size() != 2:
+		print("ВНИМАНИЕ: кадр последовательности ждал шифт + букву, got ",
+			str(hi))
+	_main.call("_hands_tick", 0.0, _main._own_rect(), _main._kb_enter_shown(), hi)
+	_main._hands_hint_t = t
+	# Мигание клавиш — тоже по очереди: ставим `time` так, чтобы первая
+	# была на пике, а вторая ещё не разгорелась.
+	_main.time = PI / 10.0
+	_main.queue_redraw()
+
+
+func _a_combo_hint_rise() -> void:
+	_a_combo_hint(0.40)
+
+
+func _a_combo_hint_release() -> void:
+	_a_combo_hint(1.12)
+
+
 ## Легенды клавиш: по центру то, что вводится сейчас, по углам остальные
 ## (требование автора 10.2026 — на цифрах три знака, на ключе слева от
 ## правого шифта четыре). Три кадра: русский без шифта, русский с
@@ -591,4 +661,12 @@ func _plan() -> void:
 		["34-zone-hint", _a_zone_hint, 3],
 		["35-zone-hint-dim", _a_zone_hint_dim, 3],
 		["36-zone-hint-night", _a_zone_hint_night, 3],
+		# 22. Дорожки зон: сплошные полосы пальцев под клавишами — день
+		#     и ночь, без подсказки (чистое деление доски).
+		["37-lanes-day", _a_lanes_day, 3],
+		["38-lanes-night", _a_lanes_night, 3],
+		# 23. Комбинация — ПОСЛЕДОВАТЕЛЬНОСТЬ: шифт встал, буква ещё
+		#     поднимается; затем буква садится, шифт держится.
+		["39-combo-hint-rise", _a_combo_hint_rise, 1],
+		["40-combo-hint-release", _a_combo_hint_release, 1],
 	]

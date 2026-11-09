@@ -1127,6 +1127,45 @@ func _hint_checks(bs: Array) -> void:
 			mono = false
 		prev = d
 	_check(mono, "hint demo rises monotonically")
+	# КОМБИНАЦИЯ — ПОСЛЕДОВАТЕЛЬНОСТЬ (автор 09.11.2026: «нажатие должно
+	# быть не одновременным, а последовательным, надо подчёркивать их
+	# последовательность в анимации»). Шифт встаёт первым и отпускается
+	# последним; буква — наоборот. Одиночная подсказка остаётся прежней.
+	_check(is_equal_approx(Hands.hint_cycle(1), Hands.HINT_CYCLE_T),
+		"a single hint changed its period")
+	_check(is_equal_approx(Hands.hint_cycle(2), Hands.HINT_CYCLE_T
+			+ Hands.HINT_STAGGER_T + Hands.HINT_RELEASE_T),
+		"a combo does not lengthen the cycle by its stagger")
+	var half := Hands.HINT_RISE_T * 0.5
+	_check(Hands.hint_depth_at(half, 0, 2) > 0.3
+			and Hands.hint_depth_at(half, 1, 2) == 0.0,
+		"the second key of a combo starts before the first one")
+	var hold := Hands.HINT_HOLD_T \
+		+ Hands.HINT_RISE_T + Hands.HINT_STAGGER_T * 0.5
+	_check(Hands.hint_depth_at(hold, 0, 2) == 1.0
+			and Hands.hint_depth_at(hold, 1, 2) == 1.0,
+		"the combo never holds both keys together")
+	var rel := Hands.HINT_RISE_T + Hands.HINT_HOLD_T + Hands.HINT_STAGGER_T \
+		+ Hands.HINT_RELEASE_T * 0.5
+	_check(Hands.hint_depth_at(rel, 0, 2) == 1.0
+			and Hands.hint_depth_at(rel, 1, 2) < 1.0,
+		"the letter does not release before the shift")
+	var rel2 := Hands.HINT_RISE_T + Hands.HINT_HOLD_T + Hands.HINT_STAGGER_T \
+		+ Hands.HINT_RELEASE_T + Hands.HINT_FALL_T * 0.5
+	_check(Hands.hint_depth_at(rel2, 0, 2) > 0.0
+			and Hands.hint_depth_at(rel2, 0, 2) < 1.0
+			and Hands.hint_depth_at(rel2, 1, 2) == 0.0,
+		"the shift does not release last")
+	var mono2 := true
+	for k in 2:
+		var pr := -1.0
+		for i in 21:
+			var d2 := Hands.hint_depth_at(Hands.HINT_RISE_T * (float(i) / 20.0)
+				+ float(k) * Hands.HINT_STAGGER_T, k, 2)
+			if d2 < pr - 1e-6:
+				mono2 = false
+			pr = d2
+	_check(mono2, "a combo key does not rise monotonically")
 	# Точка подсказки — центр клавиши; половины пробела — свои половины.
 	var a := Hands.hint_point(bs, "а")
 	_check(a.distance_to((Hands.key_rect(bs, "а") as Rect2).get_center()) < 0.01,
@@ -1480,6 +1519,61 @@ func _tint_checks(bs: Array) -> void:
 		"the hot half of the space wins over the calm one")
 	_check(Kbd.space_half_box({}, tints, "пробел:П") == tints["пробел:П"],
 		"without a zone the space half keeps its calm tint")
+
+	# ДОРОЖКИ ЗОН — подложка под клавишами (автор 09.11.2026: «либо ещё
+	# заметнее цвета, либо вообще менять способ разделения на сектора»).
+	# У КАЖДОЙ клавиши доски своя дорожка, у одного пальца — ОДИН цвет,
+	# пробел — одна дорожка одного цвета. Дорожки смыкаются: подложка
+	# растёт на ползазора, поэтому соседи одного пальца дают сплошную
+	# полосу, а не две плитки.
+	var lanes := Hands.key_lanes(false)
+	var lane_night: Array = Ui.FINGER_LANE_NIGHT
+	var lane_day: Array = Ui.FINGER_LANE_DAY
+	var split_l := Kbd.space_split(bs)
+	for b in bs:
+		var s1 := String(b["s"])
+		var lk := s1
+		if lanes.has(s1 + ":Л"):
+			var cx1: float = (b["r"] as Rect2).get_center().x
+			lk = s1 + (":Л" if cx1 < split_l else ":П")
+		_check(lanes.has(lk), "key '%s' has a zone lane" % s1)
+		if not lanes.has(lk):
+			continue
+		var li := Hands.paint_index(lk)
+		_check(li >= 0, "lane '%s' maps to a finger" % lk)
+		if li >= 0:
+			_check((lanes[lk] as Color) == lane_day[li],
+				"lane '%s' is the day colour of its finger" % lk)
+	_check(lanes.has("пробел"), "the space has one whole-key lane")
+	_check((lanes["пробел"] as Color) == lane_day[Hands.tint_index("пробел")],
+		"the space lane is not its single calm colour")
+	# Соседи одного пальца: подложки перекрываются — зазор доски
+	# закрыт, сплошная дорожка (мера та же, что у рисования).
+	var ra := Hands.key_rect(bs, "а") as Rect2
+	var rp := Hands.key_rect(bs, "п") as Rect2
+	var area0 := Rect2(ra.position, Vector2.ZERO)
+	for b in bs:
+		area0 = area0.merge(b["r"] as Rect2)
+	var la := Kbd.lane_rect(ra, area0)
+	var lp := Kbd.lane_rect(rp, area0)
+	_check(la.end.x > lp.position.x or lp.end.x > la.position.x,
+		"two keys of one finger do not share a lane")
+	_check(absf(la.position.y - lp.position.y) < 0.01,
+		"a lane changes height along its finger")
+	# Дорожка не вылезает за доску: радужной рамки по краю нет.
+	var lfl := Kbd.lane_rect(Hands.key_rect(bs, "ф") as Rect2, area0)
+	_check(lfl.position.x >= area0.position.x - 0.01
+		and lfl.end.x <= area0.end.x + 0.01,
+		"a lane spills outside the board")
+	# Темой перекрашивается НА МЕСТЕ: словарь тот же, цвета ночные.
+	Hands.repaint_lanes(lanes, true)
+	_check((lanes["ф"] as Color) == lane_night[0],
+		"night repaint does not recolour the lanes")
+	_check(Hands.key_lanes(true)["глобус"] == lane_night[5],
+		"a fresh night lane set is not the night palette")
+	Hands.repaint_lanes(lanes, false)
+	_check((lanes["ф"] as Color) == lane_day[0],
+		"day repaint does not return the lane colour")
 
 
 ## Рисование ОБЕИХ кистей — только из _draw(): CanvasItem иначе ругается

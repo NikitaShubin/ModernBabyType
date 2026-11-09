@@ -230,7 +230,19 @@ var kb_tints: Dictionary = {}
 ## заметнее обычных, с рамкой своего пальца. В кадре берётся ПОДМНОЖЕСТВО
 ## зоны подсказки (`_hot_zone`), панели те же — новых нет.
 var kb_tints_hot: Dictionary = {}
-var _hot_keys: Dictionary = {}
+## Цвета ДОРОЖЕК ЗОН под клавишами (Hands.key_lanes): подложка своего
+## пальца под каждой клавишей, смыкается в сплошную секцию. Строится
+## раз, темой перекрашивается на месте (см. Ui.FINGER_LANE_*).
+var kb_lanes: Dictionary = {}
+## Вторая панель подсказки: у комбинации (шифт + буква) клавиши горят
+## по очереди, каждой нужна СВОЯ пульсирующая панель. Обе создаются раз.
+var kb_hi_sb2: StyleBoxFlat
+## Зоны подсказки ПО КЛАВИШАМ набора: у каждой своя фаза мигания
+## (шифт — первым, буква — следом). `_hot_zone` отдаёт их слияние.
+var _hot_zones_cache: Array = []
+## Слияние зон для одного вызова Kbd.draw: собирается на месте каждый
+## кадр, новых панелей не рождает.
+var _hot_union: Dictionary = {}
 var _hot_sig := ""
 
 
@@ -422,10 +434,12 @@ func _ready() -> void:
 	kb_press_ok_sb = Ui.panel_sb(Ui.OK_DAY, 10.0, Ui.OK_EDGE_DAY, 2.5, false)
 	kb_press_err_sb = Ui.panel_sb(Ui.DANGER_DAY, 10.0, Ui.DANGER_EDGE_DAY, 2.5, false)
 	kb_hi_sb = Ui.panel_sb(Ui.HINT_KEY_DAY, 10.0, Ui.LINE_DAY, 2.0, false)
+	kb_hi_sb2 = Ui.panel_sb(Ui.HINT_KEY_DAY, 10.0, Ui.LINE_DAY, 2.0, false)
 	# Клавиши по пальцам: палитра из Ui, карта — у Hands (там же руки,
 	# которым она принадлежит). Строится раз — в кадре новых панелей нет.
 	kb_tints = Hands.key_tints(false, 10.0, Ui.LINE_DAY, 2.0)
 	kb_tints_hot = Hands.key_tints(false, 10.0, Ui.LINE_DAY, 2.0, true)
+	kb_lanes = Hands.key_lanes(false)
 	card_p = _panel_node(card_sb)
 	hud_p = _panel_node(pill_sb)
 	hint_p = _panel_node(pill_sb)
@@ -484,6 +498,8 @@ func _apply_night() -> void:
 		kb_key_sb.border_color = Ui.LINE_NIGHT
 		kb_hi_sb.bg_color = Ui.HINT_KEY_NIGHT
 		kb_hi_sb.border_color = Ui.HINT_KEY_DAY
+		kb_hi_sb2.bg_color = Ui.HINT_KEY_NIGHT
+		kb_hi_sb2.border_color = Ui.HINT_KEY_DAY
 		kb_on_sb.bg_color = Ui.ACCENT_NIGHT
 		kb_on_sb.border_color = Ui.ACCENT_EDGE_NIGHT
 		kb_press_sb.bg_color = Ui.PRESS_NIGHT
@@ -512,6 +528,8 @@ func _apply_night() -> void:
 		kb_key_sb.border_color = Ui.LINE_DAY
 		kb_hi_sb.bg_color = Ui.HINT_KEY_DAY
 		kb_hi_sb.border_color = Ui.LINE_DAY
+		kb_hi_sb2.bg_color = Ui.HINT_KEY_DAY
+		kb_hi_sb2.border_color = Ui.LINE_DAY
 		kb_on_sb.bg_color = Ui.ACCENT_DAY
 		kb_press_sb.bg_color = Ui.PRESS_DAY
 		kb_press_sb.border_color = Ui.LINE_DAY
@@ -524,6 +542,7 @@ func _apply_night() -> void:
 	# Клавиши по пальцам — той же темой: панели те же, меняется заливка.
 	Hands.repaint_tints(kb_tints, night)
 	Hands.repaint_tints(kb_tints_hot, night, true)
+	Hands.repaint_lanes(kb_lanes, night)
 	if meadow != null:
 		meadow.night = night
 		meadow._apply_sky()
@@ -2920,27 +2939,50 @@ func _opp_shift(s: String) -> String:
 ## зоне и каким пальцем надо нажимать». Панели берутся из `kb_tints_hot`
 ## (построены раз), сам словарь пересобирается только на СМЕНУ набора:
 ## в кадре новых панелей нет.
-func _hot_zone(hi: Array) -> Dictionary:
+## Зоны подсказки — ПО КАЖДОЙ КЛАВИШЕ набора: у комбинации «шифт +
+## буква» две зоны, и мигают они по очереди (см. _hint_pulse). Порядок
+## зон — порядок `hi` (шифт/глобус первым, буква следом), поэтому индекс
+## зоны совпадает с индексом демонстрации кистей (Hands.hint_depth_at).
+## Панели берутся из `kb_tints_hot` (построены раз), сам массив
+## пересобирается только на СМЕНУ набора: в кадре новых панелей нет.
+func _hot_zones(hi: Array) -> Array:
 	var sig := ""
 	for s in hi:
 		sig += String(s) + "|"
 	if sig == _hot_sig:
-		return _hot_keys
+		return _hot_zones_cache
 	_hot_sig = sig
-	_hot_keys = {}
-	if hi.is_empty():
-		return _hot_keys
-	var zones := {}
+	_hot_zones_cache = []
 	for s in hi:
 		var i := Hands.tint_index(String(s))
+		var z := {}
 		if i >= 0:
-			zones[i] = true
-	if zones.is_empty():
-		return _hot_keys
-	for key in kb_tints_hot:
-		if zones.has(Hands.tint_index(String(key))):
-			_hot_keys[key] = kb_tints_hot[key]
-	return _hot_keys
+			for key in kb_tints_hot:
+				if Hands.tint_index(String(key)) == i:
+					z[key] = kb_tints_hot[key]
+		_hot_zones_cache.append(z)
+	return _hot_zones_cache
+
+
+## Слияние зон — то, что рисует доска (`Kbd.draw` берёт один словарь).
+## Отдаёт и тест: «вся зона пальца горячая, чужая — нет».
+func _hot_zone(hi: Array) -> Dictionary:
+	var out := {}
+	for z in _hot_zones(hi):
+		for key in z:
+			out[key] = z[key]
+	return out
+
+
+## Фаза мигания i-й клавиши подсказки: у комбинации клавиши горят
+## ПО ОЧЕРЕДИ (автор 09.11.2026: последовательность важна). Сдвиг фаз —
+## тот же такт, что у кистей: шифт встаёт первым, буква — за ним.
+## Одиночная подсказка (i = 0) — прежнее мигание без сдвига.
+const HINT_PULSE_LAG := Hands.HINT_STAGGER_T + Hands.HINT_RELEASE_T
+
+
+func _hint_pulse(i: int) -> float:
+	return 0.5 + 0.5 * sin((time - float(i) * HINT_PULSE_LAG) * 5.0)
 
 
 ## Мигание зоны подсказки — тем же тактом, что у подсказанной клавиши
@@ -2963,24 +3005,56 @@ func _pulse_zone(zone: Dictionary, pulse: float) -> void:
 		sb.border_color = e
 
 
+## Панели подсказанных клавиш: у каждой своя фаза (шифт — первым, буква —
+## следом, автор 09.11.2026: последовательность, а не одновременное
+## нажатие). Заливка НЕПРОЗРАЧНАЯ: под клавишей лежит насыщенная дорожка
+## её пальца (FINGER_LANE_*), и полупрозрачное жёлтое смешивалось с ней в
+## коричневое пятно — цель подсказки переставала быть самой яркой на
+## доске (кадр 41, «м» на пурпурной дорожке).
+## Мигание — ЯРКОСТЬЮ заливки днём и прозрачностью рамки ночью: ночная
+## заливка тёмная (под светлые чернила), и её «посветление» съедало бы
+## контраст подписи. Панели те же (`kb_hi_sb`/`kb_hi_sb2`) — в кадре
+## новых StyleBox нет.
+func _hint_boxes(hi: Array, night_now: bool) -> Dictionary:
+	var boxes := {}
+	for i in hi.size():
+		var sbx: StyleBoxFlat = kb_hi_sb if i == 0 else kb_hi_sb2
+		var p := _hint_pulse(i)
+		if night_now:
+			sbx.bg_color = Ui.HINT_KEY_NIGHT
+			var e: Color = Ui.HINT_KEY_DAY
+			e.a = 0.30 + 0.70 * p
+			sbx.border_color = e
+		else:
+			# День: разгорается К БЕЛОМУ от жёлтого — цель остаётся самой
+			# яркой точкой доски в обеих фазах (затемнение в паузе гасило
+			# бы ровно то, на что смотрит человек).
+			sbx.bg_color = Ui.HINT_KEY_DAY.lerp(Color(1, 1, 1, 1), 0.20 * (1.0 - p))
+			sbx.border_color = Ui.LINE_DAY
+		boxes[String(hi[i])] = sbx
+	return boxes
+
+
 func _draw_own_kb() -> void:
 	if not _own_shown():
 		return
-	# Пульсация подсветки — цветом стиля: 0.45..0.8 мажорного жёлтого.
-	var pulse := 0.5 + 0.5 * sin(time * 5.0)
+	# Подсветка подсказки — непрозрачной панелью, у каждой клавиши набора
+	# своя фаза мигания (см. _hint_boxes и _hint_pulse).
 	var hi := _hint_keys()
-	if not hi.is_empty():
-		var c: Color = kb_hi_sb.bg_color
-		c.a = 0.45 + 0.35 * pulse
-		kb_hi_sb.bg_color = c
-	var zone := _hot_zone(hi)
-	_pulse_zone(zone, pulse)
+	var hi_boxes := _hint_boxes(hi, night)
+	var zones := _hot_zones(hi)
+	for i in zones.size():
+		_pulse_zone(zones[i], _hint_pulse(i))
+	_hot_union.clear()
+	for z in zones:
+		for key in z:
+			_hot_union[key] = z[key]
 	var area := _own_rect()
 	Kbd.draw(
 		self, area, kb_lang, kb_shift, _kb_enter_shown(), mono,
 		int(30.0 * k), kb_key_sb, kb_on_sb, _ui_ink(), hi, kb_hi_sb, _ui_dim(),
 		kb_morph, kb_morph_from, kb_morph_shift, _press_sb(), kb_press,
-		kb_tints, zone
+		kb_tints, _hot_union, kb_lanes, hi_boxes
 	)
 	# Скелет кистей ПОВЕРХ доски (полупрозрачно — подписи читаются):
 	# каким пальцем какую клавишу жать, и куда пальцы едут по подсказке.
@@ -3019,9 +3093,10 @@ var _hands_held: Dictionary = {}
 # обратно (автор 27.10.2026: «пусть они анимируют движение во время
 # подсказок и реальных нажатий»). Цели — ПОДПИСИ клавиш, строятся ОДИН
 # РАЗ на смену набора; поза и посадка на клавишу считаются по ним.
-var _hands_hint: Dictionary = {}     # {рука: {палец: подпись клавиши}}
+var _hands_hint: Dictionary = {}     # {рука: {палец: [подпись, индекс]}}
 var _hands_hint_sig := ""            # набор подсказки (подпись)
 var _hands_hint_t := 0.0             # фаза цикла демонстрации, с
+var _hands_hint_n := 0               # клавиш в наборе (такт последовательности)
 const HANDS_RISE_T := 0.06  # влёт пальца к клавише
 const HANDS_FALL_T := 0.18  # спад от клавиши к покою
 
@@ -3144,11 +3219,15 @@ func _hands_shift_away(h: int) -> void:
 
 
 ## Цели демонстрации подсказки: для каждой подсвеченной клавиши — её
-## палец и подпись. Строится на СМЕНУ набора: поза нажатия берётся по
-## подписи, каждый кадр её искать нельзя.
+## палец, подпись и НОМЕР В НАБОРЕ. Номер — это её место в очереди:
+## шифт/глобус встаёт первым, буква следом (Hands.hint_depth_at).
+## Строится на СМЕНУ набора: поза нажатия берётся по подписи, каждый
+## кадр её искать нельзя.
 func _hands_hint_build(hi: Array) -> void:
 	_hands_hint.clear()
-	for s in hi:
+	_hands_hint_n = hi.size()
+	for i in hi.size():
+		var s := String(hi[i])
 		var key := Hands.key_label(String(s))
 		var hf := Hands.finger_of(key)
 		if (hf[0] as int) < 0:
@@ -3158,7 +3237,7 @@ func _hands_hint_build(hi: Array) -> void:
 		if not (HandsPoses.PRESS[Hands.side_name(h)] as Dictionary).has(key):
 			continue
 		var per: Dictionary = _hands_hint.get(h, {}) as Dictionary
-		per[f] = key
+		per[f] = [key, i]
 		_hands_hint[h] = per
 
 
@@ -3181,9 +3260,11 @@ func _hands_tick(dt: float, area: Rect2, enter: bool, hi: Array) -> bool:
 		_hands_hint_build(hi)
 		moved = true
 	# Пока подсказка висит, фаза демонстрации едет всегда: палец
-	# поднимается к клавише, стоит и возвращается.
+	# поднимается к клавише, стоит и возвращается. У комбинации период
+	# длиннее на разнос влёта и спада (Hands.hint_cycle).
 	if not _hands_hint.is_empty():
-		_hands_hint_t = fposmod(_hands_hint_t + dt, Hands.HINT_CYCLE_T)
+		_hands_hint_t = fposmod(_hands_hint_t + dt,
+			Hands.hint_cycle(_hands_hint_n))
 		moved = true
 	for h in [Hands.LEFT, Hands.RIGHT]:
 		if _hands_curs.has(h):
@@ -3226,19 +3307,23 @@ func _hands_tick(dt: float, area: Rect2, enter: bool, hi: Array) -> bool:
 
 
 ## Позы пальцев на кадр: демонстрация подсказки снизу (вес = глубина
-## фазы), реальное нажатие перекрывает её на СВОЁМ пальце (человек уже
-## жмёт — рука на клавише). Чистая сборка: рисование и проверки меряют
-## одно и то же.
+## фазы СВОЕЙ клавиши: у комбинации они встают по очереди), реальное
+## нажатие перекрывает её на СВОЁМ пальце (человек уже жмёт — рука на
+## клавише). Чистая сборка: рисование и проверки мерят одно и то же.
 func _hands_presses() -> Dictionary:
 	var presses := {}
-	var depth := Hands.hint_depth(_hands_hint_t) \
-		if not _hands_hint.is_empty() else 0.0
-	if depth > 0.0:
-		for h in _hands_hint.keys():
-			var per := {}
-			var src: Dictionary = _hands_hint[h] as Dictionary
-			for f in src.keys():
-				per[f] = [src[f], depth]
+	if _hands_hint.is_empty():
+		return presses
+	for h in _hands_hint.keys():
+		var per := {}
+		var src: Dictionary = _hands_hint[h] as Dictionary
+		for f in src.keys():
+			var a: Array = src[f] as Array
+			var d := Hands.hint_depth_at(_hands_hint_t, int(a[1]),
+				_hands_hint_n)
+			if d > 0.0:
+				per[f] = [a[0], d]
+		if not per.is_empty():
 			presses[h] = per
 	for h in _hands_curs.keys():
 		var dst: Dictionary = presses.get(h, {}) as Dictionary

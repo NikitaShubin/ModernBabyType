@@ -187,6 +187,10 @@ const RU_EN := {
 
 
 const ROW_TALL := 1.15
+## Зазор между клавишами доски, px. Им же меряется подложка зоны
+## (`lane_rect`): дорожка растёт на ползазора, и клавиши одного пальца
+## смыкаются в сплошную полосу (см. Ui.FINGER_LANE_*).
+const KEY_GAP := 8.0
 
 
 
@@ -649,7 +653,7 @@ static func buttons(area: Rect2, shift: bool, enter := false) -> Array:
 static func _buttons_now(area: Rect2, shift: bool, enter := false) -> Array:
 	var rows: Array = all_rows(enter)
 	var out: Array = []
-	var gap := 8.0
+	var gap := KEY_GAP
 	var rh := (area.size.y - gap * float(rows.size() - 1)) / float(rows.size())
 	var pitch := -1.0
 	for row in rows:
@@ -947,6 +951,14 @@ static func _draw_space_tint(ci: CanvasItem, r: Rect2, left_sb: StyleBox,
 		r.end.x - x, r.size.y))
 
 
+## Подложка зоны под клавишей: клавиша растёт на ползазора (+0.5 на
+## слияние), и соседи одного пальца дают сплошную дорожку. Обрезается
+## областью доски: наружу доска не светит радужной рамкой.
+## ЧИСТАЯ МЕРА — ею же меряет hands_test (headless картинку не рисует).
+static func lane_rect(r: Rect2, area: Rect2) -> Rect2:
+	return r.grow(KEY_GAP * 0.5 + 0.5).intersection(area)
+
+
 ## Нарисовать кнопки на канве вызывателя. Шрифт и стиль — вызывателя.
 ## Кегль — от высоты ряда (палец!), служебные чуть мельче. Глобус —
 ## векторный (круг + меридиан): шрифтового эмодзи в DejaVu нет.
@@ -957,38 +969,63 @@ static func draw(
 	hi: Array = [], hi_sb: StyleBox = null, ink_dim: Color = Color(0, 0, 0, 0),
 	morph := 1.0, morph_from := "", morph_shift := false,
 	press_sb: StyleBox = null, press_key := "", tint: Dictionary = {},
-	hot: Dictionary = {}
+	hot: Dictionary = {}, lane: Dictionary = {}, hi_boxes: Dictionary = {}
 ) -> void:
 	# hi — подписи клавиш, которые игра подсвечивает после простоя
 	# (вместо текстовой подсказки «Нажми К»). hi_sb рисует их вызыватель
 	# и сам же в нём ведёт пульсацию цветом каждый кадр. Запись вида
 	# «пробел:Л»/«пробел:П» подсвечивает половину пробела (палец
 	# противоположной руки) с мягкой градиентной границей.
+	# hi_boxes — своя панель КАЖДОЙ подсказанной клавиши (когда их две,
+	# шифт и буква): у комбинации своя фаза мигания, и клавиши горят по
+	# очереди, а не одним пятном.
 	# ink_dim — приглушённые чернила для неактивных подписей: у каждой
 	# буквы напечатаны обе раскладки, активная светится ярче.
 	# press_sb — заливка нажатой клавиши: человек должен видеть, что
 	# попал в ту самую клавишу (или промахнулся мимо всех).
 	# hot — панели клавиш ЗОНЫ подсказки (весь палец, которому она
 	# адресована): заметнее обычных, но младше самой подсветки.
+	# lane — ЦВЕТА ДОРОЖЕК ЗОН по клавишам (Hands.key_lanes): подложка
+	# под клавишей, растёт на ползазора и смыкается с соседями того же
+	# пальца (Ui.FINGER_LANE_*). Рисуется ОТДЕЛЬНЫМ проходом ДО граней,
+	# иначе подложка следующей клавиши закрасила бы уже нарисованную.
 	# morph (0..1), morph_from и morph_shift — перелёт: старая
 	# центральная подпись уходит в свой угол, новая выходит из своего
 	# в центр (требование автора 10.2026). morph_from пустой или
 	# morph = 1 — перелёта нет. На щипке шифта буквы перелёта не имеют
 	# (автор: между большой и малой нет мягкого перехода) — знаки
 	# перелетают как обычно.
-	var gap := 8.0
+	var gap := KEY_GAP
 	var rh := (area.size.y - gap * 4.0) / 5.0
 	var key_fs := maxi(fs, int(rh * 0.40))
 	var sub_fs := maxi(int(float(fs) * 0.55), int(rh * 0.22))
 	var dim := ink_dim if ink_dim.a > 0.0 else ink
 	var bs := buttons(area, shift, enter)
 	var split := space_split(bs)
+	# Дорожки зон — ДО граней, одним проходом: подложки одного пальца
+	# перекрываются и сливаются, чужие делят границу посередине зазора.
+	if not lane.is_empty():
+		for b in bs:
+			var lr0 := b["r"] as Rect2
+			var ls := String(b["s"])
+			var lk := ls
+			if lane.has(ls + ":Л"):
+				lk = ls + (":Л" if lr0.get_center().x < split else ":П")
+			if not lane.has(lk):
+				continue
+			var lr := lane_rect(lr0, area)
+			if lr.size.x <= 0.0 or lr.size.y <= 0.0:
+				continue
+			ci.draw_rect(lr, lane[lk] as Color)
 	for b in bs:
 		var r := b["r"] as Rect2
 		var s := String(b["s"])
 		var shift_on := (s == "Shift" or s == "ShiftR") and shift
 		var hi_side := _hi_side_for(s, hi)
-		var exact := hi_sb != null and s in hi
+		var hi_box: StyleBox = hi_sb
+		if hi_boxes.has(s):
+			hi_box = hi_boxes[s] as StyleBox
+		var exact := hi_box != null and s in hi
 		# Системные клавиши низа стоят по обе стороны пробела с ОДНОЙ
 		# подписью (Ctrl/Win/Alt): сторону заливки даёт место клавиши.
 		var tint_key := s
@@ -1000,7 +1037,7 @@ static func draw(
 			(press_sb != null and s == press_key) or exact or shift_on
 		)
 		var box := key_box(s, tint_key, sb_on if shift_on else sb, tint,
-			press_sb, press_key, hi_sb, exact, shift_on, hot)
+			press_sb, press_key, hi_box, exact, shift_on, hot)
 		if s == "пробел" and not overridden:
 			var l_sb := space_half_box(hot, tint, "пробел:Л")
 			var r_sb := space_half_box(hot, tint, "пробел:П")
@@ -1010,8 +1047,8 @@ static func draw(
 				ci.draw_style_box(box, r)
 		else:
 			ci.draw_style_box(box, r)
-		if hi_sb != null and not exact and hi_side != "" and s == "пробел":
-			_draw_half(ci, r, hi_side, hi_sb, split)
+		if hi_box != null and not exact and hi_side != "" and s == "пробел":
+			_draw_half(ci, r, hi_side, hi_box, split)
 		if s == "глобус":
 			_draw_globe(ci, r.get_center(), minf(r.size.x, r.size.y) * 0.30, ink)
 			continue

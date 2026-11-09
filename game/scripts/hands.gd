@@ -230,6 +230,61 @@ static func paint_index(s: String, hot := false) -> int:
 	return tint_index(s)
 
 
+## Дорожки зон: ЦВЕТ подложки под каждой клавишей (не StyleBox — плоский
+## прямоугольник, см. Ui.FINGER_LANE_*). Клавиши одного пальца стоят
+## вплотную, их подложки смыкаются через зазор доски и читаются сплошной
+## секцией. Пробел — ОДНА дорожка одного цвета (как и его заливка,
+## `paint_index`): половины у клавиши только геометрические.
+##
+## Строится раз при создании экрана, темой меняется на месте
+## (`repaint_lanes`) — в кадре новых объектов нет.
+static func key_lanes(night: bool) -> Dictionary:
+	var out := {}
+	for row in Kbd.all_rows(true):
+		for label in row:
+			var s := String(label)
+			if s == "пробел":
+				continue
+			var i := tint_index(s)
+			if i < 0:
+				continue
+			out[s] = lane_colour(i, night)
+	# Подпись, стоящая в низу дважды (Ctrl/Alt, слева ещё и Win),
+	# сторону по себе не говорит — дорожка берётся по месту клавиши.
+	var twice := {}
+	for label in Kbd.bottom_row(true):
+		var s := String(label)
+		twice[s] = int(twice.get(s, 0)) + 1
+	for label in Kbd.bottom_row(true):
+		var s := String(label)
+		if int(twice[s]) < 2 or s == "пробел":
+			continue
+		var hl := tint_index(s + ":Л")
+		var hr := tint_index(s + ":П")
+		if hl < 0 or hr < 0:
+			continue
+		out[s + ":Л"] = lane_colour(hl, night)
+		out[s + ":П"] = lane_colour(hr, night)
+	out["пробел"] = lane_colour(paint_index("пробел"), night)
+	return out
+
+
+## Цвет дорожки зоны по теме.
+static func lane_colour(i: int, night: bool) -> Color:
+	var pal: Array = Ui.FINGER_LANE_NIGHT if night else Ui.FINGER_LANE_DAY
+	return pal[clampi(i, 0, pal.size() - 1)] as Color
+
+
+## Перекрасить дорожки в другую тему на месте: словарь тот же, цвета
+## подменяются — день↔ночь не рождает ни одного нового словаря.
+static func repaint_lanes(lanes: Dictionary, night: bool) -> void:
+	for s in lanes:
+		var i := paint_index(String(s))
+		if i < 0:
+			continue
+		lanes[s] = lane_colour(i, night)
+
+
 ## Перекрасить те же панели в другую тему на месте: узлы держат те же
 ## StyleBox, поэтому день↔ночь не рождает ни одной новой панели.
 static func repaint_tints(boxes: Dictionary, night: bool, hot := false) -> void:
@@ -839,22 +894,61 @@ static func _draw_contour(ci: CanvasItem, poly: PackedVector2Array,
 
 ## Демонстрация подсказки: палец идёт к клавише, стоит на ней и
 ## возвращается в покой. Тайминги одного цикла, секунды.
+##
+## КОМБИНАЦИЯ — ЭТО ПОСЛЕДОВАТЕЛЬНОСТЬ, А НЕ ОДНОВРЕМЕННОЕ НАЖАТИЕ
+## (автор 09.11.2026: «комбинации с шифтом и ему подобные, где на самом
+## деле нажатие должно быть не одновременным, а последовательным, надо
+## подчёркивать их последовательность в анимации, а не делать
+## одновременным»). Шифт жмут ПЕРВЫМ и держат, пока жмут букву, а
+## отпускают последним. Поэтому клавиши подсказки встают с разносом
+## `HINT_STAGGER_T` в порядке подсказки (шифт/глобус, потом буква), а
+## отпускаются в ОБРАТНОМ порядке с разносом `HINT_RELEASE_T`.
+## Одиночная подсказка (n = 1) — прежний цикл буква в букву:
+## `hint_cycle(1) == HINT_CYCLE_T`.
 const HINT_RISE_T := 0.34
 const HINT_HOLD_T := 0.42
 const HINT_FALL_T := 0.34
 const HINT_GAP_T := 0.90
+const HINT_STAGGER_T := 0.24
+const HINT_RELEASE_T := 0.18
 const HINT_CYCLE_T := HINT_RISE_T + HINT_HOLD_T + HINT_FALL_T + HINT_GAP_T
 
-## Ход демонстрации в фазе t: подъём — стоим — спад — пауза, дальше
-## цикл заново. ЧИСТАЯ МЕРА: ею ведёт руку main, её меряет hands_test
-## (симметрия подъёма/спада, период, покой в паузе).
-static func hint_depth(t: float) -> float:
-	var x := fposmod(t, HINT_CYCLE_T)
-	if x < HINT_RISE_T:
-		return smoothstep(0.0, 1.0, x / HINT_RISE_T)
-	if x < HINT_RISE_T + HINT_HOLD_T:
+
+## Период демонстрации для набора из n клавиш. Последняя клавиша встаёт
+## позже всех (n−1)·STAGGER, и весь набор ждёт её площадку; отпускание
+## разъезжается ещё на (n−1)·RELEASE.
+static func hint_cycle(n: int) -> float:
+	return HINT_CYCLE_T + float(maxi(n, 1) - 1) * (HINT_STAGGER_T + HINT_RELEASE_T)
+
+
+## Ход демонстрации i-й клавиши набора из n в фазе t: подъём — стоим —
+## спад — пауза, дальше цикл заново. ЧИСТАЯ МЕРА: ею ведёт руку main,
+## её меряют hands_test и combo_test (порядок влёта, обратный порядок
+## спада, период).
+##
+## Клавиша i встаёт в [i·STAGGER, i·STAGGER + RISE], стоит до общего
+## конца площадки и садится в [FALL_AT + (n−1−i)·RELEASE, ... + FALL]:
+## первым отпускается ПОСЛЕДНИЙ (буква), последним — первый (шифт).
+static func hint_depth_at(t: float, i: int, n: int) -> float:
+	var cnt := maxi(n, 1)
+	var idx := clampi(i, 0, cnt - 1)
+	var x := fposmod(t, hint_cycle(cnt))
+	var rise_at := float(idx) * HINT_STAGGER_T
+	var rise_end := rise_at + HINT_RISE_T
+	var hold_end := float(cnt - 1) * HINT_STAGGER_T + HINT_RISE_T + HINT_HOLD_T
+	var fall_at := hold_end + float(cnt - 1 - idx) * HINT_RELEASE_T
+	var fall_end := fall_at + HINT_FALL_T
+	if x < rise_at:
+		return 0.0
+	if x < rise_end:
+		return smoothstep(0.0, 1.0, (x - rise_at) / HINT_RISE_T)
+	if x < fall_at:
 		return 1.0
-	if x < HINT_RISE_T + HINT_HOLD_T + HINT_FALL_T:
-		return 1.0 - smoothstep(0.0, 1.0,
-			(x - HINT_RISE_T - HINT_HOLD_T) / HINT_FALL_T)
+	if x < fall_end:
+		return 1.0 - smoothstep(0.0, 1.0, (x - fall_at) / HINT_FALL_T)
 	return 0.0
+
+
+## Ход одиночной подсказки — прежняя мера (n = 1).
+static func hint_depth(t: float) -> float:
+	return hint_depth_at(t, 0, 1)

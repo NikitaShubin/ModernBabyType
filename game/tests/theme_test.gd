@@ -128,6 +128,12 @@ func _initialize() -> void:
 	_text(U.OK_TEXT_NIGHT, U.SURFACE_ALT_NIGHT, U.SURFACE_ALT_NIGHT, "«верно» на кнопке, ночь")
 	_text(U.STAR_DAY, card_day, card_day_worst, "звезда, день")
 	_text(U.STAR_NIGHT, card_night, card_night_worst, "звезда, ночь")
+	# Панель подсказки НЕПРОЗРАЧНАЯ (см. ui.gd): её заливка и есть фон
+	# подписи, поэтому «худшее небо» тут неуместно — проверяем на ней самой.
+	# Полупрозрачный жёлтый давал 2.21:1 ночью и коричневое пятно на
+	# насыщенной дорожке пальца днём (кадр 41).
+	_text(U.UI_TEXT_DAY, U.HINT_KEY_DAY, U.HINT_KEY_DAY, "подпись подсказки, день")
+	_text(U.UI_TEXT_NIGHT, U.HINT_KEY_NIGHT, U.HINT_KEY_NIGHT, "подпись подсказки, ночь")
 
 	# Метка опечатки — элемент, не текст: 3:1, но всё равно по-настоящему.
 	_edge(U.ERR_DAY, card_day, card_day_worst, "метка опечатки, день")
@@ -523,3 +529,56 @@ func _finger_palette() -> void:
 		var dn := _hdiff(_oklab(hot_n[a]).z, _oklab(hot_n[b]).z)
 		_check(dd >= 90.0, "соседи %d-%d, зона дня: %.0f° < 90" % [a, b, dd])
 		_check(dn >= 90.0, "соседи %d-%d, зона ночи: %.0f° < 90" % [a, b, dn])
+
+	# ДОРОЖКИ ЗОН — ПОДЛОЖКА ПОД КЛАВИШАМИ (автор 09.11.2026: «либо ещё
+	# заметнее цвета, либо вообще менять способ разделения на сектора»).
+	# Четвёртая пара массивов и ЧЕТВЁРТАЯ роль того же круга: hue слота
+	# тот же, светлота общей полосой на тему, а насыщенность — 0.85
+	# потолка gamut своего hue, поэтому она РАЗНАЯ у синего и розового.
+	# Меряем не «красиво», а то, ради чего дорожки заведены: их видно
+	# (контраст и ΔE к своей заливке) и сосед не сливается (90°).
+	var lane_d: Array = U.FINGER_LANE_DAY
+	var lane_n: Array = U.FINGER_LANE_NIGHT
+	for arr in [lane_d, lane_n]:
+		_check((arr as Array).size() == 10,
+			"дорожки зон: %d цветов вместо 10" % (arr as Array).size())
+	if lane_d.size() != 10 or lane_n.size() != 10:
+		return
+	for i in 10:
+		var ld: Color = lane_d[i]
+		var ln: Color = lane_n[i]
+		var old := _oklab(ld)
+		var oln := _oklab(ln)
+		var want := float(slot[i]) * 36.0
+		_check(ld.a >= 1.0 and ln.a >= 1.0, "дорожка %d: цвет без альфы" % i)
+		_check(absf(_hdiff(old.z, want)) <= 8.0,
+			"дорожка %d, день: hue %.0f, ждали %.0f" % [i, old.z, want])
+		_check(absf(_hdiff(oln.z, want)) <= 8.0,
+			"дорожка %d, ночь: hue %.0f, ждали %.0f" % [i, oln.z, want])
+		_check(_hdiff(old.z, oln.z) <= 10.0,
+			"дорожка %d: hue едет по теме (%.0f / %.0f)" % [i, old.z, oln.z])
+		_check(old.x >= 0.655 and old.x <= 0.665,
+			"дорожка %d, день: светлота %.3f вне 0.655..0.665" % [i, old.x])
+		_check(oln.x >= 0.595 and oln.x <= 0.605,
+			"дорожка %d, ночь: светлота %.3f вне 0.595..0.605" % [i, oln.x])
+		# Насыщенность в потолке gamut: ниже 0.085 дорожка «серая», и
+		# весь смысл подложки пропадает (это и была прошлая жалоба).
+		_check(old.y >= 0.085, "дорожка %d, день: насыщенность %.3f < 0.085" % [i, old.y])
+		_check(oln.y >= 0.085, "дорожка %d, ночь: насыщенность %.3f < 0.085" % [i, oln.y])
+		# Видно с одного взгляда: от своей заливки далеко и по цвету, и
+		# по контрасту (соседние клавиши делят с дорожкой одну грань).
+		_check(_okdist(day[i], ld) >= 0.18,
+			"дорожка %d, день: ΔE %.3f < 0.18 от заливки" % [i, _okdist(day[i], ld)])
+		_check(_okdist(night[i], ln) >= 0.18,
+			"дорожка %d, ночь: ΔE %.3f < 0.18 от заливки" % [i, _okdist(night[i], ln)])
+		_check(_cr(day[i], ld) >= 2.2,
+			"дорожка %d, день: контраст %.2f:1 < 2.2 к заливке" % [i, _cr(day[i], ld)])
+		_check(_cr(night[i], ln) >= 2.2,
+			"дорожка %d, ночь: контраст %.2f:1 < 2.2 к заливке" % [i, _cr(night[i], ln)])
+	for pair in [[0, 1], [1, 2], [2, 3], [3, 6], [6, 7], [7, 8], [8, 9], [4, 5]]:
+		var a := int((pair as Array)[0])
+		var b := int((pair as Array)[1])
+		var dd := _hdiff(_oklab(lane_d[a]).z, _oklab(lane_d[b]).z)
+		var dn := _hdiff(_oklab(lane_n[a]).z, _oklab(lane_n[b]).z)
+		_check(dd >= 90.0, "соседи %d-%d, дорожка дня: %.0f° < 90" % [a, b, dd])
+		_check(dn >= 90.0, "соседи %d-%d, дорожка ночи: %.0f° < 90" % [a, b, dn])

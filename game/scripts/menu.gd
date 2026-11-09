@@ -213,6 +213,9 @@ var kb_key_sb: StyleBoxFlat
 ## Заливки клавиш по пальцам: строятся раз (Hands.key_tints), темой
 ## перекрашиваются на месте — доска меню и доска игры красятся одинаково.
 var kb_tints: Dictionary = {}
+## Цвета дорожек зон под клавишами (Hands.key_lanes) — тот же способ
+## деления на сектора, что в игре.
+var kb_lanes: Dictionary = {}
 ## Заливка нажатой клавиши (та же краска ночью).
 var kb_press_sb: StyleBoxFlat
 var kb_press_ok_sb: StyleBoxFlat
@@ -236,7 +239,7 @@ func _draw_own_kb() -> void:
 		self, _own_rect(), kb_lang, kb_shift, true, mono,
 		int(30.0 * k), kb_key_sb, selbox_sb, _uitext(), [], null, _dim(),
 		kb_morph, kb_morph_from, kb_morph_shift, _press_sb(), kb_press,
-		kb_tints
+		kb_tints, {}, kb_lanes
 	)
 
 
@@ -377,6 +380,7 @@ func _ready() -> void:
 	box_sb = Ui.panel_sb(Ui.SURFACE_ALT_DAY, 10.0, Ui.LINE_DAY, 2.0, false)
 	kb_key_sb = Ui.panel_sb(Ui.SURFACE_ALT_DAY, 10.0, Ui.LINE_DAY, 2.0, false)
 	kb_tints = Hands.key_tints(false, 10.0, Ui.LINE_DAY, 2.0)
+	kb_lanes = Hands.key_lanes(false)
 	# Нажатая клавиша — заметная заливка: попал или промахнулся.
 	kb_press_sb = Ui.panel_sb(Ui.PRESS_DAY, 10.0, Ui.LINE_DAY, 2.5, false)
 	kb_press_ok_sb = Ui.panel_sb(Ui.OK_DAY, 10.0, Ui.OK_EDGE_DAY, 2.5, false)
@@ -3122,6 +3126,7 @@ func _apply_night() -> void:
 		kb_press_err_sb.border_color = Ui.DANGER_EDGE_DAY
 	# Клавиши по пальцам — той же темой: панели те же, меняется заливка.
 	Hands.repaint_tints(kb_tints, night)
+	Hands.repaint_lanes(kb_lanes, night)
 	if _meadow != null:
 		_meadow.night = night
 		_meadow._apply_sky()
