@@ -1318,13 +1318,7 @@ func _tint_checks(bs: Array) -> void:
 		var got := Hands.tint_index(String((pair as Array)[0]))
 		_check(got == want,
 			"tint of '%s' is %d, want %d" % [(pair as Array)[0], got, want])
-	# Сторона в подписи: тот же палец, но своя рука.
-	_check(Hands.tint_index("Ctrl:Л") == 0 and Hands.tint_index("Ctrl:П") == 9,
-		"Ctrl gets a side: left pinky / right pinky")
-	_check(Hands.tint_index("Win:Л") == 0 and Hands.tint_index("Win:П") == 9,
-		"Win gets a side too")
-	_check(Hands.tint_index("Alt:Л") == 0 and Hands.tint_index("Alt:П") == 9,
-		"Alt gets a side too")
+	# Сторона в подписи: у половин пробела она несёт руку большого.
 	_check(Hands.tint_index("пробел:Л") == 4 and Hands.tint_index("пробел:П") == 5,
 		"space halves are the two thumbs")
 	_check(Hands.tint_index("нет-такой") == -1, "an unknown key has no tint")
@@ -1337,7 +1331,25 @@ func _tint_checks(bs: Array) -> void:
 		"the index|index boundary spans %d hue slots, want >= 3" % gap)
 
 	var hot := Hands.key_tints(false, 10.0, 2.0)
-	var split := Kbd.space_split(bs)
+	# Мёртвые клавиши в зону не входят вовсе (автор 10.11.2026: «и левые, и
+	# правые шифты, контролы и прочее… и с двух сторон!»). Живой клавише
+	# панель есть, мёртвой — нет: иначе «Ctrl»/«Alt»/«Win» с одной подписью
+	# красятся обе сразу.
+	var dead_hot := 0
+	var live_bare := 0
+	for b in bs:
+		var s0 := String(b["s"])
+		if s0 == "пробел":
+			continue
+		if Kbd.is_dead(s0):
+			if hot.has(s0):
+				dead_hot += 1
+		elif not hot.has(s0):
+			live_bare += 1
+	_check(dead_hot == 0, "%d dead keys got a hint-zone panel" % dead_hot)
+	_check(live_bare == 0, "%d live keys have no hint-zone panel" % live_bare)
+	for key in ["Ctrl", "Win", "Alt", "Tab", "Caps", "◀", "↕", "▶"]:
+		_check(not hot.has(key), "the dead key '%s' is in the hint zone" % key)
 	# Зона подсказки — ОДНА на палец и рука: панели уже с рамкой, поэтому
 	# отдельных «спокойных» заливок нет; при подсказке доска бумажная
 	# (заливки пальцев гаснут), и зона остаётся единственным цветом.
@@ -1360,14 +1372,18 @@ func _tint_checks(bs: Array) -> void:
 		var top_rows := ri < 4
 		for b in row:
 			var s := String(b["s"])
-			var hk := s
-			if hot.has(s + ":Л"):
-				var cx: float = (b["r"] as Rect2).get_center().x
-				hk = s + (":Л" if cx < split else ":П")
-			_check(hot.has(hk), "row %d: '%s' has a hot box" % [key, s])
-			if not hot.has(hk):
+			if s == "пробел":
+				_check(hot.has("пробел:Л") and hot.has("пробел:П"),
+					"row %d: the space lost its halves" % key)
 				continue
-			var cur := Hands.tint_index(hk)
+			if Kbd.is_dead(s):
+				_check(not hot.has(s),
+					"row %d: the dead key '%s' has a hot box" % [key, s])
+				continue
+			_check(hot.has(s), "row %d: '%s' has a hot box" % [key, s])
+			if not hot.has(s):
+				continue
+			var cur := Hands.tint_index(s)
 			var cur_slot := -1
 			if cur >= 0:
 				cur_slot = int(Ui.FINGER_SLOT[cur])
@@ -1462,18 +1478,28 @@ func _tint_checks(bs: Array) -> void:
 		"the held shift stays above the hot zone")
 	_check(Kbd.key_box("ы", "ы", base, press, "", hi, false, false, zone) == base,
 		"a key of another finger stays plain paper")
-	# Системные клавиши низа несут сторону зоны по МЕСТУ клавиши: зона
-	# ПРАВОГО мизинца не должна красить левый Ctrl.
+	# Мёртвые клавиши в зону НЕ входят: подпись «Ctrl»/«Alt»/«Win» стоит в
+	# низу дважды, и раньше зона ПРАВОГО мизинца красила обе клавиши сразу
+	# (автор 10.11.2026: «и левые, и правые… и с двух сторон!»).
 	var zone_r := {}
 	for s in hot:
 		if Hands.tint_index(String(s)) == 9:
 			zone_r[s] = hot[s]
-	_check(Kbd.key_box("Ctrl", "Ctrl:Л", base, press, "", hi, false, false, zone_r) == base,
-		"the left Ctrl is not in the right-pinky zone")
-	_check(Kbd.key_box("Ctrl", "Ctrl:П", base, press, "", hi, false, false, zone_r) == hot["Ctrl:П"],
-		"the right Ctrl takes the right-pinky zone")
-	_check(hot.has("Ctrl:Л") and hot.has("Ctrl:П"),
-		"the Ctrl sides are separate boxes")
+	for key in ["Ctrl", "Alt", "Win", "Tab", "Caps", "◀", "↕", "▶"]:
+		_check(not zone_r.has(key),
+			"the right-pinky zone swallowed the dead key '%s'" % key)
+	_check(zone_r.has("ShiftR") and not zone_r.has("Shift"),
+		"the right-pinky zone has one shift, not both")
+	_check(Kbd.key_box("Ctrl", "Ctrl", base, press, "", hi, false, false, zone_r) == base,
+		"a dead key stays paper inside the zone")
+	var zone_l := {}
+	for s in hot:
+		if Hands.tint_index(String(s)) == 0:
+			zone_l[s] = hot[s]
+	_check(zone_l.has("Shift") and not zone_l.has("ShiftR"),
+		"the left-pinky zone has one shift, not both")
+	_check(Kbd.key_box("Alt", "Alt", base, press, "", hi, false, false, zone_l) == base,
+		"the left Alt stays paper inside the left-pinky zone")
 
 	# ЗАЛИВКИ ЛИЦ КЛАВИШ (автор 10.11.2026: «виртуальная клавиатура
 	# раскрашивает фон вокруг кнопок, а не сами кнопки»). Цвет лежит В

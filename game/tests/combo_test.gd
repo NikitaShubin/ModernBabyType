@@ -4169,6 +4169,26 @@ func _case_hint_zone() -> void:
 		"%s: the letter zone of the hint is incomplete" % tag)
 	_check(not two.has("Shift"),
 		"%s: the other hand's shift went hot too" % tag)
+	# Служебные клавиши низа (Ctrl/Win/Alt, Tab, Caps, стрелки) в набор не
+	# входят и в зону не попадают: их подпись стоит в низу ДВАЖДЫ, и зона
+	# пальца красила обе клавиши сразу (автор 10.11.2026: «и левые, и
+	# правые шифты, контролы и прочее… и с двух сторон!»).
+	for key in ["Ctrl", "Alt", "Win", "Tab", "Caps", "◀", "↕", "▶"]:
+		_check(not two.has(key),
+			"%s: the dead key '%s' went hot with the pinky" % [tag, key])
+	var left_pinky: Dictionary = _main._hot_zone(["ф"])
+	_check(not left_pinky.has("Shift"),
+		"%s: the left pinky lit its shift though the hint is a letter" % tag)
+	_check(not left_pinky.has("ShiftR"),
+		"%s: the left pinky lit the other hand's shift" % tag)
+	_check(not left_pinky.has("Ctrl") and not left_pinky.has("Alt"),
+		"%s: the left pinky lit the dead service keys" % tag)
+	# Шифт горит в зоне ТОЛЬКО когда он сам в наборе: подсказка
+	# «ShiftR + й» (заглавная на левом мизинце) раньше зажигала оба шифта
+	# — правый как цель и левый как «зону пальца» (автор 10.11.2026).
+	var caps: Dictionary = _main._hot_zone(["ShiftR", "й"])
+	_check(caps.has("ShiftR") and not caps.has("Shift"),
+		"%s: a left-pinky capital lit both shifts" % tag)
 	# Зоны комбинации горят ПО ОЧЕРЕДИ: у каждой клавиши набора своя зона
 	# и своя фаза мигания (автор 09.11.2026: последовательность, а не
 	# одновременное нажатие). Сдвиг фаз — тот же такт, что у вставания
