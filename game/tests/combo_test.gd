@@ -3669,6 +3669,7 @@ func _fill_cases() -> void:
 	_cases_list.append(["_case_hands_hint_demo", Callable(self, "_case_hands_hint_demo"), 0])
 	_cases_list.append(["_case_hands_shift_hand", Callable(self, "_case_hands_shift_hand"), 0])
 	_cases_list.append(["_case_hint_zone", Callable(self, "_case_hint_zone"), 0])
+	_cases_list.append(["_case_hands_real_press", Callable(self, "_case_hands_real_press"), 0])
 # (конец списка кейсов)
 ## Холмы по рецепту автора (18.10.2026 после релиза: «не уменьшать
 ## радиусы, а опустить вниз центры, радиусы вернуть большими»): при
@@ -4169,26 +4170,31 @@ func _case_hint_zone() -> void:
 		"%s: the letter zone of the hint is incomplete" % tag)
 	_check(not two.has("Shift"),
 		"%s: the other hand's shift went hot too" % tag)
-	# Служебные клавиши низа (Ctrl/Win/Alt, Tab, Caps, стрелки) в набор не
-	# входят и в зону не попадают: их подпись стоит в низу ДВАЖДЫ, и зона
-	# пальца красила обе клавиши сразу (автор 10.11.2026: «и левые, и
-	# правые шифты, контролы и прочее… и с двух сторон!»).
+	# В ЗОНЕ — ДЕЙСТВИТЕЛЬНЫЕ КЛАВИШИ ПАЛЬЦА (автор 10.11.2026: «пусть в
+	# секторах подсказок подсвечиваются все действительные кнопки, за
+	# которые отвечает рабочий палец»). Мёртвые (`Tab`, `Caps`, `Ctrl`,
+	# `Win`, `Alt`, стрелки кластера) в зону НЕ ВХОДЯТ: подсветка звала бы
+	# нажать то, чего игра не принимает (автор: «у тебя опять на мизинцы
+	# отведены даже альты!»).
+	for key in ["ShiftR", "←", "↵", "0", "ж", "э", ".", "\\"]:
+		_check(two.has(key),
+			"%s: the right pinky zone lost the live key '%s'" % [tag, key])
 	for key in ["Ctrl", "Alt", "Win", "Tab", "Caps", "◀", "↕", "▶"]:
 		_check(not two.has(key),
-			"%s: the dead key '%s' went hot with the pinky" % [tag, key])
+			"%s: the dead key '%s' went hot in the zone" % [tag, key])
 	var left_pinky: Dictionary = _main._hot_zone(["ф"])
-	_check(not left_pinky.has("Shift"),
-		"%s: the left pinky lit its shift though the hint is a letter" % tag)
-	_check(not left_pinky.has("ShiftR"),
-		"%s: the left pinky lit the other hand's shift" % tag)
-	_check(not left_pinky.has("Ctrl") and not left_pinky.has("Alt"),
-		"%s: the left pinky lit the dead service keys" % tag)
-	# Шифт горит в зоне ТОЛЬКО когда он сам в наборе: подсказка
-	# «ShiftR + й» (заглавная на левом мизинце) раньше зажигала оба шифта
-	# — правый как цель и левый как «зону пальца» (автор 10.11.2026).
+	for key in ["Shift", "ё", "1", "й", "ф", "я"]:
+		_check(left_pinky.has(key),
+			"%s: the left pinky zone lost the live key '%s'" % [tag, key])
+	for key in ["ShiftR", "Win", "Tab", "Caps", "Ctrl", "Alt", "глобус"]:
+		_check(not left_pinky.has(key),
+			"%s: the left pinky zone lit '%s'" % [tag, key])
+	# Подсказка «ShiftR + й»: правый шифт — ЦЕЛЬ, левый — клавиша зоны
+	# левого мизинца (там же «й»). Оба шифта горячие — и это правильно:
+	# у учащегося в секторе ровно те клавиши, которые жмёт эта рука.
 	var caps: Dictionary = _main._hot_zone(["ShiftR", "й"])
-	_check(caps.has("ShiftR") and not caps.has("Shift"),
-		"%s: a left-pinky capital lit both shifts" % tag)
+	_check(caps.has("ShiftR") and caps.has("Shift"),
+		"%s: the shift zones of both hands are not lit" % tag)
 	# Зоны комбинации горят ПО ОЧЕРЕДИ: у каждой клавиши набора своя зона
 	# и своя фаза мигания (автор 09.11.2026: последовательность, а не
 	# одновременное нажатие). Сдвиг фаз — тот же такт, что у вставания
@@ -4338,6 +4344,112 @@ func _case_hint_zone() -> void:
 	_main.lane_tip_seen = true
 	_main.profile_zones = false
 	_main._fill_reset()
+	_common(tag)
+
+
+## 45в. РЕАЛЬНОЕ НАЖАТИЕ ИДЁТ ТОЙ ЖЕ РУКОЙ И ТЕМ ЖЕ ПАЛЬЦЕМ, ЧТО ЗОВЁТ
+## ПОДСКАЗКА (автор 10.11.2026, три жалобы разом):
+##   • «при нажатии точки двигается почему-то безымянный палец, а мизинец
+##     в кнопку вообще не попадает»;
+##   • «при попытке нажать правый шифт и левый П… левая рука зажимает
+##     шифт, а не правая»;
+##   • «если я нажимаю шифт+букву, в анимации нажатие шифта я вижу,
+##     а вот нажатия буквы уже нет».
+## Корни: подпись клавиши искалась обратным ходом по RU_EN («.»,→«ю»),
+## руку шифта решало только правило противоположной руки (подсказку не
+## спрашивало), а `_hands_presses` выходил раньше времени, если подсказки
+## нет — ровно в тот момент, когда человек нажал клавишу.
+func _case_hands_real_press() -> void:
+	_fresh(0, 1)
+	_kbd_on()
+	var tag := "hands real press"
+	_main.grace_t = 9999.0
+	_main.enemy_cps = B.BASE_CPS
+	_main.press_ema = 0.6
+	var btns := _kbd_buttons()
+
+	# ---- 1. ТОЧКА — ПРАВЫЙ МИЗИНЕЦ, А НЕ БЕЗЫМЯННЫЙ.
+	# Ход тот же, что у тапа: _own_press зовёт _flash, а тот — _hands_hit.
+	_main._hands_curs.clear()
+	_main._hands_held.clear()
+	_main.idle_t = 0.0
+	_main.call("_flash", ".")
+	var rc: Dictionary = _main._hands_curs.get(Hands.RIGHT, {}) as Dictionary
+	_check(
+		String((rc.get(Hands.PINKY, [""]) as Array)[0]) == ".",
+		"%s: the period did not land on the right pinky (%s)"
+		% [tag, str(_main._hands_curs)]
+	)
+	_check(not rc.has(Hands.RING),
+		"%s: the period moved the ring finger" % tag)
+
+	# ---- 2. ШИФТ + БУКВА: АНИМИРУЮТСЯ ОБЕ КЛАВИШИ.
+	# Подсказки в этот момент НЕТ — её гасит сам ввод, и раньше вместе с
+	# ней пропадал импульс только что нажатой буквы.
+	_set_level_text(["Папа пришёл домой."], [false])
+	_main.active.clear()
+	for line in _main.display_lines:
+		for i in String(line).length():
+			_main.active[String(line).substr(i, 1).to_lower()] = true
+	_main._refresh()
+	_main.state = "playing"
+	_main._hands_curs.clear()
+	_main._hands_held.clear()
+	_main.kb_held = ""
+	_main.idle_t = 0.0
+	_tick(tag)
+	_check(_main._hands_hint.is_empty(),
+		"%s: a hint is up where the case wants none" % tag)
+	_main.call("_own_press", btns["Shift"], true)
+	_check(_main._hands_held.has("шифт"), "%s: the shift is not held" % tag)
+	_main.call("_own_press", btns["п"], true)
+	var pr := _main.call("_hands_presses") as Dictionary
+	var lp: Dictionary = pr.get(Hands.LEFT, {}) as Dictionary
+	_check(
+		String((lp.get(Hands.INDEX, [""]) as Array)[0]) == "п",
+		"%s: the letter is not animated with the shift held (%s)"
+		% [tag, str(pr)]
+	)
+	var rp: Dictionary = pr.get(Hands.RIGHT, {}) as Dictionary
+	var rp_key := String((rp.get(Hands.PINKY, [""]) as Array)[0])
+	_check(rp_key == "Shift" or rp_key == "ShiftR",
+		"%s: the shift lost its finger while the letter is pressed (%s)"
+		% [tag, str(pr)])
+
+	# ---- 3. РУКА ШИФТА — РУКА ПОДСКАЗКИ.
+	# Подсказка заглавной «П»: буква на ЛЕВОЙ руке, значит шифт — правый
+	# («ShiftR»). Последняя буква пришла с правой руки (last_hand = «П»),
+	# и прежнее правило увело бы шифт на левую кисть — подсказка показывала
+	# бы одно, а рука делала другое.
+	_set_level_text(["Ппп ппп"], [false])
+	_main.active.clear()
+	for line in _main.display_lines:
+		for i in String(line).length():
+			_main.active[String(line).substr(i, 1).to_lower()] = true
+	_main._refresh()
+	_main.state = "playing"
+	_main._hands_curs.clear()
+	_main._hands_held.clear()
+	_main.kb_held = ""
+	_main.last_hand = "П"
+	_main.idle_t = _main._hint_delay() + 0.5
+	_tick(tag)
+	var hi: Array = _main._hint_keys()
+	_check(hi.size() == 2 and String(hi[0]) == "ShiftR",
+		"%s: expected the right shift in the hint, got %s" % [tag, str(hi)])
+	# Жмём ЛЕВЫЙ шифт (прямоугольник левой клавиши) — кисть обязана уйти
+	# на ПРАВУЮ, потому что подсказка зовёт правую.
+	_main.call("_own_press", btns["Shift"], true)
+	var rc3: Dictionary = _main._hands_curs.get(Hands.RIGHT, {}) as Dictionary
+	var lc3: Dictionary = _main._hands_curs.get(Hands.LEFT, {}) as Dictionary
+	_check(
+		String((rc3.get(Hands.PINKY, [""]) as Array)[0]) == "ShiftR",
+		"%s: the shift animation went to the wrong hand (%s)"
+		% [tag, str(_main._hands_curs)]
+	)
+	_check(not lc3.has(Hands.PINKY),
+		"%s: the left hand grips the shift while the hint asks for the right"
+		% tag)
 	_common(tag)
 
 
