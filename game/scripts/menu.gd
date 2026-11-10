@@ -132,6 +132,20 @@ var _press_pos := Vector2.ZERO
 const DRAG_MIN := 10.0
 var input_active := false
 var input_text := ""
+## Приёмник СИСТЕМНОЙ клавиатуры (автор 10.11.2026: «в главном меню при
+## написании нового или переписывания старого имени появляется наша
+## виртуальная клавиатура, а лучше, если там будет системная»). На
+## телефоне имя правит клавиатура системы, а наша доска в меню не
+## рисуется и места не занимает.
+## LineEdit прозрачный: он не виден и не ловит мышь, но держит фокус,
+## IME и текст — рисуем по-прежнему строку списка (своя типографика,
+## свои кегли). На десктопе системной клавиатуры нет, там остаётся доска.
+var sys_field: LineEdit
+## Переопределение для тестов: −1 — как на платформе, 0/1 — выключить/включить.
+var sys_kb_override := -1
+## Идёт программная запись в приёмник: его text_changed в этот момент
+## молчит (иначе наш текст и текст IME разъезжались бы).
+var _sys_syncing := false
 ## Флаг «все клавиши» для имени, которое прямо сейчас вводится (списка
 ## ещё нет — применять не к кому). При создании профиля переносится
 ## в него, затем сбрасывается.
@@ -142,6 +156,10 @@ var quit_requested := false
 var quit_enabled := true
 ## То же для строгой ё (колонка «Ё»): ждёт создания профиля.
 var input_yo_strict := true
+## «Зоны»: цветные дорожки под клавишами постоянно (колонка «Зоны»,
+## третья кнопка перед крестиком). По умолчанию выключено; ждёт создания
+## профиля так же, как два флага выше.
+var input_zones := false
 ## Самообновление с GitHub: только по кнопке (никакой фоновой магии).
 ## Состояния: "" покой, "checking" проверка, "latest" всё свежее,
 ## "error" ошибка с текстом, "downloading" качаем. Модалка «Вышла X?»
@@ -159,10 +177,10 @@ var _upd_tag := ""
 var _upd_url := ""
 var _upd_notes: Array[String] = []
 var _upd_open := false
-## Выбранная колонка флагов: 0 — «Про», 1 — «Ё». Стрелки ←/→ двигают,
-## пробел переключает. Видна подсветкой заголовка.
+## Выбранная колонка флагов: 0 — «Про», 1 — «Ё», 2 — «Зоны». Стрелки
+## ←/→ двигают, пробел переключает. Видна подсветкой заголовка.
 var sel_col := 0
-## Подсказка по заголовку колонки («pro»/«yo»): тап по заголовку
+## Подсказка по заголовку колонки («pro»/«yo»/«zones»): тап по заголовку
 ## объясняет, что за галка. Пусто — молчим.
 var hint_header := ""
 ## Игрок, ради которого меню открыли: F2 возвращает в игру с ним.
@@ -324,7 +342,7 @@ func _own_press(pos: Vector2, finger := false) -> bool:
 		kb_held = "шифт"
 		_set_kb_shift(true)
 	if act == "стереть":
-		input_text = input_text.left(maxi(0, input_text.length() - 1))
+		_input_text_set(input_text.left(maxi(0, input_text.length() - 1)))
 	elif act == "язык":
 		# Глобус реально меняет язык ввода (см. игру): та же клавиша
 		# даёт другую букву, подсветка перетекает.
@@ -347,7 +365,7 @@ func _own_press(pos: Vector2, finger := false) -> bool:
 		# Имя набирается верно — вспышка зелёная (автор 10.2026).
 		_flash(act, true)
 		if input_text.length() < S.MAX_NAME_LENGTH:
-			input_text += ch if ch != "" else act
+			_input_text_set(input_text + (ch if ch != "" else act))
 	queue_redraw()
 	get_viewport().set_input_as_handled()
 	return true
@@ -361,6 +379,9 @@ var list_frame_sb: StyleBoxFlat
 ## выделения (см. _ready и _card_chip).
 var chip_on_sb: StyleBoxFlat
 var chip_focus_sb: StyleBoxFlat
+## Крестик удаления в карточке — красный квадрат (автор 10.11.2026:
+## опасное действие подкрашено и не тянется на всю треть ряда).
+var del_sb: StyleBoxFlat
 ## Ночь (S.resolve_night: ручной выбор или система). Краски берутся
 ## из хелперов _ink/_uitext/_dim, панели мутируют в _apply_night.
 var night := false
@@ -394,6 +415,9 @@ func _ready() -> void:
 	# Выделение колонки с клавиатуры — только ободок, заливку не трогает:
 	# иначе фокус снова прятал состояние флага.
 	chip_focus_sb = Ui.panel_sb(Color(0, 0, 0, 0), 10.0, Ui.FOCUS_DARK, 3.0, false)
+	# Крестик-квадрат: красная заливка. Опасное действие отличается от
+	# трёх чипов и формой, и цветом, поэтому его не нажать по инерции.
+	del_sb = Ui.panel_sb(Ui.DANGER_DAY, 10.0, Ui.DANGER_EDGE_DAY, 2.0, false)
 	# Рамка списка — та же тихая обводка, что у пилюли-подсказки
 	# (автор 16.10.2026: рамка должна быть скруглённой и неконтрастной,
 	# в стиле остального интерфейса). Заливки нет, только контур.
@@ -445,6 +469,10 @@ func _relayout() -> void:
 	# следом, если правится имя (там важнее строка ввода, а не sel).
 	if not users.is_empty() and editing < 0:
 		_scroll_to_sel()
+	# Системная клавиатура сидит на строке правки: окно сменилось
+	# (поворот, выезд самой клавиатуры) — строку надо догнать.
+	if sys_field != null and input_active:
+		_sys_place()
 	queue_redraw()
 
 
@@ -477,9 +505,11 @@ func _list_need_at(kk: float) -> float:
 
 
 ## Высота верхней панели при масштабе kk — тот же запас, что и на экране.
+## Высота верхней панели при масштабе kk — та же ДВУХСТРОЧНАЯ мера, что
+## и на экране (кнопки + воздух + заголовок).
 func _bar_h_at(kk: float) -> float:
-	var gh: float = float(_font_h(40 if _cards() else FONT_TITLE))
-	var h: float = maxf(_tap_h_at(44.0 * kk), gh * kk)
+	var gh: float = float(_font_h(40 if _cards() else FONT_TITLE)) * kk
+	var h: float = _tap_h_at(44.0 * kk) + maxf(8.0 * kk, 6.0) + gh
 	return h + maxf(9.0 * kk, 6.0) * 2.0
 
 
@@ -510,8 +540,30 @@ func open(resume: String) -> void:
 	queue_redraw()
 
 
+## Системная «назад» (Android/Web). Зовёт main._go_back, когда меню
+## открыто: движок сам приложение не гасит (project.godot,
+## quit_on_go_back=false). Лестница та же, что у Esc, — сначала
+## закрываем то, что открыто, и только из списка уходим совсем.
+func back_pressed() -> void:
+	if not visible:
+		return
+	if confirm_name != "":
+		_cancel_confirm()
+		return
+	if _upd_open:
+		_upd_no()
+		return
+	if editing >= 0:
+		_cancel_edit()
+		return
+	quit_requested = true
+	if quit_enabled:
+		get_tree().quit()
+
+
 ## Закрыть меню: скрыть и заглушить процесс до следующего open().
 func close() -> void:
+	_sys_end()
 	visible = false
 	process_mode = Node.PROCESS_MODE_DISABLED
 	queue_redraw()
@@ -746,16 +798,16 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		_nav_to(users.size() - 1)
 		_eaten()
 		return
-	# Стрелки ←/→ — выбор колонки флагов (Про/Ё), пробел — переключить
-	# флаг у выбранной строки. В поле ввода пробел молчит (имени
-	# с пробелами не бывает), модалку стрелки не трогают (она выше).
+	# Стрелки ←/→ — выбор колонки флагов (Про/Ё/Зоны), пробел —
+	# переключить флаг у выбранной строки. В поле ввода пробел молчит
+	# (имени с пробелами не бывает), модалку стрелки не трогают (выше).
 	if ke.keycode == KEY_LEFT:
-		sel_col = (sel_col + 1) % 2
+		sel_col = (sel_col + 2) % 3
 		queue_redraw()
 		_eaten()
 		return
 	if ke.keycode == KEY_RIGHT:
-		sel_col = (sel_col + 1) % 2
+		sel_col = (sel_col + 1) % 3
 		queue_redraw()
 		_eaten()
 		return
@@ -798,7 +850,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if ke.keycode == KEY_BACKSPACE or ke.unicode == 8:
 		if not input_active:
 			return
-		input_text = input_text.left(maxi(0, input_text.length() - 1))
+		_input_text_set(input_text.left(maxi(0, input_text.length() - 1)))
 		queue_redraw()
 		_eaten()
 		return
@@ -814,7 +866,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	# их быть не должно, а имя всё равно обрежется по краям.
 	if ke.unicode < 32 or ch == " " or input_text.length() >= S.MAX_NAME_LENGTH:
 		return
-	input_text += ch
+	_input_text_set(input_text + ch)
 
 	queue_redraw()
 	_eaten()
@@ -1181,6 +1233,10 @@ func _tap(pos: Vector2) -> void:
 			_toggle_yo(editing)
 			get_viewport().set_input_as_handled()
 			return
+		if _zones_tap_rect(editing).has_point(pos):
+			_toggle_zones(editing)
+			get_viewport().set_input_as_handled()
+			return
 		if _del_tap_rect(editing).has_point(pos):
 			_cancel_edit()
 			get_viewport().set_input_as_handled()
@@ -1206,6 +1262,10 @@ func _tap(pos: Vector2) -> void:
 			return
 		if _yo_tap_rect(i).has_point(pos):
 			_toggle_yo(i)
+			get_viewport().set_input_as_handled()
+			return
+		if _zones_tap_rect(i).has_point(pos):
+			_toggle_zones(i)
 			get_viewport().set_input_as_handled()
 			return
 		if _del_tap_rect(i).has_point(pos):
@@ -1252,6 +1312,11 @@ func _tap(pos: Vector2) -> void:
 		return
 	if not users.is_empty() and _yo_head_rect().has_point(pos):
 		hint_header = "" if hint_header == "yo" else "yo"
+		queue_redraw()
+		get_viewport().set_input_as_handled()
+		return
+	if not users.is_empty() and _zones_head_rect().has_point(pos):
+		hint_header = "" if hint_header == "zones" else "zones"
 		queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
@@ -1552,6 +1617,23 @@ func _toggle_yo(i: int) -> void:
 	_scroll_to_sel()
 
 
+## Цветные сектора строке: дорожки под клавишами горят постоянно.
+func _toggle_zones(i: int) -> void:
+	if i == users.size() and editing_new:
+		input_zones = not input_zones
+		hint_header = "zones" if _cards() else hint_header
+		queue_redraw()
+		return
+	if i < 0 or i >= users.size():
+		return
+	var name := users[i]
+	S.set_zones(name, not S.get_zones(name))
+	_reload()
+	if _cards():
+		hint_header = "zones"
+	_scroll_to_sel()
+
+
 ## Пробел по флагам: выбранная стрелками колонка (sel_col) у выбранной
 ## строки — или у вводимого имени, если список пуст.
 func _toggle_flag() -> void:
@@ -1560,14 +1642,18 @@ func _toggle_flag() -> void:
 	if users.is_empty():
 		if sel_col == 0:
 			input_all_keys = not input_all_keys
-		else:
+		elif sel_col == 1:
 			input_yo_strict = not input_yo_strict
+		else:
+			input_zones = not input_zones
 		queue_redraw()
 		return
 	if sel_col == 0:
 		_toggle_pro(sel)
-	else:
+	elif sel_col == 1:
 		_toggle_yo(sel)
+	else:
+		_toggle_zones(sel)
 
 
 func _guest() -> void:
@@ -1586,7 +1672,7 @@ func _cell_texts(name: String) -> Array[String]:
 	return res
 
 
-## Колонки таблицы [имя, уровень, счёт, Про, Ё, ✕]: левые края
+## Колонки таблицы [имя, уровень, счёт, Про, Ё, Зоны, ✕]: левые края
 ## и правый край. Имя занимает остаток (длинные режем с многоточием),
 ## остальные — по самой широкой ячейке. Та же геометрия у отрисовки,
 ## хит-теста и тестов: мимо не бьёт.
@@ -1629,6 +1715,7 @@ func _table_cols_now() -> Array[float]:
 	var del_w := maxf(36.0 * k, col_min)
 	var pro_w := maxf(_text_size("Про", FONT_SMALL).x + 28.0 * k, col_min)
 	var yo_w := maxf(_text_size("Ё", FONT_SMALL).x + 28.0 * k, col_min)
+	var zones_w := maxf(_text_size("Зоны", FONT_SMALL).x + 28.0 * k, col_min)
 	var lvl_w := _text_size("Ур", FONT_SMALL).x + 10.0 * k
 	var rec_w := _text_size("Победы", FONT_SMALL).x + 10.0 * k
 	for u in users:
@@ -1645,7 +1732,7 @@ func _table_cols_now() -> Array[float]:
 	# длинному имени + воздух с обеих сторон: иначе на широком окне (где
 	# масштаб растёт от высоты) колонки сжимаются и текст слипается.
 	var min_name := maxf(80.0 * k, _table_name_need() + gap)
-	var flag_want := lvl_w + rec_w + pro_w + yo_w + del_w + gap * 5.0
+	var flag_want := lvl_w + rec_w + pro_w + yo_w + zones_w + del_w + gap * 6.0
 	var name_w := maxf(min_name, avail - flag_want)
 	if name_w + flag_want > avail:
 		# Совсем тесно (тест жмёт view_w до 64): резервируем имени часть
@@ -1655,18 +1742,23 @@ func _table_cols_now() -> Array[float]:
 		var squeeze := clampf((avail - name_reserve) / flag_want, 0.0, 1.0)
 		pro_w *= squeeze
 		yo_w *= squeeze
+		zones_w *= squeeze
 		del_w *= squeeze
 		lvl_w *= squeeze
 		rec_w *= squeeze
 		gap *= squeeze
-		name_w = maxf(0.0, avail - (lvl_w + rec_w + pro_w + yo_w + del_w + gap * 5.0))
+		name_w = maxf(0.0, avail - (
+			lvl_w + rec_w + pro_w + yo_w + zones_w + del_w + gap * 6.0))
 	var name_x := left + strip
 	var lvl_x := name_x + name_w + gap
 	var rec_x := lvl_x + lvl_w + gap
 	var pro_x := rec_x + rec_w + gap
 	var yo_x := pro_x + pro_w + gap
-	var del_x := yo_x + yo_w + gap
-	var cols: Array[float] = [name_x, lvl_x, rec_x, pro_x, yo_x, del_x, right]
+	var zones_x := yo_x + yo_w + gap
+	var del_x := zones_x + zones_w + gap
+	var cols: Array[float] = [
+		name_x, lvl_x, rec_x, pro_x, yo_x, zones_x, del_x, right
+	]
 	return cols
 
 
@@ -1846,14 +1938,128 @@ func _menu_eff_h() -> float:
 	return Ui.eff_h(view_h, _own_h())
 
 
+## Кто набирает имя — системная клавиатура или наша доска.
+##
+## Системная — на телефоне (автор 10.11.2026: «в главном меню при
+## написании нового или переписывания старого имени появляется наша
+## виртуальная клавиатура, а лучше, если там будет системная»). На
+## десктопе системной клавиатуры нет вовсе, там остаётся своя доска (она
+## же и подсказка, меню в этом смысле не изменилось).
+## Наличие платформы спрашиваем у движка, а не у ОС: сборка без неё
+## осталась бы вовсе без клавиатуры — тогда честнее наша доска.
+func _sys_kb() -> bool:
+	if sys_kb_override >= 0:
+		return sys_kb_override == 1
+	if Ui.is_desktop():
+		return false
+	if DisplayServer.get_name() == "headless":
+		return false
+	return DisplayServer.has_feature(DisplayServer.FEATURE_VIRTUAL_KEYBOARD)
+
+
 ## Своя клавиатура в меню: видна, когда вводится имя. Высоту для
-## раскладки считаем от неё же.
+## раскладки считаем от неё же. На телефоне её место занимает системная —
+## тогда места внизу экрана она не просит вовсе (окно под IME ужимает
+## сама система).
 func _own_shown() -> bool:
 	if not visible:
 		return false
 	if not input_active:
 		return false
-	return true
+	return not _sys_kb()
+
+
+## Приёмник системной клавиатуры — один на всё меню, создаётся по
+## надобности: в headless и на десктопе он не нужен.
+func _make_sys_field() -> void:
+	if sys_field != null or not is_inside_tree():
+		return
+	sys_field = LineEdit.new()
+	sys_field.name = "SysKeyboardSink"
+	sys_field.max_length = S.MAX_NAME_LENGTH
+	sys_field.virtual_keyboard_enabled = true
+	# Перечисление у LineEdit своё (LineEdit.VirtualKeyboardType) — одно и
+	# то же по значению с DisplayServer, но не по типу: gdparse разницы не
+	# видит, движок падает Parse Error (ловил прогоном 10.11.2026).
+	sys_field.virtual_keyboard_type = LineEdit.KEYBOARD_TYPE_DEFAULT
+	# Не видно и не ловит мышь: на экране только наша строка имени.
+	# Прозрачность не мешает фокусу, IME и тексту.
+	sys_field.modulate = Color(1, 1, 1, 0)
+	sys_field.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	sys_field.text_changed.connect(_sys_text_changed)
+	sys_field.text_submitted.connect(_sys_submitted)
+	add_child(sys_field)
+
+
+## Единственная точка записи имени: наш текст и приёмник не разъезжаются
+## (иначе IME продолжил бы со своим и стёр бы набранное).
+func _input_text_set(t: String) -> void:
+	var cut := t.left(S.MAX_NAME_LENGTH)
+	if cut == input_text:
+		queue_redraw()
+		return
+	input_text = cut
+	if sys_field != null and sys_field.text != cut:
+		_sys_syncing = true
+		sys_field.text = cut
+		sys_field.caret_column = cut.length()
+		_sys_syncing = false
+	queue_redraw()
+
+
+## Открыть системную клавиатуру на строке правки: она садится рядом с
+## текстом (так IME ставит свои подсказки), а не в углу экрана.
+func _sys_begin(text: String) -> void:
+	if not _sys_kb():
+		return
+	_make_sys_field()
+	if sys_field == null:
+		return
+	_sys_syncing = true
+	sys_field.text = text
+	sys_field.caret_column = text.length()
+	_sys_syncing = false
+	_sys_place()
+	# Фокус заодно показывает клавиатуру (LineEdit делает это сам на
+	# платформах с FEATURE_VIRTUAL_KEYBOARD), явный вызов — страховка.
+	sys_field.grab_focus()
+	var r := Rect2(sys_field.position, sys_field.size)
+	DisplayServer.virtual_keyboard_show(
+		text, r, DisplayServer.KEYBOARD_TYPE_DEFAULT, S.MAX_NAME_LENGTH
+	)
+
+
+## Приёмник стоит на строке правки. Зовётся и на смену окна
+## (_relayout): строка уехала — клавиатура едет с ней.
+func _sys_place() -> void:
+	if sys_field == null:
+		return
+	var r := Rect2(_edge(), top_safe, view_w - _edge() * 2.0, _bar_btn())
+	if _row_count() > 0:
+		var rr := Rect2(_row_tap_rect(clampi(editing, 0, _row_count() - 1)))
+		if rr.size.x > 1.0 and rr.size.y > 1.0:
+			r = rr
+	sys_field.position = r.position
+	sys_field.size = r.size
+
+
+## Закрыть системную клавиатуру: правка кончилась любым путём.
+func _sys_end() -> void:
+	if sys_field == null:
+		return
+	sys_field.release_focus()
+	DisplayServer.virtual_keyboard_hide()
+
+
+func _sys_text_changed(t: String) -> void:
+	if _sys_syncing or not input_active:
+		return
+	_input_text_set(t)
+
+
+func _sys_submitted(_t: String) -> void:
+	if input_active:
+		_commit_edit()
 
 
 ## Область своей клавиатуры: низ экрана.
@@ -2132,7 +2338,11 @@ func _buttons_y() -> float:
 ## ветка правки и так глотает всё, но не менять скрытое на ощупь
 ## (прямоугольники рядов при открытой доске никому не нужны) нельзя.
 func _btn_hidden() -> bool:
-	return _own_shown()
+	# Кнопки прячутся, пока идёт ПРАВКА ИМЕНИ — неважно, чья клавиатура
+	# на экране: своя доска (десктоп) или системная (телефон). Обе
+	# прижимаются к низу, и ряд кнопок оказывался под ними (автор
+	# 18.10.2026: «их вообще не должно быть в момент редактирования»).
+	return visible and input_active
 
 
 func _btn_rows() -> int:
@@ -2240,7 +2450,7 @@ func _row_y(i: int) -> float:
 	return acc
 
 
-## Сторона крупной кнопки в карточке (Про, Ё, ✕). На телефоне — под
+## Сторона крупной кнопки в карточке (Про, Ё, Зоны, ✕). На телефоне — под
 ## палец, но не выше 132px: при k≈2.5 (телефон с плотностью экрана)
 ## кнопка, посчитанная от k, съела бы пол-карточки и место для имени.
 func _card_btn_at(kk: float) -> float:
@@ -2249,7 +2459,7 @@ func _card_btn_at(kk: float) -> float:
 	return 56.0 * kk
 
 
-## Сторона кнопки в карточке (Про, Ё, ✕). На телефоне — под палец: пол
+## Сторона кнопки в карточке (Про, Ё, Зоны, ✕). На телефоне — под палец: пол
 ## 64px и потолок 150px (на телефоне с плотностью экрана кнопка из k
 ## съела бы пол-карточки). В карточке, растянутой на окно, кнопка тоже
 ## растёт — но в тех же пределах.
@@ -2315,20 +2525,26 @@ func _bunny_row_in_view() -> bool:
 
 
 ## Виден ли зайчик: в своей полосе — всегда, у заголовка пустого списка —
-## только если не наезжает на кнопку обновлений (ловил аудит 15.10.2026).
+## только если не наезжает на край панели (ловил аудит 15.10.2026).
+## Заголовок живёт СВОЕЙ строкой под кнопками (автор 10.11.2026),
+## поэтому теснота теперь одна: хватает ли места слева от текста.
 func _bunny_visible() -> bool:
 	if _bunny_strip() > 0.0:
 		return true
 	if _title_fs() <= 0:
 		return false
-	return _bunny_x() - _bunny_w() * 0.5 >= _upd_button_rect().end.x + 8.0 * k
+	return _bunny_x() - _bunny_w() * 0.5 >= _edge() + 4.0 * k
 
 
 ## Высота, на которой зайчик должен стоять: середина строки выделения.
 ## На пустом списке — у заголовка.
 func _bunny_target_y() -> float:
 	if users.is_empty():
-		return top_safe + _bar_h() * 0.5
+		# Пустой список: заяц ПОД кнопками, у нижнего края панели. Панель
+		# двухстрочная (автор 10.11.2026: кнопки сверху, заголовок под
+		# ними), и в строке заголовка зайцу тесно: он выше строки и
+		# наезжал бы на кнопку версии (ловил _part31).
+		return top_safe + _bar_base_h() + 38.0 * k + 6.0 * k
 	# Цель — центр рисуемого бокса (тот же хелпер, что у отрисовки):
 	# раньше центр считался отдельной формулой без прокрутки и с другим
 	# отступом — на длинном пролистанном списке заяц вставал ниже своей
@@ -2485,35 +2701,40 @@ func _card_btn_row(i: int) -> float:
 	return c.position.y + c.size.y - _CARD_PAD * _card_k() - _card_btn()
 
 
-## Прямоугольник кнопки в карточке: which — "pro", "yo" или "del".
-## Три равные кнопки во всю ширину (Про | Ё | ✕, крестик крайний справа:
-## опасное действие не спутаешь). Равные доли не перекрываются ни при
-## каком k — в отличие от прошлого ряда у правого края, где длинное имя
-## упиралось в кнопки.
+## Прямоугольник кнопки в карточке: which — "pro", "yo", "zones" или
+## "del". Три чипа делят ширину, крестик — КВАДРАТНЫЙ и крайний справа
+## (автор 10.11.2026: «саму кнопку с крестом сделать не широкой, а
+## квадратной и подкрасить красным» — опасное действие не спутаешь ни
+## шириной, ни цветом). Так ряд не перекрывается ни при каком k, в
+## отличие от прошлого ряда у правого края, где длинное имя упиралось
+## в кнопки.
 func _card_btn_rect(i: int, which: String) -> Rect2:
 	var c := _card_rect(i)
 	var gap := maxf(8.0 * _card_k(), 2.0)
 	var inset := _CARD_IN * _card_k()
-	var x0 := c.position.x + inset
-	var w := (c.size.x - inset * 2.0 - gap * 2.0) / 3.0
-	if _finger() and w < _TAP_MIN:
-		# Три кнопки в ряд на узкой карточке были по 48px — мимо пальца.
-		# Сжимаем поля и зазор ровно настолько, чтобы дойти до пола, и
-		# НЕ БОЛЬШЕ: поля по краям карточки держат имя и цифры в одной
-		# колонке (иначе чипы уезжают под зайчика и к самому краю).
-		var edge: float = minf(_TAP_MIN, (c.size.x - 6.0 * _card_k()) / 3.0)
-		var want: float = edge * 3.0 + gap * 2.0
-		inset = maxf(2.0 * _card_k(), inset - (want - c.size.x) * 0.5)
-		w = maxf((c.size.x - inset * 2.0 - gap * 2.0) / 3.0, edge)
-		x0 = c.position.x + inset
+	var h := _card_btn()
+	var del_w := h
+	var w := (c.size.x - inset * 2.0 - gap * 3.0 - del_w) / 3.0
+	if _finger():
+		# Три чипа в ряд на узкой карточке были по 48px — мимо пальца.
+		# Сжимаем поля ровно настолько, чтобы дойти до пола, и НЕ БОЛЬШЕ:
+		# поля по краям карточки держат имя и цифры в одной колонке
+		# (иначе чипы уезжают под зайчика и к самому краю).
+		var need: float = 3.0 * _TAP_MIN + del_w + gap * 3.0
+		if c.size.x - inset * 2.0 < need:
+			inset = maxf(2.0 * _card_k(), (c.size.x - need) * 0.5)
+			w = (c.size.x - inset * 2.0 - gap * 3.0 - del_w) / 3.0
+	w = maxf(w, 4.0)
 	var y := _card_btn_row(i)
-	# Слева направо: Про, Ё, ✕.
+	# Слева направо: Про, Ё, Зоны, ✕ (крестик квадратом у правого края).
+	if which == "del":
+		return Rect2(c.position.x + c.size.x - inset - del_w, y, del_w, h)
 	var idx := 0
 	if which == "yo":
 		idx = 1
-	elif which == "del":
+	elif which == "zones":
 		idx = 2
-	return Rect2(x0 + float(idx) * (w + gap), y, w, _card_btn())
+	return Rect2(c.position.x + inset + float(idx) * (w + gap), y, w, h)
 
 
 ## Флаг профиля i включён? ("pro" — все клавиши, "yo" — строгая ё).
@@ -2551,11 +2772,16 @@ func _start_edit(i: int) -> void:
 		input_text = ""
 		input_all_keys = false
 		input_yo_strict = true
+		input_zones = false
 	else:
 		input_text = users[editing]
 	input_active = true
 	_relayout()
 	_scroll_to_idx(editing)
+	# Телефон: имя набирается клавиатурой системы (автор 10.11.2026).
+	# Зовём ПОСЛЕ прокрутки — клавиатура садится на строку правки.
+	# На десктопе _sys_begin молчит: там своя доска (см. _sys_kb).
+	_sys_begin(input_text)
 	queue_redraw()
 
 
@@ -2579,6 +2805,7 @@ func _commit_edit() -> void:
 		S.create_user(name)
 		S.set_all_keys(name, input_all_keys)
 		S.set_yo_strict(name, input_yo_strict)
+		S.set_zones(name, input_zones)
 		_reload()
 		sel = users.find(name)
 		_scroll_to_sel()
@@ -2603,15 +2830,20 @@ func _commit_edit() -> void:
 ## нельзя: тот тянет _relayout, а тот берёт размер из вьюпорта (в тестах
 ## он 64x64 и сбивает выставленные руками величины).
 func _drop_edit() -> void:
+	# Правка кончилась молча — клавиатура системы тоже уходит (иначе она
+	# висела бы над списком, которому уже ничего не набирают).
+	_sys_end()
 	editing = -1
 	editing_new = false
 	input_text = ""
 	input_active = false
 	input_all_keys = false
 	input_yo_strict = true
+	input_zones = false
 
 
 func _cancel_edit() -> void:
+	_sys_end()
 	editing = -1
 	editing_new = false
 	input_text = ""
@@ -2620,6 +2852,7 @@ func _cancel_edit() -> void:
 	# сессию и всплывали галочками у следующего создаваемого.
 	input_all_keys = false
 	input_yo_strict = true
+	input_zones = false
 	_relayout()
 	queue_redraw()
 
@@ -2629,7 +2862,11 @@ func _row_flag(i: int, which: String) -> bool:
 	if i == users.size():
 		if not editing_new:
 			return false
-		return input_all_keys if which != "yo" else input_yo_strict
+		if which == "yo":
+			return input_yo_strict
+		if which == "zones":
+			return input_zones
+		return input_all_keys
 	return _flag_on(i, which)
 
 
@@ -2639,6 +2876,8 @@ func _flag_on(i: int, which: String) -> bool:
 	var p := S.load_profile(users[i])
 	if which == "yo":
 		return bool(p.get("yo_strict", true))
+	if which == "zones":
+		return bool(p.get("zones", false))
 	return bool(p.get("all_keys", false))
 
 
@@ -2699,14 +2938,26 @@ func _yo_tap_rect(i: int) -> Rect2:
 	return _cell_rect(cx, row_y, cols[5] - cols[4])
 
 
+## Галочка «Зоны» в строке: цветные дорожки под клавишами постоянно.
+## Тап не играет профилем, только флагом. Третья кнопка, перед крестом
+## (автор 10.11.2026).
+func _zones_tap_rect(i: int) -> Rect2:
+	if _cards():
+		return _card_btn_rect(i, "zones")
+	var cols := _table_cols()
+	var row_y := _rows_top() + float(i) * _row_step() - _scroll
+	var cx := (cols[5] + cols[6]) * 0.5
+	return _cell_rect(cx, row_y, cols[6] - cols[5])
+
+
 ## Крестик удаления в строке: открывает модалку подтверждения.
 func _del_tap_rect(i: int) -> Rect2:
 	if _cards():
 		return _card_btn_rect(i, "del")
 	var cols := _table_cols()
 	var row_y := _rows_top() + float(i) * _row_step() - _scroll
-	var cx := (cols[5] + cols[6]) * 0.5
-	return _cell_rect(cx, row_y, cols[6] - cols[5])
+	var cx := (cols[6] + cols[7]) * 0.5
+	return _cell_rect(cx, row_y, cols[7] - cols[6])
 
 
 ## Заголовок меню: кегль, левая граница и базовая строка — отдельными
@@ -2727,28 +2978,35 @@ func _title_fs() -> int:
 	return tfs if _text_size(TITLE_TEXT, tfs).x <= room else 0
 
 
+## Узкое место заголовка больше не «между кнопкой и темой»: заголовок
+## живёт СВОЕЙ строкой под ними (автор 10.11.2026: «У нас сверху должны
+## быть 2 кнопки: версия и световой режим... а "Кто играет?" можно
+## разместить под»). Кнопки наверху, заголовок во всю ширину ниже — и
+## ни одна из трёх вещей не наезжает на другую.
 func _title_left() -> float:
-	return _upd_button_rect().end.x + 14.0 * k
+	return _edge()
 
 
 func _title_right() -> float:
-	return maxf(
-		_night_tap_rect().position.x - 14.0 * k,
-		_upd_button_rect().end.x + 15.0 * k
-	)
+	return maxf(view_w - _edge(), _edge() + 1.0)
 
 
 func _title_x() -> float:
 	return _title_left() + (_title_right() - _title_left()) * 0.5
 
 
-## Заголовок — по центру верхней панели, между кнопкой обновлений и
-## темой; по базовой линии он стоит чуть ниже середины кнопки.
+## Воздух между строкой кнопок и строкой заголовка.
+func _bar_gap() -> float:
+	return maxf(8.0 * k, 6.0)
+
+
+## Заголовок — второй строкой панели, по центру экрана; по базовой линии
+## он стоит на высоте своего глифа под кнопками.
 func _title_y() -> float:
 	# От базовой панели (без сообщения): иначе круг _bar_h → заголовок →
 	# сообщение → _bar_h (ловил сторожем: тысячи ошибок за прогон).
 	var gh: float = float(_font_h(maxi(_title_fs(), 1)))
-	return top_safe + (_bar_base_h() + gh) * 0.5
+	return top_safe + _bar_pad() + _bar_btn() + _bar_gap() + gh
 
 
 ## Базовая строка пояснения к галочке. В карточках — над полем ввода,
@@ -2802,6 +3060,16 @@ func _yo_head_rect() -> Rect2:
 	return Rect2(cx - 48.0 * k, y - 28.0 * k, 96.0 * k, 40.0 * k)
 
 
+## Заголовок «Зоны»: тап объясняет третью галку (hint_header).
+func _zones_head_rect() -> Rect2:
+	if _cards():
+		return Rect2()
+	var cols := _table_cols()
+	var cx := (cols[5] + cols[6]) * 0.5
+	var y := _rows_top() - 56.0 * k
+	return Rect2(cx - 48.0 * k, y - 28.0 * k, 96.0 * k, 40.0 * k)
+
+
 ## Заголовки «Ур» и «Победы»: хит-зона в той же строке шапки. Ширина — по
 ## тексту с воздухом (те же 12k с каждой стороны, что у отступа имени).
 func _ur_head_rect() -> Rect2:
@@ -2835,6 +3103,8 @@ func _head_tip_at(pos: Vector2) -> String:
 		return "Про: все буквы сразу, важен регистр."
 	if _yo_head_rect().has_point(pos):
 		return "Ё: без галки е засчитывается за ё."
+	if _zones_head_rect().has_point(pos):
+		return "Зоны: цветные полоски под клавишами — палец каждой."
 	return ""
 
 
@@ -2928,9 +3198,14 @@ func _bar_btn() -> float:
 ## Высота панели без строки сообщения. Отдельная функция, чтобы разорвать
 ## круг: сообщение меряется от заголовка, а заголовок — от панели.
 func _bar_base_h() -> float:
-	# Панель выше любой из двух вещей: кнопки под палец и заголовка.
+	# ДВЕ строки (автор 10.11.2026): сверху кнопки — версия слева, тема
+	# справа, под ними заголовок «Кто играет?». Прежде заголовок стоял
+	# между кнопками в той же строке, и на телефоне в портрете места ему
+	# не оставалось (кнопка версии 370 px из 540).
+	var h := _bar_btn()
 	var gh: float = float(_font_h(maxi(_title_fs(), 1)))
-	var h: float = maxf(_bar_btn(), gh if _title_fs() > 0 else 0.0)
+	if _title_fs() > 0:
+		h += _bar_gap() + gh
 	return h + _bar_pad() * 2.0
 
 
@@ -2964,20 +3239,23 @@ func _upd_label() -> String:
 			return _app_version()
 
 
-## Ширина кнопки — по самому длинному варианту подписи сразу, чтобы её
-## не приходилось расширять (автор 15.10.2026). Ошибку в ширину не
-## закладываем (текст чужой) — она ужимается клиппингом.
+## Ширина кнопки — по ТЕКУЩЕЙ подписи (автор 10.11.2026: «ширину кнопки
+## с версией можно уменьшить до размера текста в ней»). Прежний резерв
+## под самый длинный вариант («Обновлений нет») съедал 68% узкого экрана,
+## и заголовку не оставалось места вовсе — он исчезал на всех телефонах
+## в портрете. Подпись меняется редко (версия, проверка, процент), и
+## кнопка растёт вместе с ней: раскладка ниже панели от этого не едет —
+## заголовок живёт СВОЕЙ строкой (см. _bar_base_h).
 func _upd_button_rect() -> Rect2:
 	var pad := _edge()
 	var h := _bar_btn()
-	var w := 0.0
-	# Теги версий одной длины (v0.0.x): меряем по текущей, а не по
-	# выдуманной длинной — иначе кнопка съедает полпанели.
-	for cand in [_app_version(), "Проверка…", "Обновлений нет", "Установить " + _app_version(), "100%"]:
-		w = maxf(w, _text_size(cand, 26).x)
-	w += 36.0 * k
-	var room: float = view_w - pad * 2.0 - h - 24.0 * k
-	return Rect2(pad, top_safe + _bar_pad(), minf(maxf(w, h), maxf(0.0, room)), h)
+	# Не уже своей высоты: пилюля-квадрат читается как кнопка, а не как
+	# обрубок. Ошибку в ширину не закладываем (текст чужой) — её режет
+	# клиппинг в _draw_upd_button.
+	var w: float = maxf(_text_size(_upd_label(), 26).x + 24.0 * k, h)
+	# Справа та же строка — кнопка темы: свою ширину она не отдаёт.
+	var room: float = view_w - pad * 2.0 - h - 12.0 * k
+	return Rect2(pad, top_safe + _bar_pad(), minf(w, maxf(0.0, room)), h)
 
 
 ## Кнопка обновлений: подпись-версия и состояния — внутри, заливка
@@ -3088,6 +3366,8 @@ func _apply_night() -> void:
 		hint_sb.border_color = Ui.LINE_SOFT_NIGHT
 		chip_on_sb.bg_color = Ui.ACCENT_NIGHT
 		chip_on_sb.border_color = Ui.ACCENT_EDGE_NIGHT
+		del_sb.bg_color = Ui.DANGER_NIGHT
+		del_sb.border_color = Ui.DANGER_EDGE_NIGHT
 		# Ободок фокуса — по подложке: на тёмной ночной рамке нужен
 		# СВЕТЛЫЙ, на светлом чипе и жёлтой строке — тёмный (см. _card_chip).
 		chip_focus_sb.border_color = Ui.FOCUS_LIGHT
@@ -3111,6 +3391,8 @@ func _apply_night() -> void:
 		hint_sb.border_color = Ui.LINE_SOFT_DAY
 		chip_on_sb.bg_color = Ui.ACCENT_DAY
 		chip_on_sb.border_color = Ui.ACCENT_EDGE_DAY
+		del_sb.bg_color = Ui.DANGER_DAY
+		del_sb.border_color = Ui.DANGER_EDGE_DAY
 		chip_focus_sb.border_color = Ui.FOCUS_DARK
 		list_frame_sb.border_color = Ui.LINE_SOFT_DAY
 		kb_key_sb.bg_color = Ui.SURFACE_ALT_DAY
@@ -3377,6 +3659,8 @@ func _draw() -> void:
 		var expl: Array[String] = []
 		if hint_header == "pro":
 			expl = ["Про: все буквы сразу, важен регистр."]
+		elif hint_header == "zones":
+			expl = ["Зоны: цвет полоски под клавишей — её палец."]
 		else:
 			expl = ["Ё: без галки е засчитывается за ё."]
 		# Пояснение — пилюля в своём зазоре (см. _chip_hint_y): текст без
@@ -3497,11 +3781,14 @@ func _draw_table() -> void:
 		# в длинном списке.
 		var pro_box := box_sb
 		var yo_box := box_sb
+		var zones_box := box_sb
 		if i == sel:
 			if sel_col == 0:
 				pro_box = selbox_sb
-			else:
+			elif sel_col == 1:
 				yo_box = selbox_sb
+			else:
+				zones_box = selbox_sb
 		var pcx := (cols[3] + cols[4]) * 0.5
 		draw_style_box(pro_box, Rect2(pcx - 16.0 * k, cy - 16.0 * k, 32.0 * k, 32.0 * k))
 		# Галка на залитом боксе — тёмная всегда (заливка светлая
@@ -3533,8 +3820,23 @@ func _draw_table() -> void:
 				Vector2(ycx + 16.0 * k, cy - 10.0 * k),
 				yo_chk, 4.0 * k
 			)
+		# Галочка «Зоны»: тот же бокс, тот же цвет.
+		var zcx := (cols[5] + cols[6]) * 0.5
+		draw_style_box(zones_box, Rect2(zcx - 16.0 * k, cy - 16.0 * k, 32.0 * k, 32.0 * k))
+		var zchk := INK if zones_box == selbox_sb else chk_col
+		if _row_flag(i, "zones"):
+			draw_line(
+				Vector2(zcx - 10.0 * k, cy + 4.0 * k),
+				Vector2(zcx, cy + 14.0 * k),
+				zchk, 4.0 * k
+			)
+			draw_line(
+				Vector2(zcx, cy + 14.0 * k),
+				Vector2(zcx + 16.0 * k, cy - 10.0 * k),
+				zchk, 4.0 * k
+			)
 		# Крестик: удаление у игроков, отмена в редактировании.
-		var dcx := (cols[5] + cols[6]) * 0.5
+		var dcx := (cols[6] + cols[7]) * 0.5
 		var dtxt := "✕"
 		var dw := _text_size(dtxt, FONT_ROW)
 		_text(dtxt, Vector2(dcx - dw.x * 0.5, row_y), FONT_ROW, _danger())
@@ -3569,6 +3871,12 @@ func _draw_table_head() -> void:
 		"Ё",
 		Vector2((hcols[4] + hcols[5]) * 0.5 - yo_hw * 0.5, y),
 		hfs, _ink() if sel_col == 1 else _dim()
+	)
+	var zones_hw := _text_size_fs("Зоны", hfs).x
+	_text_fs(
+		"Зоны",
+		Vector2((hcols[5] + hcols[6]) * 0.5 - zones_hw * 0.5, y),
+		hfs, _ink() if sel_col == 2 else _dim()
 	)
 
 
@@ -3644,9 +3952,12 @@ func _draw_cards() -> void:
 			_text_fs(stat, Vector2(x, sy), sfs, _uitext() if i != sel else INK)
 		_card_chip(i, "pro", "Про")
 		_card_chip(i, "yo", "Ё")
-		# Крестик: удаление у игроков, отмена в редактировании.
+		_card_chip(i, "zones", "Зоны")
+		# Крестик: удаление у игроков, отмена в редактировании. Квадрат
+		# с красной заливкой (автор 10.11.2026), знак — тёмными чернилами
+		# на светлой заливке в обеих темах.
 		var del := _card_btn_rect(i, "del")
-		draw_style_box(box_sb, del)
+		draw_style_box(del_sb, del)
 		var dfs := _card_fs(FONT_ROW)
 		var dtxt := "✕"
 		var dw := _text_size_fs(dtxt, dfs)
@@ -3656,7 +3967,7 @@ func _draw_cards() -> void:
 				del.get_center().x - dw.x * 0.5,
 				del.get_center().y + dw.y * 0.3
 			),
-			dfs, _danger()
+			dfs, INK
 		)
 	_draw_top_mask(view)
 	_draw_list_mask(view)
@@ -3795,7 +4106,12 @@ func _mask_pod(view: Rect2, corner: int, paper: Color) -> void:
 ##   иначе фокус опять спрятал бы состояние.
 func _card_chip(i: int, which: String, label: String) -> void:
 	var r := _card_btn_rect(i, which)
-	var lit := i == sel and sel_col == (0 if which == "pro" else 1)
+	var col := 0
+	if which == "yo":
+		col = 1
+	elif which == "zones":
+		col = 2
+	var lit := i == sel and sel_col == col
 	var on := _row_flag(i, which)
 	var txt := ("✓ " if on else "") + label
 	var fs := _card_fs(FONT_ROW)

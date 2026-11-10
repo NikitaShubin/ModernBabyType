@@ -4125,9 +4125,10 @@ func _case_hands_shift_hand() -> void:
 
 ## ЗОНА ПОДСКАЗКИ (автор 08.11.2026: «Возможно, ещё стоит при подсказке
 ## всю секцию делать ещё заметнее. Чтобы было понято в какой зоне и
-## каким пальцем надо нажимать»). Модель, а не картинка: headless не
-## рисует, `_draw_own_kb` не зовём — меряем ровно то, что он отдаёт в
-## `Kbd.draw`, то есть `_hot_zone(_hint_keys())`.
+## каким пальцем надо нажимать»). С 10.11.2026 зона ОДНОЦВЕТНАЯ, а
+## дорожки красятся только при включённых «Зонах». Модель, а не
+## картинка: headless не рисует, `_draw_own_kb` не зовём — меряем ровно
+## то, что он отдаёт в `Kbd.draw`, то есть `_hot_zone(_hint_keys())`.
 func _case_hint_zone() -> void:
 	_fresh(1, 1)
 	var tag := "hint zone"
@@ -4156,7 +4157,7 @@ func _case_hint_zone() -> void:
 		_check(not zone.has(key),
 			"%s: a key of another finger went hot: «%s»" % [tag, key])
 	# Панель приходит ГОРЯЧАЯ, а не обычная: это и есть «заметнее».
-	_check((zone["а"] as StyleBoxFlat).bg_color == (Ui.FINGER_HOT_DAY as Array)[3],
+	_check((zone["а"] as StyleBoxFlat).bg_color == Ui.HINT_ZONE_DAY,
 		"%s: the zone kept the calm fill" % tag)
 	# Две клавиши — две зоны: шифт противоположной руки и сама буква.
 	var two: Dictionary = _main._hot_zone(["ShiftR", "н"])
@@ -4243,33 +4244,43 @@ func _case_hint_zone() -> void:
 		"%s: the zone does not blink (%.2f..%.2f)" % [tag, a_dim, a_lit])
 	_check(e_dim < 0.7 and e_lit > 0.95,
 		"%s: the zone edge does not blink with it" % tag)
-	_check(bsb.border_color == (Ui.FINGER_EDGE_DAY as Array)[3],
-		"%s: the blinking zone lost its finger edge" % tag)
-	_check(bsb.bg_color == (Ui.FINGER_HOT_DAY as Array)[3],
-		"%s: the lit zone is not its hot colour" % tag)
+	_check(bsb.border_color == Ui.HINT_ZONE_EDGE_DAY,
+		"%s: the blinking zone lost its zone edge" % tag)
+	_check(bsb.bg_color == Ui.HINT_ZONE_DAY,
+		"%s: the lit zone is not the hint-zone colour" % tag)
 	# Живой цикл: подсказка по простою зажигает зону, ввод — гасит.
 	_main.idle_t = _main._hint_delay() + 0.5
 	var hi: Array = _main._hint_keys()
 	_check(not hi.is_empty(), "%s: no hint after the delay" % tag)
 	var live: Dictionary = _main._hot_zone(hi)
 	_check(not live.is_empty(), "%s: the hint did not light its zone" % tag)
-	# Дорожки зон: покой нейтрален, подсказка зажигает ТОЛЬКО своих,
-	# после ввода цвет плавно уходит обратно (решение 09.11.2026).
-	# Сравниваем с ЖИВЫМИ словарями главного экрана, а не с литералами
-	# палитры: тема кадра могла быть ночной, а раскладка — уже собранной.
+	# Дорожки зон: «Зоны» включены — доска покрашена ПОСТОЯННО, а
+	# подсказка гасит ВСЕ дорожки в НЕЙТРАЛЬ (автор 10.11.2026: «при
+	# подсказке сектора гаснут в нейтраль, как при выключенных Зонах»),
+	# после ввода краска возвращается. Сравниваем с ЖИВЫМИ словарями
+	# главного экрана, а не с литералами палитры: тема кадра могла быть
+	# ночной, а раскладка — уже собранной.
+	_main.profile_zones = true
 	_main._lane_reset()
 	var want_idle: Color = _main.kb_lanes_idle["а"]
 	var want_on: Color = _main.kb_lanes_on["а"]
-	var want_other: Color = _main.kb_lanes_idle["ы"]
-	_main._lane_tick(0.2, ["а"])
+	for i in 40:
+		_main._lane_tick(0.1, [])
 	_check(_main.kb_lanes["а"] == want_on,
-		"%s: the hinted finger's lane did not light" % tag)
-	_check(_main.kb_lanes["ы"] == want_other,
-		"%s: a foreign lane lit with the hint" % tag)
+		"%s: zones on — the board is not painted" % tag)
+	_main._lane_tick(0.2, ["а"])
+	_check(_main.kb_lanes["а"] == want_idle,
+		"%s: a hint left the board painted" % tag)
+	for i in 40:
+		_main._lane_tick(0.1, [])
+	_check(_main.kb_lanes["а"] == want_on,
+		"%s: the paint did not come back after the hint" % tag)
+	# Выключенные «Зоны» — цвет не появляется НИКОГДА: доска спокойна.
+	_main.profile_zones = false
 	for i in 40:
 		_main._lane_tick(0.1, [])
 	_check(_main.kb_lanes["а"] == want_idle,
-		"%s: the lane did not go back to idle" % tag)
+		"%s: zones off still paints the board" % tag)
 	for s in hi:
 		var key := Hands.key_label(String(s))
 		if Hands.tint_index(key) < 0:
@@ -4284,16 +4295,29 @@ func _case_hint_zone() -> void:
 	_check(_main._hot_zone(_main._hint_keys()).is_empty(),
 		"%s: the zone stayed hot after typing" % tag)
 	# Легенда «цвет полоски — палец»: её часы идут С ПЕРВОГО кадра
-	# уровня, а не только пока на экране подсказка. Рисуется она,
-	# наоборот, только БЕЗ подсказки (полоса общая) — на прежнем гейте
-	# легенда не показывалась никогда, и это не ловил ни один тест.
+	# уровня, а не только пока на экране подсказка, и только когда «Зоны»
+	# включены — при выключенных цветных дорожек на доске нет, и слово
+	# объясняло бы то, чего человек не видит. Рисуется она, наоборот,
+	# только БЕЗ подсказки (полоса общая) — на прежнем гейте легенда не
+	# показывалась никогда, и это не ловил ни один тест.
+	_main.profile_zones = true
 	_main.lane_tip_seen = false
 	_main.lane_tip_t = 0.0
 	_main.idle_t = 0.0
 	_tick(tag)
 	_check(_main.lane_tip_t > 0.0,
 		"%s: the lane legend clock does not run at level start" % tag)
+	# Выключенные «Зоны» — легенды нет вовсе.
+	_main.profile_zones = false
+	_main.lane_tip_seen = false
+	_main.lane_tip_t = 0.0
+	_main.idle_t = 0.0
+	_tick(tag)
+	_check(_main.lane_tip_t == 0.0,
+		"%s: the lane legend runs with zones off" % tag)
 	_main.lane_tip_seen = true
+	_main.profile_zones = false
+	_main._lane_reset()
 	_common(tag)
 
 

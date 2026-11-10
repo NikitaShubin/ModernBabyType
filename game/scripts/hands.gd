@@ -142,10 +142,11 @@ static func hand_of(s: String) -> int:
 	return finger_of(s)[0] as int
 
 
-## Номер цвета клавиши в палитрах пальцев (`Ui.FINGER_LANE_*`,
-## `FINGER_HOT_*`): зона пальца — это индекс в массивах, а сам цвет
-## берётся из круга по `Ui.FINGER_SLOT` (шаг по доске — прыжок на 108°,
-## см. шапку палитры в ui.gd). У левой руки пальцы в карте обратны
+## Номер палитры пальца (`Ui.FINGER_LANE_*`): зона пальца — это индекс
+## в массивах, а сам цвет берётся из круга по `Ui.FINGER_SLOT` (шаг по
+## доске — прыжок на 108°, см. шапку палитры в ui.gd). Зона подсказки
+## индекс больше не использует (цвет один на все пальцы), но дорожки
+## красятся им. У левой руки пальцы в карте обратны
 ## порядку (мизинец 4 … большой 0), у правой — совпадают, поэтому зоны
 ## идут вдоль доски слева направо.
 ## Подпись может нести сторону («Ctrl:Л»/«Ctrl:П», «пробел:Л»/«пробел:П»):
@@ -171,12 +172,13 @@ static func tint_index(s: String) -> int:
 
 ## Панели ЗОНЫ ПОДСКАЗКИ — единственная заливка клавиши «по пальцу».
 ## В покое доска нейтральна (цвет приходит только с подсказкой), поэтому
-## строятся только горячие панели: заливка `FINGER_HOT_*`, рамка — свой
-## цвет пальца. Строится раз при создании экрана (в кадре новых панелей
-## нет), меняется темой на месте (`repaint_tints`).
+## строятся только горячие панели. ЦВЕТ ОДИН НА ВСЕ ПАЛЬЦЫ (автор
+## 10.11.2026): горит всегда один палец, различать hue нечего. Строится
+## раз при создании экрана (в кадре новых панелей нет), меняется темой
+## на месте (`repaint_tints`).
 ##
-## Пробел здесь ДВУМЯ половинами («пробел:Л»/«пробел:П») — своя у каждого
-## большого: подсказка красит именно ту половину, которой жать.
+## Пробел здесь ДВУМЯ половинами («пробел:Л»/«пробел:П») — подсказка
+## красит именно ту половину, которой жать, хотя цвет у обеих один.
 ## Системные клавиши низа (Ctrl/Win/Alt) тоже получают СТОРОНУ: подпись
 ## у них одна на две физические клавиши, а стоят они по обе стороны
 ## пробела — без стороны левая «Ctrl» красилась бы правым мизинцем.
@@ -189,10 +191,10 @@ static func key_tints(night: bool, radius: float, bw: float) -> Dictionary:
 			# голая запись «пробел» в словаре только мешала бы.
 			if s == "пробел":
 				continue
-			var i := tint_index(s)
-			if i < 0:
+			# Мёртвой клавише панель не нужна вовсе (её тап мимо).
+			if tint_index(s) < 0:
 				continue
-			out[s] = Ui.finger_sb(i, night, radius, bw)
+			out[s] = Ui.finger_sb(night, radius, bw)
 	# Подпись, стоящая в низу ДВАЖДЫ (Ctrl/Alt, а в левой половине ещё и
 	# Win), сторону по себе не говорит: заливку берём по месту клавиши.
 	var twice := {}
@@ -207,10 +209,10 @@ static func key_tints(night: bool, radius: float, bw: float) -> Dictionary:
 		if (f[0] as int) < 0:
 			continue
 		# Тот же палец на своей руке: слева — левой, справа — правой.
-		out[s + ":Л"] = Ui.finger_sb(4 - int(f[1]), night, radius, bw)
-		out[s + ":П"] = Ui.finger_sb(5 + int(f[1]), night, radius, bw)
-	out["пробел:Л"] = Ui.finger_half_sb(4, "Л", night, radius, bw)
-	out["пробел:П"] = Ui.finger_half_sb(5, "П", night, radius, bw)
+		out[s + ":Л"] = Ui.finger_sb(night, radius, bw)
+		out[s + ":П"] = Ui.finger_sb(night, radius, bw)
+	out["пробел:Л"] = Ui.finger_half_sb("Л", night, radius, bw)
+	out["пробел:П"] = Ui.finger_half_sb("П", night, radius, bw)
 	return out
 
 
@@ -304,15 +306,12 @@ static func repaint_lanes(lanes: Dictionary, night: bool, idle := false) -> void
 ## Перекрасить панели зон в другую тему на месте: узлы держат те же
 ## StyleBox, поэтому день↔ночь не рождает ни одной новой панели.
 static func repaint_tints(boxes: Dictionary, night: bool) -> void:
-	var pal: Array = Ui.FINGER_HOT_NIGHT if night else Ui.FINGER_HOT_DAY
-	var edges: Array = Ui.FINGER_EDGE_NIGHT if night else Ui.FINGER_EDGE_DAY
+	var bg: Color = Ui.HINT_ZONE_NIGHT if night else Ui.HINT_ZONE_DAY
+	var edge: Color = Ui.HINT_ZONE_EDGE_NIGHT if night else Ui.HINT_ZONE_EDGE_DAY
 	for s in boxes:
-		var i := tint_index(String(s))
-		if i < 0:
-			continue
 		var sb: StyleBoxFlat = boxes[s]
-		sb.bg_color = pal[i]
-		sb.border_color = edges[i] as Color
+		sb.bg_color = bg
+		sb.border_color = edge
 
 
 ## Подпись клавиши ДОСКИ по подписи события: строчная буква (латиница —

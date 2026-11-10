@@ -48,6 +48,11 @@ static func default_profile() -> Dictionary:
 		## Строгая ё: различать ё и е. Без галки е засчитывается за ё
 		## (для тех, кто ё не любит). Ставится там же, колонка «Ё».
 		"yo_strict": true,
+		## «Зоны»: красить дорожки под клавишами цветами пальцев
+		## ПОСТОЯННО. По умолчанию выключено — доска в покое спокойна,
+		## цвет приходит только с подсказкой (автор 10.11.2026:
+		## «включать их только в настройках пользователя»).
+		"zones": false,
 		"total_games": 0,
 		"total_wins": 0,
 		"last_played": 0,
@@ -254,6 +259,18 @@ static func set_yo_strict(user_name: String, on: bool) -> void:
 	if not user_exists(user_name):
 		return
 	save_profile(user_name, {"yo_strict": on})
+
+
+## Цветные сектора («Зоны»): дорожки под клавишами красятся постоянно.
+## По умолчанию выключено — цвет на доске появляется только с подсказкой.
+static func get_zones(user_name: String) -> bool:
+	return bool(load_profile(user_name).get("zones", false))
+
+
+static func set_zones(user_name: String, on: bool) -> void:
+	if not user_exists(user_name):
+		return
+	save_profile(user_name, {"zones": on})
 
 
 static func touch(user_name: String) -> void:

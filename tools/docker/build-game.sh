@@ -435,10 +435,13 @@ PYEOF_MERGE
 
 run_tests() {
 	run_godot --headless --path game --import
-	# Мёртвый путь не возвращается молча: ввод — только своей экранной
-	# клавиатурой (решение 10.2026). Системной клавиатуры, composing-буфера,
-	# автозамены, слоя знаков и долгого нажатия в коде игры быть не должно.
-	if grep -rnE "virtual_keyboard|set_sys_kb|get_sys_kb|_comp_|KEY_UNKNOWN|KEY_NONE|kb_need_reshow|_sync_keyboard|_poll_keyboard" game/scripts/ | grep -v "sys_kb"; then
+	# Мёртвый путь не возвращается молча: в ПАРТИИ ввод — только своей
+	# экранной клавиатурой (решение 10.2026). Системной клавиатуры,
+	# composing-буфера, автозамены, слоя знаков и долгого нажатия в коде
+	# ИГРЫ быть не должно. Меню — не исключение из смысла, а другое место:
+	# имя там правит клавиатура СИСТЕМЫ (автор 10.11.2026), и это не
+	# печать в партии, где своя доска и есть обучение.
+	if grep -rnE "virtual_keyboard|set_sys_kb|get_sys_kb|_comp_|KEY_UNKNOWN|KEY_NONE|kb_need_reshow|_sync_keyboard|_poll_keyboard" game/scripts/ | grep -v "sys_kb" | grep -vE "^game/scripts/menu\.gd:"; then
 		echo "mbt-build: в коде игры остались следы системной клавиатуры" >&2
 		return 1
 	fi

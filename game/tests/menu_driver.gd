@@ -79,10 +79,13 @@ func _users(n: int) -> void:
 		S.delete_user(u)
 	for i in n:
 		S.create_user(["Таня", "Федя", "Маруся"][i])
-	# Разные флаги: карточка должна читаться без подсказки.
+	# Разные флаги: карточка должна читаться без подсказки. «Зоны» — третий
+	# флаг (автор 10.11.2026): на карточке он стоит третьим чипом перед
+	# красным квадратным крестиком, в таблице — своей колонкой.
 	S.set_all_keys("Федя", true)
 	S.set_yo_strict("Федя", false)
 	S.set_all_keys("Маруся", false)
+	S.set_zones("Таня", true)
 	_menu.call("_reload")
 	_menu.visible = true
 	_menu.confirm_name = ""

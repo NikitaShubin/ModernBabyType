@@ -77,6 +77,8 @@ func _process(_dt: float) -> bool:
 	_part33_tap_and_bunny()
 	_part34_menu_bounds()
 	_part35_landscape_menu()
+	_part36_sys_keyboard_typing()
+	_part37_back_button()
 	_part27_menu_chaos()
 	_report()
 	return true
@@ -619,6 +621,17 @@ func _part10_first_run() -> void:
 	_check(_menu.input_yo_strict, "pending yo flag resets after creating")
 	S.delete_user("Гоша")
 	_menu.call("_reload")
+	# Флаг «Зоны» — третьим: у создаваемого профиля он тоже ждёт ввода.
+	_menu_tap(_menu.call("_zones_tap_rect", _menu.users.size()).get_center())
+	_check(_menu.input_zones, "zones checkbox arms the typed name")
+	for ch in "Зон":
+		_menu.call("_unhandled_key_input", _key_event(ch))
+	_menu.call("_unhandled_key_input", _key(KEY_ENTER))
+	_check(S.user_exists("Зон"), "profile created with zones on")
+	_check(S.get_zones("Зон"), "pending zones flag moved into the profile")
+	_check(not _menu.input_zones, "pending zones flag resets after creating")
+	S.delete_user("Зон")
+	_menu.call("_reload")
 	# Буквы печатаются сразу, без Tab.
 	for ch in "Маша":
 		_menu.call("_unhandled_key_input", _key_event(ch))
@@ -753,6 +766,14 @@ func _part13_touch() -> void:
 	_check(_picked == "", "yo tap does not play the profile")
 	_menu_tap(_menu.call("_yo_tap_rect", 0).get_center())
 	_check(S.get_yo_strict(first), "yo tap restores strictness")
+	# Галочка «Зоны» — ТРЕТЬЯ, перед крестом (автор 10.11.2026): цветные
+	# сектора под клавишами. По умолчанию выключена, тап не играет.
+	_check(not S.get_zones(first), "zones are off by default")
+	_menu_tap(_menu.call("_zones_tap_rect", 0).get_center())
+	_check(S.get_zones(first), "zones tap turns the sectors on")
+	_check(_picked == "", "zones tap does not play the profile")
+	_menu_tap(_menu.call("_zones_tap_rect", 0).get_center())
+	_check(not S.get_zones(first), "zones tap turns the sectors off")
 	# Стрелки ←/→ выбирают колонку, пробел переключает её флаг.
 	# Поле ввода гасим: иначе пробел — это ввод, а не переключатель.
 	_end_edit(_menu)
@@ -761,6 +782,18 @@ func _part13_touch() -> void:
 	_check(_menu.sel_col == 1, "right arrow moves to the yo column")
 	_menu.call("_unhandled_key_input", _key(KEY_SPACE))
 	_check(not S.get_yo_strict(first), "space toggles the yo flag")
+	_menu.call("_unhandled_key_input", _key(KEY_RIGHT))
+	_check(_menu.sel_col == 2, "right arrow moves to the zones column")
+	_menu.call("_unhandled_key_input", _key(KEY_SPACE))
+	_check(S.get_zones(first), "space toggles the zones flag")
+	_menu.call("_unhandled_key_input", _key(KEY_SPACE))
+	_check(not S.get_zones(first), "space toggles the zones flag back")
+	_menu.call("_unhandled_key_input", _key(KEY_RIGHT))
+	_check(_menu.sel_col == 0, "the flag columns wrap around to pro")
+	_menu.call("_unhandled_key_input", _key(KEY_LEFT))
+	_check(_menu.sel_col == 2, "left arrow wraps back to zones")
+	_menu.call("_unhandled_key_input", _key(KEY_LEFT))
+	_check(_menu.sel_col == 1, "left arrow moves back to yo")
 	_menu.call("_unhandled_key_input", _key(KEY_LEFT))
 	_check(_menu.sel_col == 0, "left arrow moves back to pro")
 	_menu.call("_unhandled_key_input", _key(KEY_SPACE))
@@ -776,6 +809,10 @@ func _part13_touch() -> void:
 	_check(String(_menu.hint_header) == "pro", "pro header tap explains the flag")
 	_menu_tap(_menu.call("_pro_head_rect").get_center())
 	_check(String(_menu.hint_header) == "", "pro header tap again hides it")
+	_menu_tap(_menu.call("_zones_head_rect").get_center())
+	_check(String(_menu.hint_header) == "zones", "zones header tap explains the flag")
+	_menu_tap(_menu.call("_zones_head_rect").get_center())
+	_check(String(_menu.hint_header) == "", "zones header tap again hides it")
 	# Дабл-клик по второй строке играет вторым (галочки не мешают).
 	_picked = ""
 	_menu_double_tap(_menu.call("_row_tap_rect", 1).get_center())
@@ -1159,15 +1196,19 @@ func _part18_touch_targets() -> void:
 	for i in maxi(_menu.users.size(), 1):
 		var pro: Rect2 = Rect2(_menu.call("_pro_tap_rect", i - 1))
 		var yo: Rect2 = Rect2(_menu.call("_yo_tap_rect", i - 1))
+		var zo: Rect2 = Rect2(_menu.call("_zones_tap_rect", i - 1))
 		var del: Rect2 = Rect2(_menu.call("_del_tap_rect", i - 1))
 		_check(pro.size.x >= min_side and pro.size.y >= min_side,
 			"галочка «Про» крупная (%.0fx%.0f)" % [pro.size.x, pro.size.y])
 		_check(yo.size.x >= min_side and yo.size.y >= min_side,
 			"галочка «Ё» крупная (%.0fx%.0f)" % [yo.size.x, yo.size.y])
+		_check(zo.size.x >= min_side and zo.size.y >= min_side,
+			"галочка «Зоны» крупная (%.0fx%.0f)" % [zo.size.x, zo.size.y])
 		_check(del.size.x >= min_side and del.size.y >= min_side,
 			"крестик крупный (%.0fx%.0f)" % [del.size.x, del.size.y])
 		# Соседи не перехватывают тап друг друга.
-		_check(not pro.intersects(yo) and not yo.intersects(del),
+		_check(not pro.intersects(yo) and not yo.intersects(zo)
+			and not zo.intersects(del),
 			"кнопки строки не перекрываются")
 		if i > 0:
 			break
@@ -1839,8 +1880,10 @@ func _part30_bunny_strip() -> void:
 	_menu.view_h = 1900.0
 	_menu.k = _menu.call("_fit_k", 2.5, 0.7)
 	_menu._bunny_t = 1.0
-	# Пустой список: полосы нет, кролик стоит у заголовка и на имя
-	# первого игрока не лезет (списка нет — лезть некуда).
+	# Пустой список: полосы нет, кролик стоит ПОД кнопками панели и на
+	# имя первого игрока не лезет (списка нет — лезть некуда). В строке
+	# заголовка ему тесно: панель двухстрочная (автор 10.11.2026), и
+	# заяц ростом выше строки наезжал бы на кнопку версии.
 	var none: Array[String] = []
 	_menu.users = none
 	_check(
@@ -1848,8 +1891,9 @@ func _part30_bunny_strip() -> void:
 		"an empty list needs no bunny column"
 	)
 	_check(
-		float(_menu.call("_bunny_y")) <= float(_menu.call("_rows_top")),
-		"with no players the bunny stays by the title"
+		float(_menu.call("_bunny_y"))
+			>= float(_menu.top_safe) + float(_menu.call("_bar_h")),
+		"with no players the bunny stands under the buttons"
 	)
 	_menu.users = saved_users.duplicate()
 	_menu.sel = 0
@@ -1964,11 +2008,11 @@ func _overlap_case(sz: Vector2i, n_users: int, msg: String, night: bool) -> void
 		else:
 			var cols: Array = _menu.call("_table_cols")
 			_gap_check(tag, k, [
-				["шапка", Rect2(Vector2(cols[0], list_top - 56.0 * k - 20.0 * k), Vector2(cols[6] - cols[0], 20.0 * k))],
+				["шапка", Rect2(Vector2(cols[0], list_top - 56.0 * k - 20.0 * k), Vector2(cols[7] - cols[0], 20.0 * k))],
 				["заголовок", _bar_title_rect()],
 			], 12.0, "шапка-заголовок")
 			_gap_check(tag, k, [
-				["шапка", Rect2(Vector2(cols[0], list_top - 56.0 * k - 20.0 * k), Vector2(cols[6] - cols[0], 20.0 * k))],
+				["шапка", Rect2(Vector2(cols[0], list_top - 56.0 * k - 20.0 * k), Vector2(cols[7] - cols[0], 20.0 * k))],
 				["строка", _row_draw_rect0()],
 			], 8.0, "шапка-строка")
 	# Низ: ряд кнопок и своя клавиатура — друг над другом с воздухом.
@@ -2150,7 +2194,7 @@ func _part34_menu_bounds() -> void:
 		_check(chips_top >= stats_top + ssz + 2.0,
 			"%s: chips cross the stats (%.0f < %.0f)" % [
 				tag, chips_top, stats_top + ssz + 2.0])
-		for which in ["pro", "yo", "del"]:
+		for which in ["pro", "yo", "zones", "del"]:
 			var cr: Rect2 = _menu.call("_card_btn_rect", 0, which)
 			_check(cr.position.x >= c0.position.x - 0.5
 				and cr.end.x <= c0.end.x + 0.5 and cr.end.y <= c0.end.y + 0.5,
@@ -2209,6 +2253,35 @@ func _part33_tap_and_bunny() -> void:
 			w.x <= r.size.x - 16.0 * _menu.k,
 			"%s label fits its row (%.0f px wide)" % [pair[0], w.x]
 		)
+	# Чипы карточки: три флага подряд (Про | Ё | Зоны) и КВАДРАТНЫЙ
+	# красный крестик крайним справа (автор 10.11.2026: «саму кнопку с
+	# крестом сделать не широкой, а квадратной и подкрасить красным»).
+	_menu.sel = 0
+	_menu._scroll = 0.0
+	_menu._bunny_t = 1.0
+	var card0 := Rect2(_menu.call("_card_rect", 0))
+	var rpro := Rect2(_menu.call("_card_btn_rect", 0, "pro"))
+	var ryo := Rect2(_menu.call("_card_btn_rect", 0, "yo"))
+	var rzo := Rect2(_menu.call("_card_btn_rect", 0, "zones"))
+	var rdel := Rect2(_menu.call("_card_btn_rect", 0, "del"))
+	_check(rpro.position.x < ryo.position.x and ryo.position.x < rzo.position.x,
+		"card chips go Про | Ё | Зоны")
+	_check(rzo.end.x <= rdel.position.x + 0.5, "the ✕ stands right of the zones chip")
+	_check(absf(rdel.size.x - rdel.size.y) < 0.5,
+		"the delete cross is a square (%.0f x %.0f)" % [rdel.size.x, rdel.size.y])
+	_check(rdel.end.x <= card0.end.x + 0.5, "the ✕ fits inside the card")
+	var del_bg: Color = _menu.del_sb.bg_color
+	_check(del_bg == Ui.DANGER_DAY or del_bg == Ui.DANGER_NIGHT,
+		"the delete cross is not painted red")
+	# Чип «Зоны» рабочий: тап по нему переключает флаг профиля, а не играет.
+	var who := String(_menu.users[0])
+	var was_zones := S.get_zones(who)
+	var was_picked := _picked
+	_menu_tap(rzo.get_center())
+	_check(S.get_zones(who) != was_zones, "the zones chip toggles the profile flag")
+	_check(_picked == was_picked, "the zones chip does not start the game")
+	_menu_tap(Rect2(_menu.call("_card_btn_rect", 0, "zones")).get_center())
+	_check(S.get_zones(who) == was_zones, "the zones chip toggles the flag back")
 	# Компактный список (автор 18.10.2026): невыделенный ряд
 	# разворачивается тапом БЕЗ игры; повторный тап по уже
 	# развёрнутому играет.
@@ -2353,6 +2426,173 @@ func _part35_landscape_menu() -> void:
 	root.size = Vector2i(64, 64)
 	_menu._relayout()
 	Ui.force_touch = was_touch
+
+
+## Имя на телефоне набирает клавиатура СИСТЕМЫ (автор 10.11.2026: «в
+## главном меню при написании нового или переписывании старого имени
+## появляется наша виртуальная клавиатура, а лучше, если там будет
+## системная»). Наша доска в меню тогда не рисуется и места внизу не
+## занимает; приёмник (прозрачный LineEdit) держит фокус и текст, а на
+## экране по-прежнему строка списка со своей типографикой.
+## На десктопе и в headless системной клавиатуры нет — там остаётся доска,
+## и этот тест держит ОБЕ стороны правила.
+func _part36_sys_keyboard_typing() -> void:
+	var was_touch: bool = Ui.force_touch
+	Ui.force_touch = true
+	_menu.visible = true
+	_menu.confirm_name = ""
+	_menu.view_w = 1080.0
+	_menu.view_h = 2280.0
+	_menu.top_safe = 0.0
+	var saved_users: Array = _menu.users.duplicate()
+	# Профиль НАСТОЯЩИЙ: ввод идёт через save.gd, и имя, которого нет в
+	# файле, он не переименует (ловил этот тест: «Новая» не появлялась).
+	if not S.user_exists("Ю2"):
+		S.create_user("Ю2")
+	_menu._reload()
+	_menu.sel = _menu.users.find("Ю2")
+	_menu._scroll = 0.0
+	_menu._bunny_t = 1.0
+	_menu.k = _menu.call("_fit_k", clampf(
+		minf(_menu.view_w / 1100.0, _menu.call("_menu_eff_h") / 650.0)
+			* Ui.dpr(), 0.7, 2.5), 0.7)
+	_end_edit(_menu)
+	# Как на платформе: в headless/на десктопе системной нет — своя доска.
+	_menu.sys_kb_override = -1
+	_check(not _menu.call("_sys_kb"), "no system keyboard without the platform")
+	_menu.call("_start_edit", 0)
+	_check(_menu.call("_own_shown"),
+		"the own keyboard still types names on the desktop")
+	_menu.call("_cancel_edit")
+	# Телефон: системная. Доска уходит, место внизу не занимает, кнопки
+	# действий прячутся (правка идёт).
+	_menu.sys_kb_override = 1
+	_check(_menu.call("_sys_kb"), "the override turns the system keyboard on")
+	var i2: int = _menu.users.find("Ю2")
+	_menu.call("_start_edit", i2)
+	_check(not _menu.call("_own_shown"),
+		"the own keyboard steps aside for the system one")
+	_check(is_equal_approx(float(_menu.call("_own_h")), 0.0),
+		"the own keyboard takes no room under the system one")
+	_check(_menu.call("_btn_hidden"), "the action buttons hide while typing")
+	_check(_menu.sys_field != null, "the system sink exists")
+	if _menu.sys_field == null:
+		_menu.sys_kb_override = -1
+		_menu.users = saved_users.duplicate()
+		_menu._reload()
+		root.size = Vector2i(64, 64)
+		_menu._relayout()
+		Ui.force_touch = was_touch
+		return
+	_check(_menu.sys_field.max_length == S.MAX_NAME_LENGTH,
+		"the sink keeps the name limit")
+	_check(String(_menu.sys_field.text) == "Ю2",
+		"the sink starts with the old name")
+	var rr := Rect2(_menu.call("_row_tap_rect", i2))
+	_check(_menu.sys_field.position.distance_to(rr.position) < 1.0,
+		"the sink sits on the row being edited")
+	# Приёмник связан с нашим обработчиком, а движок зовёт text_changed
+	# ОТЛОЖЕННО (в 4.3 сигнал приходит следующим кадром) — зовём его так
+	# же, как он, и сверяем половины: текст дошёл до имени...
+	_check(_menu.sys_field.text_changed.get_connections().size() > 0,
+		"the sink reports its text changes")
+	_menu.call("_sys_text_changed", "Новая")
+	_check(String(_menu.input_text) == "Новая", "IME text reaches the name")
+	# Наш путь записи (стёрка, перенос курсора) пишет обратно в приёмник:
+	# текст один, разъехаться нечему.
+	_menu.call("_input_text_set", "Нова")
+	_check(String(_menu.sys_field.text) == "Нова",
+		"the sink follows our own edits")
+	# Граница длины — та же, что у доски.
+	_menu.call("_input_text_set", "abcdefghijklmnopqrstuvwxyz")
+	_check(String(_menu.input_text).length() == S.MAX_NAME_LENGTH,
+		"the name limit holds under IME")
+	_menu.call("_input_text_set", "Новая")
+	# Ввод с IME завершает правку и создаёт профиль: путь тот же, что ↵.
+	_menu.call("_sys_submitted", "Новая")
+	_check(S.user_exists("Новая"), "submitting the IME field creates the profile")
+	_check(not _menu.input_active, "submitting closes the edit")
+	_check(not _menu.sys_field.has_focus(),
+		"the sink releases focus when the edit ends")
+	# Отмена правки гасит и клавиатуру системы, меню остаётся.
+	_menu.call("_start_edit", 0)
+	_check(_menu.sys_field.has_focus(), "a new edit takes the focus back")
+	_menu.call("_cancel_edit")
+	_check(not _menu.input_active and not _menu.sys_field.has_focus(),
+		"cancelling the edit hides the system keyboard")
+	_check(_menu.visible, "cancelling does not close the menu")
+	# Обратно на платформу: своя доска снова главная.
+	_menu.sys_kb_override = -1
+	_check(not _menu.call("_sys_kb"), "the override releases the system keyboard")
+	_menu.call("_start_edit", 0)
+	_check(_menu.call("_own_shown"),
+		"the own keyboard comes back after the override")
+	_menu.call("_cancel_edit")
+	if S.user_exists("Новая"):
+		S.delete_user("Новая")
+	if S.user_exists("Ю2"):
+		S.delete_user("Ю2")
+	_menu.sel = 0
+	_menu._reload()
+	_menu.users = saved_users.duplicate()
+	root.size = Vector2i(64, 64)
+	_menu._relayout()
+	Ui.force_touch = was_touch
+
+
+## Системная «назад» (автор 10.11.2026: «при нажатии системной стрелки
+## назад в самой игре, игра не выходит в главное меню, а выходит вообще»).
+## Движок приложение больше не гасит: `config/quit_on_go_back=false` в
+## project.godot заставляет его прислать уведомление, а лестницу экранов
+## ведём мы — из партии в меню, в меню сначала закрываем открытое, и
+## только из списка уходим из игры.
+func _part37_back_button() -> void:
+	_check(
+		not bool(ProjectSettings.get_setting(
+			"application/config/quit_on_go_back", true)),
+		"the engine leaves the back button to the app"
+	)
+	# В партии «назад» выходит в меню, а не из игры.
+	var scene: PackedScene = load("res://scenes/main.tscn")
+	var main: Node = scene.instantiate()
+	root.add_child(main)
+	main.call("_close_menu")
+	main.grace_t = 0.0
+	main.notification(Node.NOTIFICATION_WM_GO_BACK_REQUEST)
+	_check(bool(main.menu_open), "back in the game opens the menu")
+	var menu: Node = main.menu
+	_check(menu != null and bool(menu.visible), "the menu is visible after back")
+	if menu == null:
+		main.queue_free()
+		return
+	menu.call("_reload")
+	_end_edit(menu)
+	# Лестница: сначала закрывается то, что открыто.
+	menu.confirm_name = String(menu.users[0]) if not menu.users.is_empty() else "Ю"
+	main.notification(Node.NOTIFICATION_WM_GO_BACK_REQUEST)
+	_check(String(menu.confirm_name) == "",
+		"back cancels the delete confirmation in the menu")
+	_check(bool(main.menu_open), "cancelling a confirmation keeps the menu open")
+	menu.call("_upd_ensure")
+	menu._upd_open = true
+	main.notification(Node.NOTIFICATION_WM_GO_BACK_REQUEST)
+	_check(not bool(menu._upd_open), "back closes the update modal")
+	_check(bool(main.menu_open), "closing the update modal keeps the menu open")
+	menu.call("_start_edit", 0)
+	main.notification(Node.NOTIFICATION_WM_GO_BACK_REQUEST)
+	_check(not bool(menu.input_active), "back cancels the name edit")
+	_check(bool(main.menu_open), "cancelling the edit keeps the menu open")
+	# Из списка — выход из игры: настоящий quit погасил бы прогон,
+	# поэтому смотрим флаг (так же, как у Esc).
+	var was_quit: bool = bool(menu.quit_enabled)
+	menu.quit_enabled = false
+	menu.quit_requested = false
+	main.notification(Node.NOTIFICATION_WM_GO_BACK_REQUEST)
+	_check(bool(menu.quit_requested), "back from the player list quits the game")
+	menu.quit_requested = false
+	menu.quit_enabled = was_quit
+	main.call("_close_menu")
+	main.queue_free()
 
 
 func _report() -> void:

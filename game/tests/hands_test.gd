@@ -1278,9 +1278,10 @@ func _inside_contour(poly: PackedVector2Array, part: PackedVector2Array,
 
 ## ------------------------------------------------- клавиши по пальцам
 
-## ПАЛЕЦ КЛАВИШИ ВИДЕН И БЕЗ КРАСКИ, а красится только когда игра ЗОВЁТ.
-## Держим (решение 09.11.2026: «в покое доска спокойна, цвет — когда
-## подсказка зовёт»):
+## ПАЛЕЦ КЛАВИШИ ВИДЕН И БЕЗ КРАСКИ, а цвет приходит только по галочке
+## «Зоны» или когда игра ЗОВЁТ. Держим (решение 09.11.2026: «в покое
+## доска спокойна, цвет — когда подсказка зовёт»; 10.11.2026: «включать
+## их только в настройках пользователя»):
 ##   * у КАЖДОЙ клавиши доски есть дорожка-подложка (новая клавиша без
 ##     пальца краснит — иначе она молча осталась бы нейтральной);
 ##   * в покое дорожки нейтральны и ЧЕРЕДУЮТСЯ светлотой через палец —
@@ -1298,8 +1299,9 @@ func _inside_contour(poly: PackedVector2Array, part: PackedVector2Array,
 ##     одна, а клавиши две; мёртвые клавиши не зажигаются никогда;
 ##   * панели зоны и дорожки строятся один раз и перекрашиваются темой
 ##     НА МЕСТЕ;
-##   * у горячей половины пробела цвет СВОЕГО большого, скруглены только
-##     внешние углы;
+##   * зона подсказки — ОДИН цвет на все пальцы (10.11.2026: одновременно
+##     горит один палец), горячих половин пробела две ради геометрии, но
+##     цвет у них общий; скруглены только внешние углы;
 ##   * вспышка нажатия, подсказка и зажатый шифт зону вытесняют.
 ##
 ## Headless картинку не рисует — меряем чистые меры: зоны пальцев,
@@ -1334,10 +1336,6 @@ func _tint_checks(bs: Array) -> void:
 		"the index|index boundary spans %d hue slots, want >= 3" % gap)
 
 	var hot := Hands.key_tints(false, 10.0, 2.0)
-	var hot_day: Array = Ui.FINGER_HOT_DAY
-	var hot_night: Array = Ui.FINGER_HOT_NIGHT
-	var edge_day: Array = Ui.FINGER_EDGE_DAY
-	var edge_night: Array = Ui.FINGER_EDGE_NIGHT
 	var split := Kbd.space_split(bs)
 	# Зона подсказки — ЕДИНСТВЕННАЯ заливка клавиши «по пальцу»: в покое
 	# доска нейтральна (решение 09.11.2026). Панели у зоны уже с рамкой
@@ -1381,34 +1379,47 @@ func _tint_checks(bs: Array) -> void:
 			prev = cur
 			prev_slot = cur_slot
 
-	# Панели зоны — из палитры, построены один раз, темой меняются НА МЕСТЕ.
+	# Панели зоны — ОДИН цвет на все пальцы (автор 10.11.2026: подсказки
+	# разбиения зон одноцветные, рядом два пальца не горят). Панели
+	# построены один раз, темой меняются НА МЕСТЕ.
 	for s in hot:
 		var i := Hands.tint_index(String(s))
 		_check(i >= 0, "hot box '%s' maps to a finger" % s)
 		if i < 0:
 			continue
 		var hs: StyleBoxFlat = hot[s]
-		_check(hs.bg_color == hot_day[i],
-			"hot box '%s' is the hot day colour" % s)
-		_check(hs.border_color == edge_day[i],
-			"hot box '%s' carries its finger edge in day" % s)
+		_check(hs.bg_color == Ui.HINT_ZONE_DAY,
+			"hot box '%s' is not the one hint-zone fill" % s)
+		_check(hs.border_color == Ui.HINT_ZONE_EDGE_DAY,
+			"hot box '%s' is not the one hint-zone edge" % s)
+	var fills := {}
+	for s in hot:
+		fills[(hot[s] as StyleBoxFlat).bg_color] = true
+	_check(fills.size() == 1,
+		"the hint zone has %d colours for %d boxes" % [fills.size(), hot.size()])
 	var hfirst: StyleBoxFlat = hot["ф"]
 	Hands.repaint_tints(hot, true)
-	_check(hfirst.bg_color == hot_night[0], "hot night repaint recolours the fill")
-	_check(hfirst.border_color == edge_night[0],
-		"hot night repaint recolours the edge by finger")
+	_check(hfirst.bg_color == Ui.HINT_ZONE_NIGHT,
+		"hot night repaint recolours the fill")
+	_check(hfirst.border_color == Ui.HINT_ZONE_EDGE_NIGHT,
+		"hot night repaint recolours the edge")
 	_check(hot["ф"] == hfirst, "hot night repaint keeps the same StyleBox")
 	Hands.repaint_tints(hot, false)
-	_check(hfirst.bg_color == hot_day[0], "hot day repaint returns the hot fill")
-	_check(hfirst.border_color == edge_day[0],
-		"hot day repaint returns the finger edge")
+	_check(hfirst.bg_color == Ui.HINT_ZONE_DAY,
+		"hot day repaint returns the zone fill")
+	_check(hfirst.border_color == Ui.HINT_ZONE_EDGE_DAY,
+		"hot day repaint returns the zone edge")
 
-	# Пробел: две половины ТОЛЬКО в зоне подсказки, цвета СВОИХ больших,
-	# скруглены внешние углы, внутренние кромки без рамки.
+	# Пробел: две половины ТОЛЬКО в зоне подсказки, цвет у обеих ОДИН
+	# (одноцветная зона), скруглены внешние углы, внутренние кромки без
+	# рамки.
 	var sp_l: StyleBoxFlat = hot["пробел:Л"]
 	var sp_r: StyleBoxFlat = hot["пробел:П"]
-	_check(sp_l.bg_color == hot_day[4] and sp_r.bg_color == hot_day[5],
-		"hot space halves carry the two thumbs")
+	_check(sp_l.bg_color == Ui.HINT_ZONE_DAY and sp_r.bg_color == Ui.HINT_ZONE_DAY,
+		"hot space halves do not share the one zone colour")
+	_check(sp_l.border_color == Ui.HINT_ZONE_EDGE_DAY
+		and sp_r.border_color == Ui.HINT_ZONE_EDGE_DAY,
+		"hot space halves do not share the one zone edge")
 	_check(sp_l.corner_radius_top_left > 0 and sp_l.corner_radius_bottom_left > 0,
 		"space left half is rounded on its outer left corners")
 	_check(sp_l.corner_radius_top_right == 0 and sp_l.corner_radius_bottom_right == 0,

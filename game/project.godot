@@ -9,11 +9,17 @@ config_version=5
 
 config/name="ModernBabyType"
 config/description="Игра для обучения детей слепой печати: герой убегает от врага, поедая буквы."
-config/version="0.0.38"
+config/version="0.0.39"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.3", "GL Compatibility")
 config/icon="res://icon.png"
 boot_splash/show_image=false
+; Системная «назад» ведёт по лестнице экранов, а не гасит игру
+; (автор 10.11.2026: «при нажатии системной стрелки назад в самой игре,
+; игра не выходит в главное меню, а выходит вообще»). С этой настройкой
+; движок не завершает приложение сам, а шлёт узлу
+; NOTIFICATION_WM_GO_BACK_REQUEST — его слушает main._notification.
+config/quit_on_go_back=false
 
 [display]
 
