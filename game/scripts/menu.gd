@@ -156,8 +156,8 @@ var quit_requested := false
 var quit_enabled := true
 ## То же для строгой ё (колонка «Ё»): ждёт создания профиля.
 var input_yo_strict := true
-## «Зоны»: цветные дорожки под клавишами постоянно (колонка «Зоны»,
-## третья кнопка перед крестиком). По умолчанию выключено; ждёт создания
+## «Зоны»: клавиши постоянно закрашены цветом своего пальца (колонка
+## «Зоны», третья кнопка перед крестиком). По умолчанию выключено; ждёт создания
 ## профиля так же, как два флага выше.
 var input_zones := false
 ## Самообновление с GitHub: только по кнопке (никакой фоновой магии).
@@ -228,10 +228,10 @@ var kb_held := ""
 const KB_PRESS_T := 0.55
 var kb_shift := false
 var kb_key_sb: StyleBoxFlat
-## Дорожки зон под клавишами (Hands.key_lanes_idle) — тот же способ
-## деления на сектора, что в игре. Меню никого не зовёт, поэтому здесь
-## всегда ПОКОЙ: насыщенный цвет приходит только с подсказкой.
-var kb_lanes: Dictionary = {}
+## Плита доски — нейтральная поверхность в зазорах, как в игре
+## (Kbd.plate_rect). Заливок «по пальцу» в меню нет вовсе: меню никого не
+## зовёт, «Зоны» — режим профиля в партии.
+var kb_plate_sb: StyleBoxFlat
 ## Заливка нажатой клавиши (та же краска ночью).
 var kb_press_sb: StyleBoxFlat
 var kb_press_ok_sb: StyleBoxFlat
@@ -255,7 +255,7 @@ func _draw_own_kb() -> void:
 		self, _own_rect(), kb_lang, kb_shift, true, mono,
 		int(30.0 * k), kb_key_sb, selbox_sb, _uitext(), [], null, _dim(),
 		kb_morph, kb_morph_from, kb_morph_shift, _press_sb(), kb_press,
-		{}, kb_lanes
+		{}, {}, {}, kb_plate_sb
 	)
 
 
@@ -398,7 +398,7 @@ func _ready() -> void:
 	row_idle_sb = Ui.panel_sb(Ui.ROW_IDLE_DAY, 12.0)
 	box_sb = Ui.panel_sb(Ui.SURFACE_ALT_DAY, 10.0, Ui.LINE_DAY, 2.0, false)
 	kb_key_sb = Ui.panel_sb(Ui.SURFACE_ALT_DAY, 10.0, Ui.LINE_DAY, 2.0, false)
-	kb_lanes = Hands.key_lanes_idle(false)
+	kb_plate_sb = Ui.panel_sb(Ui.KEY_PLATE_DAY, 10.0 + Kbd.PLATE_PAD)
 	# Нажатая клавиша — заметная заливка: попал или промахнулся.
 	kb_press_sb = Ui.panel_sb(Ui.PRESS_DAY, 10.0, Ui.LINE_DAY, 2.5, false)
 	kb_press_ok_sb = Ui.panel_sb(Ui.OK_DAY, 10.0, Ui.OK_EDGE_DAY, 2.5, false)
@@ -1617,7 +1617,7 @@ func _toggle_yo(i: int) -> void:
 	_scroll_to_sel()
 
 
-## Цветные сектора строке: дорожки под клавишами горят постоянно.
+## Цветные сектора строке: клавиши закрашены цветом своего пальца.
 func _toggle_zones(i: int) -> void:
 	if i == users.size() and editing_new:
 		input_zones = not input_zones
@@ -2938,7 +2938,7 @@ func _yo_tap_rect(i: int) -> Rect2:
 	return _cell_rect(cx, row_y, cols[5] - cols[4])
 
 
-## Галочка «Зоны» в строке: цветные дорожки под клавишами постоянно.
+## Галочка «Зоны» в строке: клавиши закрашены цветом своего пальца.
 ## Тап не играет профилем, только флагом. Третья кнопка, перед крестом
 ## (автор 10.11.2026).
 func _zones_tap_rect(i: int) -> Rect2:
@@ -3104,7 +3104,7 @@ func _head_tip_at(pos: Vector2) -> String:
 	if _yo_head_rect().has_point(pos):
 		return "Ё: без галки е засчитывается за ё."
 	if _zones_head_rect().has_point(pos):
-		return "Зоны: цветные полоски под клавишами — палец каждой."
+		return "Зоны: каждая клавиша цветом её пальца."
 	return ""
 
 
@@ -3403,8 +3403,8 @@ func _apply_night() -> void:
 		kb_press_ok_sb.border_color = Ui.OK_EDGE_DAY
 		kb_press_err_sb.bg_color = Ui.DANGER_DAY
 		kb_press_err_sb.border_color = Ui.DANGER_EDGE_DAY
-	# Дорожки зон — той же темой: палитра та же, покой тот же.
-	Hands.repaint_lanes(kb_lanes, night, true)
+	# Плита доски — той же темой.
+	kb_plate_sb.bg_color = Ui.KEY_PLATE_NIGHT if night else Ui.KEY_PLATE_DAY
 	if _meadow != null:
 		_meadow.night = night
 		_meadow._apply_sky()
@@ -3660,7 +3660,7 @@ func _draw() -> void:
 		if hint_header == "pro":
 			expl = ["Про: все буквы сразу, важен регистр."]
 		elif hint_header == "zones":
-			expl = ["Зоны: цвет полоски под клавишей — её палец."]
+			expl = ["Зоны: цвет клавиши — её палец."]
 		else:
 			expl = ["Ё: без галки е засчитывается за ё."]
 		# Пояснение — пилюля в своём зазоре (см. _chip_hint_y): текст без

@@ -1282,10 +1282,11 @@ func _inside_contour(poly: PackedVector2Array, part: PackedVector2Array,
 ## «Зоны» или когда игра ЗОВЁТ. Держим (решение 09.11.2026: «в покое
 ## доска спокойна, цвет — когда подсказка зовёт»; 10.11.2026: «включать
 ## их только в настройках пользователя»):
-##   * у КАЖДОЙ клавиши доски есть дорожка-подложка (новая клавиша без
-##     пальца краснит — иначе она молча осталась бы нейтральной);
-##   * в покое дорожки нейтральны и ЧЕРЕДУЮТСЯ светлотой через палец —
-##     граница секции видна без краски;
+##   * у КАЖДОЙ живой клавиши доски есть заливка её пальца (новая
+##     клавиша без пальца краснит — иначе она молча осталась бы
+##     бумажной), а панель ОДНА на палец: клавиши пальца делят бокс;
+##   * в бумаге (цвет выключен) заливка становится бумагой клавиши, а
+##     зазоры показывает нейтральная плита доски — доска читается доской;
 ##   * цвет пальца берётся из круга по `Ui.FINGER_SLOT`: в каждом ряду
 ##     букв и цифр соседние пальцы стоят на ≥ 3 шага круга (108°), значит
 ##     цвет — спутник места, а не случайный набор, и ряд не читается
@@ -1297,15 +1298,15 @@ func _inside_contour(poly: PackedVector2Array, part: PackedVector2Array,
 ##     пальцев видно не будет, а это крайне важно»);
 ##   * системные клавиши низа получают СТОРОНУ по месту: подпись у них
 ##     одна, а клавиши две; мёртвые клавиши не зажигаются никогда;
-##   * панели зоны и дорожки строятся один раз и перекрашиваются темой
-##     НА МЕСТЕ;
+##   * панели зоны и заливки строятся один раз и перекрашиваются темой
+##     НА МЕСТЕ — в кадре новых объектов нет;
 ##   * зона подсказки — ОДИН цвет на все пальцы (10.11.2026: одновременно
 ##     горит один палец), горячих половин пробела две ради геометрии, но
 ##     цвет у них общий; скруглены только внешние углы;
 ##   * вспышка нажатия, подсказка и зажатый шифт зону вытесняют.
 ##
 ## Headless картинку не рисует — меряем чистые меры: зоны пальцев,
-## панели, дорожки и правило выбора (Kbd.key_box).
+## панели, заливки и правило выбора (Kbd.key_box).
 func _tint_checks(bs: Array) -> void:
 	for b in bs:
 		var s0 := String(b["s"])
@@ -1337,9 +1338,9 @@ func _tint_checks(bs: Array) -> void:
 
 	var hot := Hands.key_tints(false, 10.0, 2.0)
 	var split := Kbd.space_split(bs)
-	# Зона подсказки — ЕДИНСТВЕННАЯ заливка клавиши «по пальцу»: в покое
-	# доска нейтральна (решение 09.11.2026). Панели у зоны уже с рамкой
-	# своего пальца, поэтому отдельных «спокойных» заливок больше нет.
+	# Зона подсказки — ОДНА на палец и рука: панели уже с рамкой, поэтому
+	# отдельных «спокойных» заливок нет; при подсказке доска бумажная
+	# (заливки пальцев гаснут), и зона остаётся единственным цветом.
 	var rows := {}
 	for b in bs:
 		var r0: Rect2 = b["r"]
@@ -1392,11 +1393,11 @@ func _tint_checks(bs: Array) -> void:
 			"hot box '%s' is not the one hint-zone fill" % s)
 		_check(hs.border_color == Ui.HINT_ZONE_EDGE_DAY,
 			"hot box '%s' is not the one hint-zone edge" % s)
-	var fills := {}
+	var zone_fills := {}
 	for s in hot:
-		fills[(hot[s] as StyleBoxFlat).bg_color] = true
-	_check(fills.size() == 1,
-		"the hint zone has %d colours for %d boxes" % [fills.size(), hot.size()])
+		zone_fills[(hot[s] as StyleBoxFlat).bg_color] = true
+	_check(zone_fills.size() == 1,
+		"the hint zone has %d colours for %d boxes" % [zone_fills.size(), hot.size()])
 	var hfirst: StyleBoxFlat = hot["ф"]
 	Hands.repaint_tints(hot, true)
 	_check(hfirst.bg_color == Ui.HINT_ZONE_NIGHT,
@@ -1474,81 +1475,93 @@ func _tint_checks(bs: Array) -> void:
 	_check(hot.has("Ctrl:Л") and hot.has("Ctrl:П"),
 		"the Ctrl sides are separate boxes")
 
-	# ДОРОЖКИ ЗОН — подложка под клавишами (автор 09.11.2026: «либо ещё
-	# заметнее цвета, либо вообще менять способ разделения на сектора»).
-	# В покое — нейтральные полосы, чередующиеся через палец; цвет пальца
-	# приходит только с подсказкой (`Hands.key_lanes`).
-	var lanes := Hands.key_lanes_idle(false)
-	var idle_day: Array = Ui.FINGER_LANE_IDLE_DAY
-	var idle_night: Array = Ui.FINGER_LANE_IDLE_NIGHT
-	var lane_day: Array = Ui.FINGER_LANE_DAY
-	var lane_night: Array = Ui.FINGER_LANE_NIGHT
+	# ЗАЛИВКИ ЛИЦ КЛАВИШ (автор 10.11.2026: «виртуальная клавиатура
+	# раскрашивает фон вокруг кнопок, а не сами кнопки»). Цвет лежит В
+	# клавише, панель ОДНА на палец (клавиши пальца делят бокс — в кадре
+	# новых объектов нет), мёртвые остаются бумагой, пробел — одной
+	# клавишей. Зазоры показывает плита доски, её же меряет тест.
+	var fills := Hands.key_fills(false, 10.0, 2.0)
+	var key_day: Array = Ui.FINGER_KEY_DAY
+	var key_night: Array = Ui.FINGER_KEY_NIGHT
 	for b in bs:
 		var s1 := String(b["s"])
-		var lk := s1
-		if lanes.has(s1 + ":Л"):
-			var cx1: float = (b["r"] as Rect2).get_center().x
-			lk = s1 + (":Л" if cx1 < split else ":П")
-		_check(lanes.has(lk), "key '%s' has a zone lane" % s1)
-		if not lanes.has(lk):
+		if Hands.dead_key(s1):
+			_check(not fills.has(s1),
+				"dead key '%s' must stay paper, not take a finger fill" % s1)
 			continue
-		var li := Hands.paint_index(lk)
-		_check(li >= 0, "lane '%s' maps to a finger" % lk)
-		if li >= 0:
-			var want: Color = idle_day[li]
-			# Мёртвая клавиша и в покое покойна, и подсказкой не зажигается.
-			if Hands.dead_key(lk):
-				want = idle_day[li]
-			_check((lanes[lk] as Color) == want,
-				"idle lane '%s' is not the neutral step of its finger" % lk)
-	_check(lanes.has("пробел"), "the space has one whole-key lane")
-	_check((lanes["пробел"] as Color) == idle_day[Hands.tint_index("пробел")],
-		"the space lane is not its single neutral colour")
-	# Мёртвые клавиши в ЦВЕТНОМ наборе тоже остаются покойными: цветной
-	# обрубок на краю доски читался бы как сломанная секция.
-	var on := Hands.key_lanes(false)
-	for s in ["Tab", "Ctrl:Л", "Ctrl:П", "Win", "Alt:П", "◀"]:
-		_check(on.has(s), "dead key '%s' still has a lane" % s)
-		if not on.has(s):
+		_check(fills.has(s1), "key '%s' has a finger fill" % s1)
+		if not fills.has(s1):
 			continue
-		_check((on[s] as Color) == idle_day[Hands.paint_index(s)],
-			"dead key '%s' lights up with its finger" % s)
-	for s in ["ф", "ы", "пробел"]:
-		_check((on[s] as Color) == lane_day[Hands.paint_index(s)],
-			"live key '%s' can be lit by a hint" % s)
-	# Соседи одного пальца: подложки перекрываются — зазор доски
-	# закрыт, сплошная дорожка (мера та же, что у рисования).
-	var ra := Hands.key_rect(bs, "а") as Rect2
-	var rp := Hands.key_rect(bs, "п") as Rect2
-	var area0 := Rect2(ra.position, Vector2.ZERO)
+		var fi := Hands.paint_index(s1)
+		_check(fi >= 0, "fill '%s' maps to a finger" % s1)
+		if fi < 0:
+			continue
+		var fsb: StyleBoxFlat = fills[s1]
+		_check(fsb.bg_color == key_day[fi],
+			"key '%s' is not filled with its finger colour" % s1)
+		# Границы клавиши читаются РАМКОЙ бумажной клавиши (2 px): это и
+		# была жалоба — «линия границ нечитаема». Рамка своя у каждой
+		# клавиши, хотя бокс общий на палец.
+		_check(fsb.border_color == Ui.LINE_DAY,
+			"key '%s' lost the paper key edge" % s1)
+		_check(fsb.border_width_left == 2 and fsb.border_width_top == 2,
+			"key '%s' edge is not 2 px" % s1)
+		_check(fsb.corner_radius_top_left == 10,
+			"key '%s' corner radius drifted from the board's" % s1)
+	_check(fills.has("пробел"), "the space has one whole-key fill")
+	_check((fills["пробел"] as StyleBoxFlat).bg_color
+		== key_day[Hands.paint_index("пробел")],
+		"the space fill is not its single finger colour")
+	# Одна панель на палец: иначе клавиши пальца перекрашивались бы
+	# поодиночке, и в кадре рождался бы StyleBox на клавишу.
+	var by_finger := {}
+	for s2 in fills:
+		var fi2 := Hands.paint_index(String(s2))
+		var sb2: StyleBoxFlat = fills[s2]
+		if by_finger.has(fi2):
+			_check(by_finger[fi2] == sb2,
+				"keys of finger %d do not share one fill box" % fi2)
+		else:
+			by_finger[fi2] = sb2
+	_check(by_finger.size() == 10,
+		"%d fill boxes for 10 fingers" % by_finger.size())
+	# Переход «бумага ↔ цвет» и тема — НА МЕСТЕ, концы ТОЧНЫЕ цвета.
+	var fbox: StyleBoxFlat = fills["ф"]
+	Hands.paint_fills(fills, false, 0.0)
+	_check(fbox.bg_color == Ui.SURFACE_DAY,
+		"glow 0 does not return the key to paper")
+	_check(fbox.border_color == Ui.LINE_DAY,
+		"glow 0 does not return the paper edge")
+	Hands.paint_fills(fills, false, 1.0)
+	_check(fbox.bg_color == key_day[0],
+		"glow 1 does not paint the finger colour")
+	Hands.paint_fills(fills, true, 1.0)
+	_check(fbox.bg_color == key_night[0],
+		"night does not paint the night fill")
+	_check(fbox.border_color == Ui.LINE_NIGHT,
+		"night does not paint the night edge")
+	_check(fills["ф"] == fbox, "repaint replaced the StyleBox instead of mutating it")
+	Hands.paint_fills(fills, true, 0.0)
+	_check(fbox.bg_color == Ui.SURFACE_ALT_NIGHT,
+		"glow 0 night does not return the key to paper")
+	Hands.paint_fills(fills, false, 0.0)
+	# ПЛИТА ДОСКИ — нейтральная поверхность В ЗАЗОРАХ (см. Kbd.plate_rect):
+	# доска читается доской, когда все клавиши залиты своим цветом.
+	var area0 := Rect2(Vector2.ZERO, Vector2.ZERO)
 	for b in bs:
 		area0 = area0.merge(b["r"] as Rect2)
-	var la := Kbd.lane_rect(ra, area0)
-	var lp := Kbd.lane_rect(rp, area0)
-	_check(la.end.x > lp.position.x or lp.end.x > la.position.x,
-		"two keys of one finger do not share a lane")
-	_check(absf(la.position.y - lp.position.y) < 0.01,
-		"a lane changes height along its finger")
-	# Дорожка не вылезает за доску: радужной рамки по краю нет.
-	var lfl := Kbd.lane_rect(Hands.key_rect(bs, "ф") as Rect2, area0)
-	_check(lfl.position.x >= area0.position.x - 0.01
-		and lfl.end.x <= area0.end.x + 0.01,
-		"a lane spills outside the board")
-	# Темой перекрашивается НА МЕСТЕ: словарь тот же, цвета ночные.
-	Hands.repaint_lanes(lanes, true, true)
-	_check((lanes["ф"] as Color) == idle_night[0],
-		"night repaint does not recolour the idle lanes")
-	_check(Hands.key_lanes_idle(true)["глобус"] == idle_night[5],
-		"a fresh night idle set is not the night palette")
-	Hands.repaint_lanes(lanes, false, true)
-	_check((lanes["ф"] as Color) == idle_day[0],
-		"day repaint does not return the idle lane colour")
-	Hands.repaint_lanes(on, true)
-	_check((on["ф"] as Color) == lane_night[0],
-		"night repaint does not recolour the active lanes")
-	Hands.repaint_lanes(on, false)
-	_check((on["ф"] as Color) == lane_day[0],
-		"day repaint does not return the active lane colour")
+	var pad := Kbd.KEY_GAP + Kbd.PLATE_PAD
+	var pr := Kbd.plate_rect(area0)
+	_check(pr.position.x < area0.position.x and pr.position.y < area0.position.y
+		and pr.end.x > area0.end.x and pr.end.y > area0.end.y,
+		"the plate does not stand out past the board")
+	_check(absf(pr.size.x - (area0.size.x + pad * 2.0)) < 0.01
+		and absf(pr.size.y - (area0.size.y + pad * 2.0)) < 0.01,
+		"the plate is not the board plus its air")
+	_check(pad > Kbd.KEY_GAP * 0.5,
+		"the plate air is thinner than half a gap")
+	_check(Ui.KEY_PLATE_DAY != Ui.SURFACE_DAY and Ui.KEY_PLATE_NIGHT != Ui.SURFACE_ALT_NIGHT,
+		"the plate is the same colour as the keys")
 
 
 ## Рисование ОБЕИХ кистей — только из _draw(): CanvasItem иначе ругается

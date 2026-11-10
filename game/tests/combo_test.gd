@@ -4126,7 +4126,7 @@ func _case_hands_shift_hand() -> void:
 ## ЗОНА ПОДСКАЗКИ (автор 08.11.2026: «Возможно, ещё стоит при подсказке
 ## всю секцию делать ещё заметнее. Чтобы было понято в какой зоне и
 ## каким пальцем надо нажимать»). С 10.11.2026 зона ОДНОЦВЕТНАЯ, а
-## дорожки красятся только при включённых «Зонах». Модель, а не
+## клавиши красятся по пальцу только при включённых «Зонах». Модель, а не
 ## картинка: headless не рисует, `_draw_own_kb` не зовём — меряем ровно
 ## то, что он отдаёт в `Kbd.draw`, то есть `_hot_zone(_hint_keys())`.
 func _case_hint_zone() -> void:
@@ -4191,9 +4191,9 @@ func _case_hint_zone() -> void:
 		_check(is_equal_approx(_main._hint_pulse(1), p0),
 			"%s: the second zone does not follow the first" % tag)
 	# Панели подсказки: НЕПРОЗРАЧНЫЕ и с контрастной подписью. Под
-	# клавишей лежит насыщенная дорожка пальца, и полупрозрачное жёлтое
+	# клавишей лежит насыщенная заливка пальца, и полупрозрачное жёлтое
 	# смешивалось с ней в коричневое пятно — цель подсказки переставала
-	# быть самой яркой на доске (кадр 41, «м» на пурпурной дорожке).
+	# быть самой яркой на доске (кадр 41, «м» на пурпурной клавише).
 	# Ночная заливка тёмная: под светлые чернила (было 2.21:1).
 	_main.time = 0.0
 	var hb: Dictionary = _main._hint_boxes(["ShiftR", "н"], false)
@@ -4254,32 +4254,32 @@ func _case_hint_zone() -> void:
 	_check(not hi.is_empty(), "%s: no hint after the delay" % tag)
 	var live: Dictionary = _main._hot_zone(hi)
 	_check(not live.is_empty(), "%s: the hint did not light its zone" % tag)
-	# Дорожки зон: «Зоны» включены — доска покрашена ПОСТОЯННО, а
-	# подсказка гасит ВСЕ дорожки в НЕЙТРАЛЬ (автор 10.11.2026: «при
+	# ЗАЛИВКИ ЛИЦ КЛАВИШ: «Зоны» включены — доска закрашена ПОСТОЯННО, а
+	# подсказка гасит ВСЕ заливки в БУМАГУ (автор 10.11.2026: «при
 	# подсказке сектора гаснут в нейтраль, как при выключенных Зонах»),
-	# после ввода краска возвращается. Сравниваем с ЖИВЫМИ словарями
-	# главного экрана, а не с литералами палитры: тема кадра могла быть
-	# ночной, а раскладка — уже собранной.
+	# после ввода краска возвращается. Сравниваем с ЖИВЫМИ боксами
+	# главного экрана: тема кадра могла быть ночной.
 	_main.profile_zones = true
-	_main._lane_reset()
-	var want_idle: Color = _main.kb_lanes_idle["а"]
-	var want_on: Color = _main.kb_lanes_on["а"]
+	_main._fill_reset()
+	var fbox: StyleBoxFlat = _main.kb_fills["а"]
+	var paper: Color = Ui.SURFACE_ALT_NIGHT if _main.night else Ui.SURFACE_DAY
+	var want_on: Color = Hands.fill_colour(Hands.paint_index("а"), _main.night)
 	for i in 40:
-		_main._lane_tick(0.1, [])
-	_check(_main.kb_lanes["а"] == want_on,
+		_main._fill_tick(0.1, [])
+	_check(fbox.bg_color == want_on,
 		"%s: zones on — the board is not painted" % tag)
-	_main._lane_tick(0.2, ["а"])
-	_check(_main.kb_lanes["а"] == want_idle,
+	_main._fill_tick(0.2, ["а"])
+	_check(fbox.bg_color == paper,
 		"%s: a hint left the board painted" % tag)
 	for i in 40:
-		_main._lane_tick(0.1, [])
-	_check(_main.kb_lanes["а"] == want_on,
+		_main._fill_tick(0.1, [])
+	_check(fbox.bg_color == want_on,
 		"%s: the paint did not come back after the hint" % tag)
-	# Выключенные «Зоны» — цвет не появляется НИКОГДА: доска спокойна.
+	# Выключенные «Зоны» — цвет не появляется НИКОГДА: доска бумажная.
 	_main.profile_zones = false
 	for i in 40:
-		_main._lane_tick(0.1, [])
-	_check(_main.kb_lanes["а"] == want_idle,
+		_main._fill_tick(0.1, [])
+	_check(fbox.bg_color == paper,
 		"%s: zones off still paints the board" % tag)
 	for s in hi:
 		var key := Hands.key_label(String(s))
@@ -4294,9 +4294,9 @@ func _case_hint_zone() -> void:
 	_check(_main._hint_keys().is_empty(), "%s: the hint survived a keypress" % tag)
 	_check(_main._hot_zone(_main._hint_keys()).is_empty(),
 		"%s: the zone stayed hot after typing" % tag)
-	# Легенда «цвет полоски — палец»: её часы идут С ПЕРВОГО кадра
+	# Легенда «цвет клавиши — палец»: её часы идут С ПЕРВОГО кадра
 	# уровня, а не только пока на экране подсказка, и только когда «Зоны»
-	# включены — при выключенных цветных дорожек на доске нет, и слово
+	# включены — при выключенных цветных клавиш на доске нет, и слово
 	# объясняло бы то, чего человек не видит. Рисуется она, наоборот,
 	# только БЕЗ подсказки (полоса общая) — на прежнем гейте легенда не
 	# показывалась никогда, и это не ловил ни один тест.
@@ -4317,7 +4317,7 @@ func _case_hint_zone() -> void:
 		"%s: the lane legend runs with zones off" % tag)
 	_main.lane_tip_seen = true
 	_main.profile_zones = false
-	_main._lane_reset()
+	_main._fill_reset()
 	_common(tag)
 
 

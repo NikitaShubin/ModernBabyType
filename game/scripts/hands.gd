@@ -142,11 +142,11 @@ static func hand_of(s: String) -> int:
 	return finger_of(s)[0] as int
 
 
-## Номер палитры пальца (`Ui.FINGER_LANE_*`): зона пальца — это индекс
+## Номер палитры пальца (`Ui.FINGER_KEY_*`): зона пальца — это индекс
 ## в массивах, а сам цвет берётся из круга по `Ui.FINGER_SLOT` (шаг по
 ## доске — прыжок на 108°, см. шапку палитры в ui.gd). Зона подсказки
-## индекс больше не использует (цвет один на все пальцы), но дорожки
-## красятся им. У левой руки пальцы в карте обратны
+## индекс больше не использует (цвет один на все пальцы), но заливки
+## клавиш красятся им. У левой руки пальцы в карте обратны
 ## порядку (мизинец 4 … большой 0), у правой — совпадают, поэтому зоны
 ## идут вдоль доски слева направо.
 ## Подпись может нести сторону («Ctrl:Л»/«Ctrl:П», «пробел:Л»/«пробел:П»):
@@ -216,7 +216,7 @@ static func key_tints(night: bool, radius: float, bw: float) -> Dictionary:
 	return out
 
 
-## Индекс ДОРОЖКИ клавиши. У пробела дорожка ОДНА на всю клавишу (автор
+## Индекс ЗАЛИВКИ клавиши. У пробела заливка ОДНА на всю клавишу (автор
 ## 08.11.2026: «пробел пусть будет одного цвета. Его раскрашивать двумя
 ## цветами как-то странно»): обе половины красятся цветом самой клавиши —
 ## левого большого (в карте «пробел» → LEFT/THUMB), хотя жмут её любым.
@@ -227,55 +227,40 @@ static func paint_index(s: String) -> int:
 	return tint_index(s)
 
 
-## Дорожки зон: ЦВЕТ подложки под каждой клавишей (не StyleBox — плоский
-## прямоугольник, см. Ui.FINGER_LANE_*). Клавиши одного пальца стоят
-## вплотную, их подложки смыкаются через зазор доски и читаются сплошной
-## секцией. Пробел — ОДНА дорожка одного цвета.
+## ЗАЛИВКИ ЛИЦ КЛАВИШ по пальцу (автор 10.11.2026: «виртуальная
+## клавиатура раскрашивает фон вокруг кнопок, а не сами кнопки. Это
+## делает линию границ нечитаемой»). Цвет лежит В клавише (`Ui.FINGER_KEY_*`),
+## зазоры показывает нейтральная плита доски (`Ui.KEY_PLATE_*`).
 ##
-## `idle` — покой: нейтральные полосы, чередующиеся через палец. Без
-## него — цвет пальца, состояние «секцию зовут подсказкой». Мёртвые
-## клавиши и там, и там остаются покойными: их секции ничему не учат,
-## а радужные пятна по краям доски только шумят (Tab/Caps/Ctrl/Win/Alt,
-## стрелки). Строится раз при создании экрана, темой меняется на месте
-## (`repaint_lanes`) — в кадре новых объектов нет.
-static func key_lanes(night: bool) -> Dictionary:
-	return _lanes(night, false)
-
-
-static func key_lanes_idle(night: bool) -> Dictionary:
-	return _lanes(night, true)
-
-
-static func _lanes(night: bool, idle: bool) -> Dictionary:
+## Панель ОДНА НА ПАЛЕЦ: клавиши пальца делят один StyleBox, поэтому
+## темой и переходом глоу они перекрашиваются НА МЕСТЕ, а в кадре новых
+## объектов нет. Мёртвые клавиши (Tab/Caps/Ctrl/Win/Alt, стрелки) заливки
+## не получают вовсе — их палец ничему не учит, они остаются бумагой
+## базовой панели. Пробел — одна клавиша и одна заливка (левый большой).
+static func key_fills(night: bool, radius: float, bw: float) -> Dictionary:
 	var out := {}
+	var by_finger := {}
 	for row in Kbd.all_rows(true):
 		for label in row:
 			var s := String(label)
 			if s == "пробел":
 				continue
 			var i := tint_index(s)
-			if i < 0:
+			if i < 0 or dead_key(s):
 				continue
-			out[s] = lane_colour(i, night, idle or dead_key(s))
-	# Подпись, стоящая в низу дважды (Ctrl/Alt, слева ещё и Win),
-	# сторону по себе не говорит — дорожка берётся по месту клавиши.
-	var twice := {}
-	for label in Kbd.bottom_row(true):
-		var s := String(label)
-		twice[s] = int(twice.get(s, 0)) + 1
-	for label in Kbd.bottom_row(true):
-		var s := String(label)
-		if int(twice[s]) < 2 or s == "пробел":
-			continue
-		var hl := tint_index(s + ":Л")
-		var hr := tint_index(s + ":П")
-		if hl < 0 or hr < 0:
-			continue
-		var dead := idle or Kbd.is_dead(s)
-		out[s + ":Л"] = lane_colour(hl, night, dead)
-		out[s + ":П"] = lane_colour(hr, night, dead)
-	out["пробел"] = lane_colour(paint_index("пробел"), night, idle)
+			out[s] = _fill_box(by_finger, i, night, radius, bw)
+	out["пробел"] = _fill_box(by_finger, paint_index("пробел"), night, radius, bw)
 	return out
+
+
+## Панель пальца из набора `key_fills` (строится при первом обращении).
+static func _fill_box(by_finger: Dictionary, i: int, night: bool,
+		radius: float, bw: float) -> StyleBoxFlat:
+	if not by_finger.has(i):
+		var pal: Array = Ui.FINGER_KEY_NIGHT if night else Ui.FINGER_KEY_DAY
+		var col: Color = pal[clampi(i, 0, pal.size() - 1)]
+		by_finger[i] = Ui.key_fill_sb(col, night, radius, bw)
+	return by_finger[i] as StyleBoxFlat
 
 
 ## Мёртвая (заблокированная) клавиша; подпись может нести сторону.
@@ -286,21 +271,32 @@ static func dead_key(s: String) -> bool:
 	return Kbd.is_dead(base)
 
 
-## Цвет дорожки зоны по теме и состоянию.
-static func lane_colour(i: int, night: bool, idle := false) -> Color:
-	var pal: Array = (Ui.FINGER_LANE_IDLE_NIGHT if idle else Ui.FINGER_LANE_NIGHT) \
-		if night else (Ui.FINGER_LANE_IDLE_DAY if idle else Ui.FINGER_LANE_DAY)
+## Цвет заливки пальца по теме.
+static func fill_colour(i: int, night: bool) -> Color:
+	var pal: Array = Ui.FINGER_KEY_NIGHT if night else Ui.FINGER_KEY_DAY
 	return pal[clampi(i, 0, pal.size() - 1)] as Color
 
 
-## Перекрасить дорожки в другую тему на месте: словарь тот же, цвета
-## подменяются — день↔ночь не рождает ни одного нового словаря.
-static func repaint_lanes(lanes: Dictionary, night: bool, idle := false) -> void:
-	for s in lanes:
+## Перекрасить заливки на переходе «бумага ↔ цвет пальца» и при смене
+## темы. `glow` 0 — клавиша бумажная, 1 — полный цвет пальца. Концы
+## ставятся ТОЧНЫМИ цветами палитры: lerp с весом 1.0 оставляет в младших
+## битах мусор, и «вернулось в покой» перестало бы быть равенством
+## (ловил combo_test). Ночь меняет и рамку — она тоже общая с бумагой.
+static func paint_fills(fills: Dictionary, night: bool, glow: float) -> void:
+	var paper: Color = Ui.SURFACE_ALT_NIGHT if night else Ui.SURFACE_DAY
+	var edge: Color = Ui.LINE_NIGHT if night else Ui.LINE_DAY
+	for s in fills:
 		var i := paint_index(String(s))
 		if i < 0:
 			continue
-		lanes[s] = lane_colour(i, night, idle or dead_key(String(s)))
+		var sb: StyleBoxFlat = fills[s]
+		sb.border_color = edge
+		if glow >= 1.0:
+			sb.bg_color = fill_colour(i, night)
+		elif glow <= 0.0:
+			sb.bg_color = paper
+		else:
+			sb.bg_color = paper.lerp(fill_colour(i, night), glow)
 
 
 ## Перекрасить панели зон в другую тему на месте: узлы держат те же
