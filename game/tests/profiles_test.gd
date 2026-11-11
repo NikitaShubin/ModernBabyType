@@ -79,6 +79,7 @@ func _process(_dt: float) -> bool:
 	_part35_landscape_menu()
 	_part36_sys_keyboard_typing()
 	_part37_back_button()
+	_part38_last_user_choice()
 	_part27_menu_chaos()
 	_report()
 	return true
@@ -460,8 +461,11 @@ func _part9_main_game() -> void:
 	_check(
 		_main.profile_name == "Петя", "F2 from the menu keeps the same player"
 	)
-	# F2 в меню не должен забывать последнего игрока в файле.
-	_check(S.get_last_user() == S.GUEST, "F2 from the menu keeps last user as guest")
+	# F2 в меню возвращает в игру того же игрока — и он же остаётся
+	# последним: «играть этим» и есть выбор (правка 11.11.2026; до неё
+	# меню вообще не писало последнего игрока, и запуск брал чужой акк).
+	_check(S.get_last_user() == "Петя",
+		"F2 from the menu keeps the player it returns to as the last user")
 	# Enter в списке входит на выбранного профиля, а не на первого.
 	# Меню после F2-возврата закрыто, а скрытое меню клавиш не видит
 	# (проверка видимости в _unhandled_key_input) — открываем заново,
@@ -1306,6 +1310,13 @@ func _part21_own_keyboard() -> void:
 	_menu.kb_lang = "ru"
 	var area: Rect2 = _menu.call("_own_rect")
 	_check(area.size.y > 0.0, "menu keyboard has height")
+	# Та же мера воздуха, что в игре (`Ui.kb_air`): доска не прижата к
+	# краю (автор 11.11.2026), а `_menu_eff_h` кончается её верхом.
+	var air: float = _menu.view_h - area.end.y
+	_check(air >= _menu.view_h * 0.04,
+		"the menu keyboard is glued to the bottom (air=%.0f of %.0f)" % [air, _menu.view_h])
+	_check(absf(float(_menu.call("_menu_eff_h")) - area.position.y) <= 1.0,
+		"the menu layout ends at the board top")
 	# Шифт + буква: заглавная в имени.
 	_menu.call("_own_press", _mkey(area, false, "Shift"))
 	_check(bool(_menu.kb_shift), "left shift arms")
@@ -2592,6 +2603,52 @@ func _part37_back_button() -> void:
 	menu.quit_requested = false
 	menu.quit_enabled = was_quit
 	main.call("_close_menu")
+	main.queue_free()
+
+
+## ПОСЛЕДНИЙ ИГРОК — ИЗ МЕНЮ, А НЕ ОТ СОЗДАНИЯ ПРОФИЛЯ (жалоба автора
+## 11.11.2026: «не смотря на то, что я в последнее время выбираю один и
+## тот же акк, по умолчанию в игре запускается не он. Игра вообще хранит
+## последнего пользователя?»). Файл хранит `[last] user`, и `_ready` берёт
+## именно его, но меню записывало туда только гостя: `_menu_chosen` звал
+## `S.touch` (это порядок «недавних»), а `set_last_user` не звал. В
+## итоге последним оставался тот, кого записал `create_user`.
+func _part38_last_user_choice() -> void:
+	var scene: PackedScene = load("res://scenes/main.tscn")
+	var main: Node = scene.instantiate()
+	main.set("skip_menu", true)
+	root.add_child(main)
+	var first := "Рома"
+	var second := "Соня"
+	S.create_user(first)
+	S.create_user(second)
+	# Выбираем НЕ самого свежего: иначе проверка прошла бы и на прежнем
+	# коде, где `touch` двигал порядок списка и «последний» случайно
+	# совпадал с первым.
+	S.touch(second)
+	main.call("_menu_chosen", first)
+	_check(String(main.profile_name) == first, "the chosen profile is played")
+	_check(S.get_last_user() == first,
+		"choosing a profile in the menu records it as the last user")
+	_check(S.has_valid_last_user(), "the recorded last user is valid")
+	# ДВА РАЗНЫХ ПОНЯТИЯ (из-за них и был баг): `touch` двигает порядок
+	# «недавних», `set_last_user` — того, кого запускать. Порядок списка
+	# трогаем отдельно (метка времени — руками: два касания в одну
+	# секунду дают ничью, и порядок решает имя) и убеждаемся, что
+	# последний игрок от него не едет.
+	S.save_profile(second, {"last_played": 9999999999})
+	_check(
+		String(S.user_list()[0]) == second,
+		"the recent list follows last_played"
+	)
+	S.touch(second)
+	_check(S.get_last_user() == first,
+		"the recent list does not overwrite the last user")
+	# Гость — тоже выбор: последним становится гость, а не прежний профиль.
+	main.call("_menu_chosen", S.GUEST)
+	_check(String(main.profile_name) == S.GUEST, "the guest choice is played")
+	_check(S.get_last_user() == S.GUEST,
+		"choosing the guest still records the guest as the last user")
 	main.queue_free()
 
 

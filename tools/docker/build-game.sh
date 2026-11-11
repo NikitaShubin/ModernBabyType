@@ -187,6 +187,15 @@ ensure_android_build() {
 # смотрит лог на лету и снимает контейнер, как только ошибка пошла
 # (плюс потолок по времени на случай тихого зацикливания).
 # Лог каждого теста остаётся в /tmp/opencode/<имя>.log.
+
+# Отметка времени и печать «сколько шёл шаг». Расписание тестов считается
+# от этих чисел (`run_tests`): без них шарды раздавались бы на глаз, а
+# прогон определял бы самый долгий тест, пока остальные ядра простаивают.
+_now_ms() { date +%s%3N; }
+_took() { # имя старт_ms
+	echo "mbt-build: $1 — $(( ($(_now_ms) - $2) / 1000 )) с"
+}
+
 run_test() {
 	local script="$1"
 	local limit="${2:-600}"
@@ -195,6 +204,8 @@ run_test() {
 	base="$(basename "$script" .gd)"
 	local name="mbt-test-$base$tag-$$"
 	local log="/tmp/opencode/$base$tag.log"
+	local t0
+	t0="$(_now_ms)"
 	: >"$log"
 	docker rm -f "$name" >/dev/null 2>&1 || true
 	MBT_CONTAINER_NAME="$name" \
@@ -205,6 +216,7 @@ run_test() {
 		--script "res://tests/$script" >"$log" 2>&1 &
 	local pid=$!
 	_watch_docker "$name" "$log" "$limit" "$pid" || return 1
+	_took "$base$tag" "$t0"
 	grep -E "_TEST: " "$log" | head -n 20 || true
 	if [ -s "$log" ] && ! grep -qE "_TEST: PASS" "$log"; then
 		echo "ТЕСТ $script: нет строки PASS, последние строки:" >&2
@@ -232,8 +244,11 @@ _watch_docker() {
 			docker rm -f "$name" >/dev/null 2>&1 || true
 			break
 		fi
-		sleep 5
-		waited=$((waited + 5))
+		# Секунда, а не пять: работа в пуле короткая (`_run_unit`), и
+		# пятеросекундное «не заметил, что контейнер кончился» держало
+		# ядро пустым на каждом шарде.
+		sleep 1
+		waited=$((waited + 1))
 	done
 	wait "$pid" || true
 	docker rm -f "$name" >/dev/null 2>&1 || true
@@ -245,22 +260,82 @@ _watch_docker() {
 }
 
 
-# Один шард погони: свой контейнер, лог и дом (профили!), свой сид.
-# Решение о зачёте принимает слияние (run_chase), а не шард.
-run_chase_shard() {
-	local shard="$1" of="$2" limit="$3"
-	local name="mbt-test-chase-s$shard-$$"
-	local log="/tmp/opencode/chase-s$shard.log"
+# Одна работа расписания = один контейнер = один шард любого теста.
+# `of=1` — тест без шардирования (аргументов ему не передаём: шардирование
+# понимают не все, а чужие аргументы тест не обязан разбирать).
+# Свой лог и свой дом (профили!) у каждой работы: параллельные прогоны не
+# делят user://. Зачёт по логу: есть PASS и нет ни одного FAIL — у погони
+# то же, пороги на СУММАХ проверяет слияние (run_chase_merge).
+_run_unit() {
+	local base="$1" shard="$2" of="$3" limit="$4"
+	local name="mbt-test-$base-s$shard-$$"
+	local log
+	if [ "$of" -gt 1 ]; then
+		log="/tmp/opencode/$base-s$shard.log"
+	else
+		log="/tmp/opencode/$base.log"
+	fi
+	local home="/tmp/mbt-home-$base-s$shard"
+	local args=()
+	if [ "$of" -gt 1 ]; then
+		args=(-- --shard "$shard" --of "$of")
+	fi
+	local t0
+	t0="$(_now_ms)"
 	: >"$log"
 	docker rm -f "$name" >/dev/null 2>&1 || true
 	MBT_CONTAINER_NAME="$name" \
-	MBT_HOME="/tmp/mbt-home-chase-s$shard" \
-	MBT_XDG_CONFIG="/tmp/mbt-home-chase-s$shard/.config" \
-	MBT_XDG_DATA="/tmp/mbt-home-chase-s$shard/.local/share" \
+	MBT_HOME="$home" \
+	MBT_XDG_CONFIG="$home/.config" \
+	MBT_XDG_DATA="$home/.local/share" \
 	run_godot --headless --path game \
-		--script res://tests/chase_test.gd -- --shard "$shard" --of "$of" >"$log" 2>&1 &
+		--script "res://tests/$base.gd" "${args[@]}" >"$log" 2>&1 &
 	local pid=$!
-	_watch_docker "$name" "$log" "$limit" "$pid" || return 1
+	if ! _watch_docker "$name" "$log" "$limit" "$pid"; then
+		echo "ТЕСТ $base шард $shard: снят сторожем" >&2
+		return 1
+	fi
+	_took "$base-s$shard" "$t0"
+	if ! grep -qE ": PASS" "$log"; then
+		echo "ТЕСТ $base шард $shard: нет строки PASS, последние строки:" >&2
+		tail -n 20 "$log" >&2
+		return 1
+	fi
+	# Строки самого теста («LOGIC_TEST: PASS», счётчики) печатаем только
+	# у цельного прогона: у шардов их десятки, сводка — на тест.
+	if [ "$of" -le 1 ]; then
+		grep -E "_TEST: " "$log" | head -n 20 || true
+	fi
+	if grep -qE ": FAIL: " "$log"; then
+		echo "ТЕСТ $base шард $shard: есть падения:" >&2
+		grep -E ": FAIL: " "$log" | head -n 10 >&2
+		return 1
+	fi
+}
+
+
+# Пул работ: одновременно не больше N контейнеров, следующая работа
+# стартует сразу, как освободилось ядро (`wait -n`, bash ≥ 4.3). Раньше
+# каждый тест ждал СВОИХ шардов отдельно, и на хвосте погони (400 с
+# работы) пятнадцать ядер простаивали. Работы берутся из массивов
+# JOB_* (их строит расписание в run_tests).
+run_pool() {
+	local slots="$1"
+	local total="${#JOB_BASE[@]}"
+	local next=0 running=0 failed=0
+	while [ "$next" -lt "$total" ] || [ "$running" -gt 0 ]; do
+		while [ "$next" -lt "$total" ] && [ "$running" -lt "$slots" ]; do
+			_run_unit "${JOB_BASE[$next]}" "${JOB_SHARD[$next]}" \
+				"${JOB_OF[$next]}" "${JOB_LIMIT[$next]}" &
+			running=$((running + 1))
+			next=$((next + 1))
+		done
+		if [ "$running" -gt 0 ]; then
+			wait -n || failed=1
+			running=$((running - 1))
+		fi
+	done
+	return $failed
 }
 
 
@@ -288,76 +363,11 @@ run_stress() {
 }
 
 
-# Шардированный тест: N процессов по кругу работ, у каждого свой
-# контейнер, лог и дом (профили!). Зачёт общий: ни SCRIPT ERROR, в каждом
-# логе есть PASS, нигде нет FAIL. Покрытие на шард держат сами тесты
-# (глобальные счётчики в шардах делятся — см. их _report).
-run_sharded() {
-	local base="$1" shards="$2" limit="$3"
-	local pids=() i
-	for i in $(seq 0 $((shards - 1))); do
-		run_shard "$base" "$i" "$shards" "$limit" &
-		pids+=($!)
-	done
-	local failed=0 pid
-	for pid in "${pids[@]}"; do
-		if ! wait "$pid"; then
-			failed=1
-		fi
-	done
-	if [ "$failed" -eq 0 ]; then
-		echo "$base: PASS ($shards шарда)"
-	fi
-	return $failed
-}
-
-
-run_shard() {
-	local base="$1" shard="$2" of="$3" limit="$4"
-	local name="mbt-test-$base-s$shard-$$"
-	local log="/tmp/opencode/$base-s$shard.log"
-	: >"$log"
-	docker rm -f "$name" >/dev/null 2>&1 || true
-	MBT_CONTAINER_NAME="$name" \
-	MBT_HOME="/tmp/mbt-home-$base-s$shard" \
-	MBT_XDG_CONFIG="/tmp/mbt-home-$base-s$shard/.config" \
-	MBT_XDG_DATA="/tmp/mbt-home-$base-s$shard/.local/share" \
-	run_godot --headless --path game \
-		--script "res://tests/$base.gd" -- --shard "$shard" --of "$of" >"$log" 2>&1 &
-	local pid=$!
-	_watch_docker "$name" "$log" "$limit" "$pid" || return 1
-	if ! grep -qE ": PASS" "$log"; then
-		echo "ТЕСТ $base шард $shard: нет строки PASS, последние строки:" >&2
-		tail -n 20 "$log" >&2
-		return 1
-	fi
-	if grep -qE ": FAIL: " "$log"; then
-		echo "ТЕСТ $base шард $shard: есть падения:" >&2
-		grep -E ": FAIL: " "$log" | head -n 10 >&2
-		return 1
-	fi
-}
-
-
-# Погоня в N шардов параллельно + слияние. Эпизоды независимы (каждый
-# начинается с чистого уровня), сиды разные, бюджеты делят 120 эпизодов
-# полного прогона. Итоговые пороги — те же, что в _report, но на суммах.
-run_chase() {
-	local shards=4 limit=1800
-	local pids=() i
-	for i in 0 1 2 3; do
-		run_chase_shard "$i" "$shards" "$limit" &
-		pids+=($!)
-	done
-	local failed=0 pid
-	for pid in "${pids[@]}"; do
-		if ! wait "$pid"; then
-			failed=1
-		fi
-	done
-	if [ "$failed" -ne 0 ]; then
-		return 1
-	fi
+# Погоня: эпизоды независимы (каждый начинается с чистого уровня), сиды
+# разные, бюджеты делят 120 эпизодов полного прогона. Шарды гоняет общий
+# пул, а слияние считает суммы и держит те же пороги, что в _report.
+run_chase_merge() {
+	local shards="$1"
 	python3 - "$shards" <<'PYEOF_MERGE'
 import re, sys
 
@@ -388,7 +398,7 @@ tot = {"episodes": 0, "frames": 0, "sc": [0, 0, 0], "pricks": 0, "same": 0,
        "gap_sum": 0.0, "retreats": 0}
 problems = []
 for i in range(n):
-    d, errs = parse("/tmp/opencode/chase-s%d.log" % i)
+    d, errs = parse("/tmp/opencode/chase_test-s%d.log" % i)
     problems += errs
     if d is None:
         continue
@@ -453,35 +463,98 @@ run_tests() {
 		echo "mbt-build: в коде игры остались следы слоя знаков или долгого нажатия" >&2
 		return 1
 	fi
-	# Все тесты — параллельно (ядер хватает, каждый лёгкий): общее время
-	# определяет самый долгий (chase), а не сумма. Дома и логи у каждого
-	# свои (см. run_test), контейнеры — тоже, так что тесты не мешают
-	# друг другу. Импорт и линты выше идут строго до — они общие.
-	# Погоня гоняет живой цикл кадр за кадром — самый долгий тест.
-	local pids=() failed=0
-	local s pid
-	# Мелочь — целиком, каждая своим процессом.
-	for s in logic_test.gd update_test.gd profiles_test.gd menu_scroll_test.gd perf_test.gd theme_test.gd hands_test.gd; do
-		run_test "$s" 600 &
-		pids+=($!)
+	# РАСПИСАНИЕ. Ядер в машине много, и раньше половина простаивала:
+	# лёгкие тесты стартовали по одному, тяжёлые шли ФИКСИРОВАННЫМИ
+	# шардами (combo 4, marks 4, end 3, chase 4), а каждый тест ждал
+	# своих шардов отдельно. На хвосте самой долгой погони (≈400 с
+	# работы) пятнадцать ядер стояли. Теперь работа нарезается на шарды
+	# ПРОПОРЦИОНАЛЬНО СТОИМОСТИ и льётся в общий пул на N ядер (см.
+	# run_pool): освободилось ядро — сразу берёт следующий шард, а
+	# порядок «от долгого к короткому» укорачивает хвост.
+	# Дома и логи у каждой работы свои (см. _run_unit), контейнеры тоже,
+	# так что тесты друг другу не мешают. Импорт и линты выше идут
+	# строго до — они общие.
+	local -a tests=(
+		chase_test combo_test marks_test end_test logic_test perf_test
+		profiles_test hands_test update_test theme_test menu_scroll_test
+	)
+	# Стоимость — работа одного процесса в секундах, замер на 16 ядрах
+	# 11.11.2026 (`mbt-build: <имя> — N с`, сумма шардов минус запуск
+	# контейнера). Ошибка в числе стоит только времени прогона, не
+	# зачёта: шарды режут ту же самую работу.
+	local -A cost=(
+		[chase_test]=400 [combo_test]=40 [marks_test]=18 [end_test]=12
+		[logic_test]=10 [perf_test]=9 [profiles_test]=5 [hands_test]=5
+		[update_test]=2 [theme_test]=2 [menu_scroll_test]=2)
+	# Шардировать умеют только эти (-- --shard I --of N); у остальных
+	# один процесс на всю работу, и шарды им не предлагаем.
+	local -A shardable=([chase_test]=1 [combo_test]=1 [marks_test]=1 [end_test]=1)
+	local slots
+	slots="${MBT_TEST_JOBS:-$(nproc 2>/dev/null || echo 4)}"
+	[ "$slots" -ge 1 ] || slots=1
+	local total=0 b
+	for b in "${tests[@]}"; do
+		total=$((total + cost[$b]))
 	done
-	# Тяжёлые — шардами по всем ядрам (см. run_sharded).
-	run_sharded combo_test 4 600 &
-	pids+=($!)
-	run_sharded marks_test 4 600 &
-	pids+=($!)
-	run_sharded end_test 3 600 &
-	pids+=($!)
-	# Погоня гоняет живой цикл кадр за кадром — самый долгий тест,
-	# поэтому сама идёт шардами со своим слиянием (см. run_chase).
-	run_chase &
-	pids+=($!)
-	for pid in "${pids[@]}"; do
-		if ! wait "$pid"; then
-			failed=1
+	# Кусок работы на шард: доля всей работы на ядро, но не меньше 25 с —
+	# запуск контейнера (~5 с) платится за КАЖДЫЙ шард, и дробить мельче
+	# значит греть не движок, а dockerd.
+	local chunk=$((total / slots))
+	[ "$chunk" -ge 25 ] || chunk=25
+	local -a JOB_BASE=() JOB_SHARD=() JOB_OF=() JOB_LIMIT=()
+	local -A test_of=()
+	local -a plan=()
+	local shards i limit est
+	for b in "${tests[@]}"; do
+		shards=1
+		if [ -n "${shardable[$b]:-}" ]; then
+			shards=$(( (cost[$b] + chunk - 1) / chunk ))
+			[ "$shards" -ge 1 ] || shards=1
+			# Потолок: больше шардов, чем эпизодов/работ, бессмысленны.
+			[ "$shards" -le 24 ] || shards=24
+		fi
+		test_of[$b]="$shards"
+		limit=600
+		if [ "$b" = "chase_test" ]; then
+			limit=1800
+		fi
+		# Оценка одного шарда: его доля работы плюс запуск контейнера.
+		est=$(( cost[$b] / shards + 5 ))
+		for i in $(seq 0 $((shards - 1))); do
+			plan+=("$est $b $i $shards $limit")
+		done
+	done
+	# LPT: первыми встают САМЫЕ ДОЛГИЕ работы. Иначе короткие тесты
+	# заканчиваются, а хвост из одной длинной погони едет в одиночку,
+	# хотя ядра свободны.
+	local line
+	while read -r est b i shards limit; do
+		JOB_BASE+=("$b")
+		JOB_SHARD+=("$i")
+		JOB_OF+=("$shards")
+		JOB_LIMIT+=("$limit")
+	done < <(printf '%s\n' "${plan[@]}" | sort -k1,1nr)
+	echo "mbt-build: ядер $slots, работ ${#JOB_BASE[@]}"
+	local started
+	started="$(_now_ms)"
+	if ! run_pool "$slots"; then
+		_took "тесты (провал)" "$started"
+		return 1
+	fi
+	# Сводка по тестам: у лёгких своя строка PASS уже напечатана из лога
+	# (см. _run_unit), у шардированных — одна на тест.
+	for b in "${tests[@]}"; do
+		shards="${test_of[$b]}"
+		if [ "$shards" -gt 1 ]; then
+			echo "$b: PASS ($shards шарда)"
 		fi
 	done
-	return $failed
+	# Слияние погони: суммы счётчиков и те же пороги, что в _report.
+	if ! run_chase_merge "${test_of[chase_test]}"; then
+		return 1
+	fi
+	_took "все тесты" "$started"
+	return 0
 }
 
 # Пресеты в том порядке, в каком они лежат в export_presets.cfg.

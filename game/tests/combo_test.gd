@@ -1810,6 +1810,22 @@ func _case_own_kbd_fits() -> void:
 			"%s: the keyboard hangs off the bottom on %s (bottom=%.0f of %.0f)" % [tag, str(wh), r.position.y + r.size.y, _main.view_h]
 		)
 		_check(r.position.x >= 0.0 and r.position.x + r.size.x <= _main.view_w + 1.0, "%s: the keyboard hangs off the side on %s" % [tag, str(wh)])
+		# ДОСКА НЕ ПРИЖАТА К НИЗУ (автор 11.11.2026: «клавиатура прижата к
+		# нижнему краю экрана, а мне кажется, ей скорее место по центру
+		# нижнего пространства»): под ней остаётся воздух — доля экрана,
+		# а не безопасный отступ в 16 px.
+		var air: float = _main.view_h - (r.position.y + r.size.y)
+		_check(
+			air >= _main.view_h * 0.04,
+			"%s: the keyboard is glued to the bottom on %s (air=%.0f of %.0f)" % [tag, str(wh), air, _main.view_h]
+		)
+		# ...и воздух ВХОДИТ в kb_h: эффективная высота кончается ровно
+		# верхом доски, иначе карточка с полосой подсказки заехали бы под
+		# клавиши (проверяем именно совпадение, а не «примерно»).
+		_check(
+			absf(_main._eff_h() - r.position.y) <= 1.0,
+			"%s: the layout ends at %.0f, the board starts at %.0f on %s" % [tag, _main._eff_h(), r.position.y, str(wh)]
+		)
 		# Текст обязан остаться: под клавиатурой — минимум половина экрана.
 		_check(
 			_main._eff_h() >= _main.view_h * 0.45,
@@ -4170,25 +4186,43 @@ func _case_hint_zone() -> void:
 		"%s: the letter zone of the hint is incomplete" % tag)
 	_check(not two.has("Shift"),
 		"%s: the other hand's shift went hot too" % tag)
-	# В ЗОНЕ — ДЕЙСТВИТЕЛЬНЫЕ КЛАВИШИ ПАЛЬЦА (автор 10.11.2026: «пусть в
-	# секторах подсказок подсвечиваются все действительные кнопки, за
-	# которые отвечает рабочий палец»). Мёртвые (`Tab`, `Caps`, `Ctrl`,
-	# `Win`, `Alt`, стрелки кластера) в зону НЕ ВХОДЯТ: подсветка звала бы
-	# нажать то, чего игра не принимает (автор: «у тебя опять на мизинцы
-	# отведены даже альты!»).
-	for key in ["ShiftR", "←", "↵", "0", "ж", "э", ".", "\\"]:
+	# СЛУЖЕБНЫЕ КЛАВИШИ НИЗА В ЗОНЕ ЕСТЬ (автор 11.11.2026: «кнопки
+	# контрл, альт вин не добавлены в сектора»). Зона — ВЕСЬ палец своей
+	# руки, а на мизинце живут Tab, Caps, Shift и низ. Путаница «с двух
+	# сторон» лечится не исключением клавиши, а СТОРОНОЙ в ключе панели:
+	# «Ctrl»/«Alt» стоят дважды, и у них своя панель у каждой стороны
+	# («Ctrl:Л»/«Ctrl:П»).
+	for key in ["ShiftR", "Ctrl:П", "Alt:П", "←", "↵"]:
 		_check(two.has(key),
-			"%s: the right pinky zone lost the live key '%s'" % [tag, key])
-	for key in ["Ctrl", "Alt", "Win", "Tab", "Caps", "◀", "↕", "▶"]:
-		_check(not two.has(key),
-			"%s: the dead key '%s' went hot in the zone" % [tag, key])
+			"%s: the right pinky zone lost the service key '%s'" % [tag, key])
+	_check(not two.has("Ctrl") and not two.has("Alt"),
+		"%s: a bare Ctrl/Alt panel paints both sides at once" % tag)
+	_check(not two.has("Ctrl:Л") and not two.has("Alt:Л"),
+		"%s: the right pinky zone lit the left side keys" % tag)
+	# ГЛОБУС В ЗОНУ НЕ ВХОДИТ (автор 11.11.2026: «добавлять не надо только
+	# кнопку глобуса, т.к. она выдуманная»).
+	_check(not two.has("глобус") and not _main._hot_zone(["пробел:П"]).has("глобус"),
+		"%s: the invented globe key went hot in the zone" % tag)
+	# СТРЕЛКИ — «СТАНДАРТНЫЕ ДЛЯ ГЕЙМЕРОВ» (автор 11.11.2026: «влево -
+	# указательный, вправо - безымянный, вверх-вниз - средний»): по одной
+	# на свой палец, а не весь кластер на мизинце.
+	for pair in [["н", "◀"], ["л", "↕"], ["д", "▶"]]:
+		var letter := String((pair as Array)[0])
+		var arrow := String((pair as Array)[1])
+		var az: Dictionary = _main._hot_zone([letter])
+		_check(az.has(arrow),
+			"%s: the zone of «%s» lost the arrow «%s»" % [tag, letter, arrow])
+		for other in ["◀", "↕", "▶"]:
+			if other == arrow:
+				continue
+			_check(not az.has(other),
+				"%s: the zone of «%s» swallowed the arrow «%s»" % [tag, letter, other])
 	var left_pinky: Dictionary = _main._hot_zone(["ф"])
-	for key in ["Shift", "ё", "1", "й", "ф", "я"]:
+	for key in ["Shift", "Tab", "Caps", "Win", "Ctrl:Л", "Alt:Л"]:
 		_check(left_pinky.has(key),
-			"%s: the left pinky zone lost the live key '%s'" % [tag, key])
-	for key in ["ShiftR", "Win", "Tab", "Caps", "Ctrl", "Alt", "глобус"]:
-		_check(not left_pinky.has(key),
-			"%s: the left pinky zone lit '%s'" % [tag, key])
+			"%s: the left pinky zone lost the service key '%s'" % [tag, key])
+	_check(not left_pinky.has("ShiftR") and not left_pinky.has("Ctrl:П"),
+		"%s: the left pinky zone lit the other hand" % tag)
 	# Подсказка «ShiftR + й»: правый шифт — ЦЕЛЬ, левый — клавиша зоны
 	# левого мизинца (там же «й»). Оба шифта горячие — и это правильно:
 	# у учащегося в секторе ровно те клавиши, которые жмёт эта рука.

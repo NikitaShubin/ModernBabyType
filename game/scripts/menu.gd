@@ -2068,22 +2068,25 @@ func _own_rect() -> Rect2:
 	# экране она накрывает кнопки (регрессия 10.2026: доска стала выше —
 	# единиц в самом широком ряду стало 15 вместо 16 — и накрыла кнопку
 	# «Играть», тап уходил в клавишу).
-	var m := 16.0 + Ui.bottom_inset(view_h)
-	var max_h: float = maxf(160.0, (view_h - m) * 0.46)
+	# Зазор под доской — `Ui.kb_air` (доля экрана, не k): доска стоит по
+	# центру нижнего пространства, а не липнет к краю (автор 11.11.2026).
+	var air := Ui.kb_air(view_h)
+	var max_h: float = maxf(160.0, (view_h - air) * 0.46)
 	var w := view_w - 32.0
 	var h := Kbd.height_for(w)
 	if h > max_h:
 		w = clampf(Kbd.width_for(max_h), 240.0, view_w - 32.0)
 		h = minf(Kbd.height_for(w), max_h)
-	# Низ экрана со скруглениями и жестом: клавиатуру поднимаем на
-	# безопасный отступ, иначе угловые клавиши обрезаны (жалоба 10.2026).
-	return Rect2((view_w - w) * 0.5, view_h - h - m, w, h)
+	return Rect2((view_w - w) * 0.5, view_h - h - air, w, h)
 
 
+## Высота, которую раскладка уступает низу: доска ПЛЮС воздух под ней —
+## так `_menu_eff_h` совпадает с верхом доски, и низ списка не заезжает
+## под клавиши.
 func _own_h() -> float:
 	if not _own_shown():
 		return 0.0
-	return _own_rect().size.y
+	return _own_rect().size.y + Ui.kb_air(view_h)
 
 
 func _rows_top() -> float:
