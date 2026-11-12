@@ -14,6 +14,8 @@ on:
 
 permissions:
   contents: write
+  # Удаление артефакта прогона после публикации релиза (см. шаг внизу).
+  actions: write
 
 jobs:
   build:
@@ -79,3 +81,21 @@ jobs:
           files: game/dist/*
           fail_on_unmatched_files: true
           generate_release_notes: true
+
+      # Артефакт прогона — только для отладки: скачивать сборку человек
+      # будет со страницы релиза, а копия в хранилище Actions (135 МБ)
+      # подпирает лимит 0.5 ГБ (12.11.2026: два релиза = 270 МБ из 500).
+      # Поэтому у релизного прогона убираем его сразу после публикации;
+      # ручной workflow_dispatch артефакт сохраняет (других файлов у него
+      # нет) и живёт до `retention-days`. Падение уборки не красит
+      # успешный релиз — файлы уже на месте.
+      - name: Убрать артефакт прогона
+        if: startsWith(github.ref, 'refs/tags/')
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ids="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" --jq '.artifacts[].id')"
+          for id in $ids; do
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}"
+          done
