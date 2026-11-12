@@ -1504,6 +1504,21 @@ func _tint_checks(bs: Array) -> void:
 		"a hinted key keeps the hint")
 	_check(Kbd.key_box("Shift", "Shift", base, press, "", hi, false, true) == base,
 		"the held shift keeps its accent")
+	# ЗАЖАТЫЙ ШИФТ — ОДНА КЛАВИША, КОГДА СТОРОНУ ЗНАЕТ КЕЙС (автор
+	# 12.11.2026: «при реальном нажатии шифта подсвечиваются уже обе
+	# кнопки, включая неправильную»). Мера — `Kbd.shift_lit`: ею же
+	# меряет `Kbd.draw`, а сторону считает `main._shift_lit_key`.
+	_check(Kbd.shift_lit("Shift", true, "ShiftR") == false
+		and Kbd.shift_lit("ShiftR", true, "ShiftR") == true,
+		"the needed right shift lights alone")
+	_check(Kbd.shift_lit("Shift", true, "Shift") == true
+		and Kbd.shift_lit("ShiftR", true, "Shift") == false,
+		"the needed left shift lights alone")
+	_check(Kbd.shift_lit("Shift", true, "") and Kbd.shift_lit("ShiftR", true, ""),
+		"an unknown side still lights both shifts")
+	_check(not Kbd.shift_lit("Shift", false, "Shift")
+		and not Kbd.shift_lit("ф", true, ""),
+		"the shift accent needs both the shift state and the key")
 	_check(Kbd.key_box("нет-такой", "нет-такой", base, press, "", hi, false, false) == base,
 		"an unknown key stays neutral")
 	var zone_l := {}

@@ -1223,7 +1223,7 @@ func _case_warm_up() -> void:
 	_check(
 		_main.enemy_x > h0,
 		"%s: the hedge did not start rolling after the first input (%.1f)"
-		% [_main.enemy_x]
+		% [tag, _main.enemy_x]
 	)
 	# Опечатка тоже ввод: ёж выезжает и на ней.
 	_fresh(0, 0)
@@ -1460,7 +1460,8 @@ func _case_touch_multitouch() -> void:
 	_check(_main.errors.is_empty(), "%s: the two-finger letter left a typo mark" % tag)
 	_check(
 		int(_main.typed_ok) == typed_before + 1,
-		"%s: the letter was typed twice by the mouse echo (typed_ok=%d)" % [_main.typed_ok]
+		"%s: the letter was typed twice by the mouse echo (typed_ok=%d)"
+		% [tag, _main.typed_ok]
 	)
 	# Шифт одноразовый: после знака гаснет сам (как на настоящей
 	# клавиатуре, см. _own_press). Пальцы отпускаем — и доска не должна
@@ -4499,6 +4500,47 @@ func _case_hands_real_press() -> void:
 	_check(not lc3.has(Hands.PINKY),
 		"%s: the left hand grips the shift while the hint asks for the right"
 		% tag)
+
+	# ---- 4. ГОРИТ РОВНО НУЖНАЯ КЛАВИША ШИФТА.
+	# Кейс требует заглавную («П»), подсказка зовёт ShiftR — а нажали
+	# ЛЕВЫЙ шифт. Раньше зажигались обе клавиши, и неправильная ещё и
+	# ярче (автор 12.11.2026). Теперь и вспышка, и зажатая подсветка
+	# стоят на правой — той, которой знак набирается.
+	var lit3 := String(_main.call("_shift_lit_key"))
+	_check(lit3 == "ShiftR",
+		"%s: the lit shift is «%s», the case wants ShiftR" % [tag, lit3])
+	_check(_main.kb_press == "ShiftR",
+		"%s: the wrong shift flashed instead of the needed one (%s)"
+		% [tag, _main.kb_press])
+	_check(Kbd.shift_lit("Shift", true, lit3) == false
+		and Kbd.shift_lit("ShiftR", true, lit3) == true,
+		"%s: both shift keys light while the case wants one" % tag)
+	_main.call("_release_held")
+
+	# ---- 5. БЕЗ ТРЕБОВАНИЯ КЕЙСА ГОРИТ НАЖАТАЯ, И ТОЛЬКО ОНА.
+	# Строчная «п» под курсором шифта не просит: сторона берётся у
+	# фактического нажатия.
+	_main.cursor_pos = 1
+	_main.idle_t = 0.0
+	_tick(tag)
+	_check(String(_main.call("_shift_lit_key")) == "",
+		"%s: a shift side is claimed while the shift is up" % tag)
+	_main.call("_own_press", btns["ShiftR"], true)
+	_check(String(_main.call("_shift_lit_key")) == "ShiftR",
+		"%s: the pressed right shift does not light alone (%s)"
+		% [tag, _main.call("_shift_lit_key")])
+	_check(_main.kb_press == "ShiftR",
+		"%s: the pressed right shift flashed another key (%s)"
+		% [tag, _main.kb_press])
+	_main.call("_release_held")
+	_main.call("_own_press", btns["Shift"], true)
+	_check(String(_main.call("_shift_lit_key")) == "Shift",
+		"%s: the pressed left shift does not light alone (%s)"
+		% [tag, _main.call("_shift_lit_key")])
+	_check(_main.kb_press == "Shift",
+		"%s: the pressed left shift flashed another key (%s)"
+		% [tag, _main.kb_press])
+	_main.call("_release_held")
 	_common(tag)
 
 

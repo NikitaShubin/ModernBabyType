@@ -220,6 +220,12 @@ const KB_REPEAT_DELAY := 0.45
 const KB_REPEAT_RATE := 0.06
 const KB_PRESS_T := KB_FLASH_T
 var kb_shift := false
+## Сторона ЗАЖАТОГО шифта («Л»/«П», пусто — не зажат или сторона
+## неизвестна). Ставится в момент нажатия — тапом или физической
+## клавишей. Нужна подсветке: движок шлёт одно действие «шифт», а на
+## доске клавиши две (автор 12.11.2026: «при реальном нажатии шифта
+## подсвечиваются уже обе кнопки, включая неправильную»).
+var _shift_down_side := ""
 var kb_key_sb: StyleBoxFlat
 var kb_on_sb: StyleBoxFlat
 ## Заливка нажатой клавиши: та же краска ночью.
@@ -1310,6 +1316,7 @@ func _new_level() -> void:
 	kb_morph_from = ""
 	kb_morph = 1.0
 	kb_shift = false
+	_shift_down_side = ""
 	# И предупреждение о CapsLock: новый текст — новая жизнь.
 	_caps_warn = false
 	# И подсказка звёздочки: модалки больше нет.
@@ -1525,6 +1532,10 @@ func _set_kb_shift(v: bool) -> void:
 	kb_morph_shift = kb_shift
 	kb_morph = 0.0
 	kb_shift = v
+	# Отпустили — забыли и сторону: подсветка следующего нажатия начнётся
+	# с чистой книжки, а не с клавиши прошлого раза.
+	if not v:
+		_shift_down_side = ""
 	queue_redraw()
 
 
@@ -1594,6 +1605,11 @@ func _unhandled_key_input(event: InputEvent) -> void:
 				side = "Л"
 			elif ke.location == KEY_LOCATION_RIGHT:
 				side = "П"
+			# Кейс требует шифт — горит его клавиша, а не нажатая мимо.
+			var need := _case_shift_side()
+			if need != "":
+				side = need
+			_shift_down_side = side
 			_flash("шифт", "", side)
 			_hands_held["шифт"] = true
 		return
@@ -3246,7 +3262,7 @@ func _draw_own_kb() -> void:
 		self, area, kb_lang, kb_shift, _kb_enter_shown(), mono,
 		int(30.0 * k), kb_key_sb, kb_on_sb, _ui_ink(), hi, kb_hi_sb, _ui_dim(),
 		kb_morph, kb_morph_from, kb_morph_shift, _press_sb(), kb_press,
-		_hot_union, kb_fills, hi_boxes, kb_plate_sb
+		_hot_union, kb_fills, hi_boxes, kb_plate_sb, _shift_lit_key()
 	)
 	# Скелет кистей ПОВЕРХ доски (полупрозрачно — подписи читаются):
 	# каким пальцем какую клавишу жать, и куда пальцы едут по подсказке.
@@ -3405,6 +3421,34 @@ func _hint_shift_side() -> String:
 		if a.size() > 0 and Hands.is_shift(String(a[0])):
 			return "Л" if int(h) == Hands.LEFT else "П"
 	return ""
+
+
+## Сторона шифта, которую ТРЕБУЕТ текущий знак кейса: «Л»/«П», пусто —
+## шифт не нужен. Это мера КЕЙСА, а не подсказки: подсказка строится из
+## того же `_keys_for`, поэтому стороны совпадают, но кейс отвечает и до
+## того, как подсказка выросла по простою.
+func _case_shift_side() -> String:
+	if state != "playing" or need_enter or not errors.is_empty():
+		return ""
+	var cur := _current()
+	if cur == "" or cur == " ":
+		return ""
+	var combo := Kbd.combo_for(cur, kb_lang)
+	if combo.is_empty() or String(combo[2]) != kb_lang or not bool(combo[1]):
+		return ""
+	return "Л" if _opp_shift(String(combo[0])) == "Shift" else "П"
+
+
+## Какая из ДВУХ клавиш шифта горит зажатой: «Shift»/«ShiftR», пусто —
+## сторона неизвестна (тогда горят обе, как было). Сторону кладёт само
+## НАЖАТИЕ (`_shift_down_side`, см. `_own_press` и физическую ветку):
+## кейс требует шифт — сторона кейса, иначе сторона физической клавиши.
+## Одна мера на рисование и тесты: `Kbd.draw` зовёт её через
+## `Kbd.shift_lit`.
+func _shift_lit_key() -> String:
+	if not kb_shift or _shift_down_side == "":
+		return ""
+	return "Shift" if _shift_down_side == "Л" else "ShiftR"
 
 
 ## Перенести зажатый шифт на руку, СВОБОДНУЮ от нажатой клавиши.
@@ -3817,6 +3861,14 @@ func _own_press(pos: Vector2, live := false, finger := false) -> bool:
 	var side := ""
 	if act == "шифт":
 		side = Kbd.shift_side(_own_rect(), kb_shift, _kb_enter_shown(), pos)
+		# Кейс требует шифт — сторона нажатия идёт за ним: и вспышка, и
+		# зажатая подсветка встают на ту клавишу, которой знак набирается,
+		# даже если нажата другая (автор 12.11.2026: «подсвечиваются уже
+		# обе кнопки, включая неправильную… неправильная горела даже ярче»).
+		var need := _case_shift_side()
+		if need != "":
+			side = need
+		_shift_down_side = side
 	_flash(act, "", side)
 	if act == "шифт":
 		# Шифт держится пальцем, а не защёлкивается: второй палец в это

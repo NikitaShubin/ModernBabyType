@@ -936,6 +936,19 @@ static func hot_key_for(s: String, r: Rect2, split: float,
 	return sided if hot.has(sided) else s
 
 
+## Горит ли ЗАЖАТЫЙ шифт на этой клавише (одна мера на рисование и
+## тесты). `only` — подпись «той самой» клавиши шифта («Shift»/«ShiftR»),
+## которую требует кейс; пусто — сторона неизвестна, и по-старому горят
+## обе. Сторону знает main (`_shift_lit_key`): при нажатии НЕ того шифта
+## горела неправильная клавиша, да ещё обе сразу (автор 12.11.2026:
+## «при реальном нажатии шифта подсвечиваются уже обе кнопки, включая
+## неправильную»).
+static func shift_lit(s: String, shift: bool, only := "") -> bool:
+	if not shift or (s != "Shift" and s != "ShiftR"):
+		return false
+	return only == "" or s == only
+
+
 ## Панель клавиши. Выбор короче, чем кажется: вспышка нажатия, сама
 ## подсказка, зажатый шифт, затем ЗОНА подсказки, иначе — `base`.
 ## `base` у живой клавиши — ЗАЛИВКА ЕЁ ПАЛЬЦА (`fill` из `Hands.key_fills`),
@@ -990,7 +1003,7 @@ static func draw(
 	morph := 1.0, morph_from := "", morph_shift := false,
 	press_sb: StyleBox = null, press_key := "",
 	hot: Dictionary = {}, fill: Dictionary = {}, hi_boxes: Dictionary = {},
-	plate: StyleBox = null
+	plate: StyleBox = null, shift_only := ""
 ) -> void:
 	# hi — подписи клавиш, которые игра подсвечивает после простоя
 	# (вместо текстовой подсказки «Нажми К»). hi_sb рисует их вызыватель
@@ -1014,6 +1027,9 @@ static func draw(
 	# клавишами, в зазоры смотрит она, а не луг/небо. Рисуется ПЕРВОЙ,
 	# иначе закрасила бы уже нарисованные клавиши. Пусто — зазоры
 	# прозрачные (меню без доски, песочница).
+	# shift_only — подпись ОДНОЙ клавиши шифта, которая горит зажатой
+	# («Shift»/«ShiftR»): сторону требует кейс, см. `shift_lit` и
+	# `main._shift_lit_key`. Пусто — горят обе (у кого стороны нет).
 	# morph (0..1), morph_from и morph_shift — перелёт: старая
 	# центральная подпись уходит в свой угол, новая выходит из своего
 	# в центр (требование автора 10.2026). morph_from пустой или
@@ -1032,7 +1048,7 @@ static func draw(
 	for b in bs:
 		var r := b["r"] as Rect2
 		var s := String(b["s"])
-		var shift_on := (s == "Shift" or s == "ShiftR") and shift
+		var shift_on := shift_lit(s, shift, shift_only)
 		var hi_side := _hi_side_for(s, hi)
 		var hi_box: StyleBox = hi_sb
 		if hi_boxes.has(s):
