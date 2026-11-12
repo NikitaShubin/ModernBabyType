@@ -924,8 +924,10 @@ static func _act_of(s: String) -> String:
 ## ДВАЖДЫ («Ctrl», «Alt»): у них своя панель у каждой руки, иначе зона
 ## одной руки красила обе клавиши сразу (автор 10.11.2026: «и с двух
 ## сторон!»). Сторону решает положение — та же линия `space_split`, что
-## делит пробел. У пробела панель всегда половинная (`_draw_half`), здесь
-## она не участвует. Чистая мера: рисование и тест спрашивают одно.
+## делит пробел. Сейчас Ctrl/Win/Alt и пробел из зоны выведены
+## (`Hands.in_zone`) и панелей не имеют вовсе; мера оставлена общей и
+## чистой на случай парной подписи в будущем. Рисование и тест спрашивают
+## одно.
 static func hot_key_for(s: String, r: Rect2, split: float,
 		hot: Dictionary) -> String:
 	if s == "пробел" or hot.has(s):
@@ -1036,10 +1038,11 @@ static func draw(
 		if hi_boxes.has(s):
 			hi_box = hi_boxes[s] as StyleBox
 		var exact := hi_box != null and s in hi
-		# Клавишей низу достаётся панель СО СТОРОНОЙ: «Ctrl» и «Alt» стоят
-		# там дважды, и голой подписи мало — зона одной руки красила обе
-		# клавиши сразу (автор 10.11.2026: «и с двух сторон!»). Выбор —
-		# чистая мера `hot_key_for` (её же меряет hands_test).
+		# Панель зоны — по `hot_key_for`: если подпись стоит на доске дважды
+		# («Ctrl», «Alt»), голой подписи мало, иначе зона одной руки красила
+		# бы обе клавиши сразу (автор 10.11.2026: «и с двух сторон!»). Сами
+		# Ctrl/Win/Alt из зоны выведены (`Hands.in_zone`), но мера остаётся
+		# общей для рисования и проверок.
 		var hot_key := hot_key_for(s, r, split, hot)
 		var base: StyleBox = sb
 		if fill.has(s):
@@ -1047,13 +1050,9 @@ static func draw(
 		var box := key_box(s, hot_key, sb_on if shift_on else base,
 			press_sb, press_key, hi_box, exact, shift_on, hot)
 		ci.draw_style_box(box, r)
-		# Пробел — две половины: зона подсказки зажигает ровно половину
-		# своего большого, стык по `space_split`, внутренняя кромка тает.
-		if s == "пробел":
-			if hot.has("пробел:Л"):
-				_draw_half(ci, r, "Л", hot["пробел:Л"] as StyleBox, split)
-			elif hot.has("пробел:П"):
-				_draw_half(ci, r, "П", hot["пробел:П"] as StyleBox, split)
+		# Пробел — две половины, и красит их ПОДСКАЗКА: зона его не трогает
+		# (`Hands.in_zone`), иначе поверх жёлтой половины лёг бы второй цвет.
+		# Стык по `space_split`, внешние углы скруглены, внутренняя кромка тает.
 		if hi_box != null and not exact and hi_side != "" and s == "пробел":
 			_draw_half(ci, r, hi_side, hi_box, split)
 		if s == "глобус":

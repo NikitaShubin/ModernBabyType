@@ -1355,41 +1355,50 @@ func _tint_checks(bs: Array) -> void:
 		"the index|index boundary spans %d hue slots, want >= 3" % gap)
 
 	var hot := Hands.key_tints(false, 10.0, 2.0)
-	# ПАНЕЛЬ ЕСТЬ У КАЖДОЙ КЛАВИШИ (автор 10.11.2026: «подсвечиваться в
-	# секторах должны даже заблокированные кнопки. И шифт тоже, и пр.»).
-	# Раньше мёртвые клавиши из зоны выкидывались, и сектор пальца
-	# обрывался на низу доски. Путаницу давала не клавиша, а ПОДПИСЬ:
-	# «Ctrl» и «Alt» стоят в низу дважды, поэтому панель у них своя у
-	# каждой стороны — «Ctrl:Л» / «Ctrl:П».
+	# СЛУЖЕБНЫЕ НИЗА ИЗ ЗОНЫ ВЫВЕДЕНЫ (автор 11.11.2026: «давай исключим
+	# альт, контрл и виндоус из выделения вообще. Оставим только шифт,
+	# стрелки и всё, что = или выше шифта по высоте»). В зоне остаются
+	# буквы, цифры, Tab, Caps, оба Shift, стереть, ввод и стрелки кластера.
+	var skip := ["Ctrl", "Win", "Alt", "пробел", "глобус"]
+	for s0 in skip:
+		_check(not Hands.in_zone(String(s0)),
+			"'%s' must stay out of the hint zone" % s0)
+		_check(not hot.has(String(s0)),
+			"'%s' took a hint-zone panel" % s0)
+	for s0 in ["Shift", "ShiftR", "Tab", "Caps", "←", "↵", "ф", "1", "◀", "↕", "▶"]:
+		_check(Hands.in_zone(String(s0)),
+			"'%s' belongs to the hint zone" % s0)
 	var bare := 0
+	var extra := []
 	for b in bs:
 		var s0 := String(b["s"])
-		if s0 == "пробел" or s0 == "глобус":
+		if not Hands.in_zone(s0):
+			if hot.has(s0):
+				extra.append(s0)
 			continue
-		var key0 := s0
-		if (s0 == "Ctrl" or s0 == "Alt") and hot.has(s0 + ":Л"):
-			key0 = s0 + ":Л"
-		if not hot.has(key0):
+		if not hot.has(s0):
 			bare += 1
 			if bare <= 3:
 				print("TINT: '%s' has no hint-zone panel" % s0)
 	_check(bare == 0, "%d board keys have no hint-zone panel" % bare)
-	# ГЛОБУС — ЕДИНСТВЕННАЯ КЛАВИША БЕЗ ПАНЕЛИ (автор 11.11.2026: «добавлять
-	# не надо только кнопку глобуса, т.к. она выдуманная»): на настоящей
-	# доске её нет, сектор учил бы несуществующей клавише.
-	_check(not hot.has("глобус"),
-		"the invented globe key took a hint-zone panel")
-	_check(hot.has("Ctrl:Л") and hot.has("Ctrl:П") and not hot.has("Ctrl"),
-		"the doubled Ctrl label has one panel per side")
-	_check(hot.has("Alt:Л") and hot.has("Alt:П") and not hot.has("Alt"),
-		"the doubled Alt label has one panel per side")
+	_check(extra.is_empty(),
+		"keys out of the zone took a panel: %s" % str(extra))
+	# ДВАЖДЫ СТОЯЩАЯ ПОДПИСЬ — единственная причина панели «со стороной»
+	# («Ctrl:Л»/«Ctrl:П»). Обе такие клавиши (Ctrl и Alt) теперь вне зоны,
+	# поэтому панелей с двоеточием на доске не остаётся; сама мера стороны
+	# проверяется ниже синтетическим словарём.
+	for s0 in hot:
+		_check(not String(s0).contains(":"),
+			"'%s': a sided panel appeared where no zone key stands twice" % s0)
+	# Карта пальцев от исключения НЕ меняется: Ctrl/Alt/Win по-прежнему на
+	# мизинцах — из зоны они выведены, а не из карты.
 	_check(Hands.tint_index("Ctrl:Л") == 0 and Hands.tint_index("Ctrl:П") == 9,
-		"the Ctrl panels are the two pinkies")
+		"the Ctrl keys are still the two pinkies")
 	_check(Hands.tint_index("Alt:Л") == 0 and Hands.tint_index("Alt:П") == 9,
-		"the Alt panels are the two pinkies")
+		"the Alt keys are still the two pinkies")
 	_check(Hands.tint_index("Win") == 0,
 		"the Win key is the LEFT pinky (it stands left of the space)")
-	for key in ["Shift", "Tab", "Caps", "Win"]:
+	for key in ["Shift", "Tab", "Caps"]:
 		_check(hot.has(key) and Hands.tint_index(key) == 0,
 			"the left service key '%s' is not in the left-pinky panel" % key)
 	for key in ["ShiftR", "←", "↵"]:
@@ -1424,23 +1433,14 @@ func _tint_checks(bs: Array) -> void:
 		var top_rows := ri < 4
 		for b in row:
 			var s := String(b["s"])
-			if s == "пробел":
-				_check(hot.has("пробел:Л") and hot.has("пробел:П"),
-					"row %d: the space lost its halves" % key)
+			# Вне зоны (Ctrl/Win/Alt, пробел, глобус) — бумага: панели нет
+			# вовсе, и шаг по цветам соседей такие клавиши не рвут.
+			if not Hands.in_zone(s):
 				continue
-			if s == "глобус":
-				# Глобус панели не получает (выдуманная клавиша, 11.11.2026).
+			_check(hot.has(s), "row %d: '%s' has a hot box" % [key, s])
+			if not hot.has(s):
 				continue
-			# Дважды стоящая подпись спрашивается СО СТОРОНОЙ — так её и
-			# находит рисование (Kbd.draw берёт сторону из прямоугольника).
-			var hk := s
-			if s == "Ctrl" or s == "Alt":
-				hk = s + (":Л" if (b["r"] as Rect2).get_center().x
-					< Kbd.space_split(bs) else ":П")
-			_check(hot.has(hk), "row %d: '%s' has a hot box" % [key, hk])
-			if not hot.has(hk):
-				continue
-			var cur := Hands.tint_index(hk)
+			var cur := Hands.tint_index(s)
 			var cur_slot := -1
 			if cur >= 0:
 				cur_slot = int(Ui.FINGER_SLOT[cur])
@@ -1484,26 +1484,12 @@ func _tint_checks(bs: Array) -> void:
 	_check(hfirst.border_color == Ui.HINT_ZONE_EDGE_DAY,
 		"hot day repaint returns the zone edge")
 
-	# Пробел: две половины ТОЛЬКО в зоне подсказки, цвет у обеих ОДИН
-	# (одноцветная зона), скруглены внешние углы, внутренние кромки без
-	# рамки.
-	var sp_l: StyleBoxFlat = hot["пробел:Л"]
-	var sp_r: StyleBoxFlat = hot["пробел:П"]
-	_check(sp_l.bg_color == Ui.HINT_ZONE_DAY and sp_r.bg_color == Ui.HINT_ZONE_DAY,
-		"hot space halves do not share the one zone colour")
-	_check(sp_l.border_color == Ui.HINT_ZONE_EDGE_DAY
-		and sp_r.border_color == Ui.HINT_ZONE_EDGE_DAY,
-		"hot space halves do not share the one zone edge")
-	_check(sp_l.corner_radius_top_left > 0 and sp_l.corner_radius_bottom_left > 0,
-		"space left half is rounded on its outer left corners")
-	_check(sp_l.corner_radius_top_right == 0 and sp_l.corner_radius_bottom_right == 0,
-		"space left half has square inner corners")
-	_check(sp_l.border_width_right == 0, "space left half has no inner border")
-	_check(sp_r.corner_radius_top_right > 0 and sp_r.corner_radius_bottom_right > 0,
-		"space right half is rounded on its outer right corners")
-	_check(sp_r.corner_radius_top_left == 0 and sp_r.corner_radius_bottom_left == 0,
-		"space right half has square inner corners")
-	_check(sp_r.border_width_left == 0, "space right half has no inner border")
+	# ПРОБЕЛ ПАНЕЛИ НЕ ПОЛУЧАЕТ: он и так одна клавиша, а половину красит
+	# сама подсказка (`Kbd.draw` → `_draw_half`). Зона тут клала бы второй
+	# цвет поверх жёлтого, и половина перестала бы читаться.
+	_check(not hot.has("пробел") and not hot.has("пробел:Л")
+		and not hot.has("пробел:П"),
+		"the space took a hint-zone panel — the hint itself paints its half")
 
 	# Порядок: нажатие > подсказка > шифт > ЗОНА > бумага. В покое у
 	# клавиши заливки «по пальцу» нет вовсе.
@@ -1520,75 +1506,64 @@ func _tint_checks(bs: Array) -> void:
 		"the held shift keeps its accent")
 	_check(Kbd.key_box("нет-такой", "нет-такой", base, press, "", hi, false, false) == base,
 		"an unknown key stays neutral")
-	var zone := {}
-	for s in hot:
-		if Hands.tint_index(String(s)) == 0:
-			zone[s] = hot[s]
-	_check(zone.has("ф") and not zone.has("ы"), "the zone is one finger wide")
-	_check(Kbd.key_box("ф", "ф", base, press, "", hi, false, false, zone) == hot["ф"],
-		"a key of the hinted finger is painted hot")
-	_check(Kbd.key_box("ф", "ф", base, press, "", hi, true, false, zone) == hi,
-		"the hinted key itself stays above its hot zone")
-	_check(Kbd.key_box("ф", "ф", base, press, "ф", hi, false, false, zone) == press,
-		"the press flash stays above the hot zone")
-	_check(Kbd.key_box("Shift", "Shift", base, press, "", hi, false, true, zone) == base,
-		"the held shift stays above the hot zone")
-	_check(Kbd.key_box("ы", "ы", base, press, "", hi, false, false, zone) == base,
-		"a key of another finger stays plain paper")
-	# ЗОНА ПРАВОГО МИЗИНЦА — ВСЕ его клавиши, включая служебные
-	# (автор 11.11.2026: «кнопки контрл, альт вин не добавлены в сектора»),
-	# и только СВОЕЙ стороны: левые Ctrl/Alt/Win/Tab/Caps/Shift в неё не
-	# входят, иначе зона зажигала бы клавиши другой руки («и с двух
-	# сторон!»). Стрелки здесь не живут — они разошлись по указательному,
-	# среднему и безымянному.
+	var zone_l := {}
 	var zone_r := {}
-	for s in hot:
-		if Hands.tint_index(String(s)) == 9:
-			zone_r[s] = hot[s]
-	for key in ["ShiftR", "←", "↵", "Ctrl:П", "Alt:П", "ж"]:
-		_check(zone_r.has(key), "the right-pinky zone lost '%s'" % key)
-	for key in ["Shift", "Ctrl:Л", "Alt:Л", "Win", "Tab", "Caps",
-			"◀", "↕", "▶"]:
-		_check(not zone_r.has(key),
-			"the right-pinky zone swallowed the foreign key '%s'" % key)
-	# Зоны стрелок: ◀ у указательного, ↕ у среднего, ▶ у безымянного.
 	var zone_ri := {}
 	var zone_rm := {}
 	var zone_rr := {}
 	for s in hot:
 		var sz := Hands.tint_index(String(s))
-		if sz == 6:
+		if sz == 0:
+			zone_l[s] = hot[s]
+		elif sz == 9:
+			zone_r[s] = hot[s]
+		elif sz == 6:
 			zone_ri[s] = hot[s]
 		elif sz == 7:
 			zone_rm[s] = hot[s]
 		elif sz == 8:
 			zone_rr[s] = hot[s]
+	_check(zone_l.has("ф") and not zone_l.has("ы"), "the zone is one finger wide")
+	_check(Kbd.key_box("ф", "ф", base, press, "", hi, false, false,
+		zone_l) == hot["ф"],
+		"a key of the hinted finger is painted hot")
+	_check(Kbd.key_box("ф", "ф", base, press, "", hi, true, false,
+		zone_l) == hi,
+		"the hinted key itself stays above its hot zone")
+	_check(Kbd.key_box("ф", "ф", base, press, "ф", hi, false, false,
+		zone_l) == press,
+		"the press flash stays above the hot zone")
+	_check(Kbd.key_box("Shift", "Shift", base, press, "", hi, false, true,
+		zone_l) == base,
+		"the held shift stays above the hot zone")
+	_check(Kbd.key_box("ы", "ы", base, press, "", hi, false, false,
+		zone_l) == base,
+		"a key of another finger stays plain paper")
+	# ЛЕВЫЙ МИЗИНЕЦ: Shift/Tab/Caps и буквы своей руки — и НИ ОДНОЙ клавиши
+	# низу (Ctrl/Win/Alt), ни одной клавиши правой руки.
+	for key in ["Shift", "Tab", "Caps", "ф", "й", "1"]:
+		_check(zone_l.has(key), "the left-pinky zone lost '%s'" % key)
+	for key in ["Win", "Ctrl", "Alt", "ShiftR", "←", "↵", "◀", "↕", "▶"]:
+		_check(not zone_l.has(key),
+			"the left-pinky zone swallowed '%s'" % key)
+	# ПРАВЫЙ МИЗИНЕЦ: ShiftR, стереть и ввод — тоже без клавиш низу.
+	for key in ["ShiftR", "←", "↵", "ж", "э", "0"]:
+		_check(zone_r.has(key), "the right-pinky zone lost '%s'" % key)
+	for key in ["Shift", "Ctrl", "Alt", "Win", "Tab", "Caps",
+			"◀", "↕", "▶", "ф"]:
+		_check(not zone_r.has(key),
+			"the right-pinky zone swallowed '%s'" % key)
+	# Зоны стрелок: ◀ у указательного, ↕ у среднего, ▶ у безымянного.
 	_check(zone_ri.has("◀") and not zone_ri.has("↕") and not zone_ri.has("▶"),
 		"the right-index zone does not hold exactly the left arrow")
 	_check(zone_rm.has("↕") and not zone_rm.has("◀") and not zone_rm.has("▶"),
 		"the right-middle zone does not hold exactly the up/down arrow")
 	_check(zone_rr.has("▶") and not zone_rr.has("◀") and not zone_rr.has("↕"),
 		"the right-ring zone does not hold exactly the right arrow")
-	# Рисование ищет панель со СТОРОНОЙ и попадает в свою клавишу.
-	_check(Kbd.key_box("Ctrl", "Ctrl:П", base, press, "", hi, false, false,
-		zone_r) == zone_r["Ctrl:П"],
-		"the right Ctrl is painted with its own side panel")
-	_check(Kbd.key_box("Ctrl", "Ctrl:Л", base, press, "", hi, false, false,
-		zone_r) == base, "the left Ctrl stays paper when only the right side is hot")
-	var zone_l := {}
-	for s in hot:
-		if Hands.tint_index(String(s)) == 0:
-			zone_l[s] = hot[s]
-	_check(zone_l.has("Shift") and zone_l.has("Ctrl:Л")
-		and zone_l.has("Alt:Л") and zone_l.has("Win")
-		and zone_l.has("Tab") and zone_l.has("Caps"),
-		"the left-pinky zone lost its service keys")
-	_check(not zone_l.has("ShiftR") and not zone_l.has("Ctrl:П"),
-		"the left-pinky zone lit the right side")
-	# СТОРОНУ ПАНЕЛИ ВЫБИРАЕТ ПОЛОЖЕНИЕ КЛАВИШИ — чистой мерой
-	# `Kbd.hot_key_for` (её же зовёт рисование): сторону нельзя проверить
-	# картинкой в headless, поэтому меряем на настоящих прямоугольниках
-	# доски. Проба «панель без стороны» красила ОБЕ клавиши сразу.
+	# МЕРА СТОРОНЫ (`hot_key_for`) жива, хотя парных подписей в зоне больше
+	# нет: проверяем на СИНТЕТИЧЕСКОМ словаре с «Ctrl:Л»/«Ctrl:П» —
+	# рисование обязано брать панель по прямоугольнику клавиши, а не по
+	# подписи (проба «панель без стороны» красила обе клавиши сразу).
 	var split := Kbd.space_split(bs)
 	var ctrl_l := Rect2()
 	var ctrl_r := Rect2()
@@ -1605,16 +1580,20 @@ func _tint_checks(bs: Array) -> void:
 			space_r = rr
 	_check(ctrl_l.size.x > 0.0 and ctrl_r.size.x > 0.0,
 		"the board has both Ctrl keys")
-	_check(Kbd.hot_key_for("Ctrl", ctrl_r, split, zone_r) == "Ctrl:П",
+	var sided := {
+		"Ctrl:Л": Ui.finger_sb(false, 10.0, 2.0),
+		"Ctrl:П": Ui.finger_sb(false, 10.0, 2.0),
+	}
+	_check(Kbd.hot_key_for("Ctrl", ctrl_r, split, sided) == "Ctrl:П",
 		"the right Ctrl asks for its own side panel")
-	_check(Kbd.hot_key_for("Ctrl", ctrl_l, split, zone_r) == "Ctrl",
-		"the left Ctrl does not take the right side panel")
-	_check(Kbd.hot_key_for("Ctrl", ctrl_l, split, zone_l) == "Ctrl:Л",
+	_check(Kbd.hot_key_for("Ctrl", ctrl_l, split, sided) == "Ctrl:Л",
 		"the left Ctrl asks for its own side panel")
-	_check(Kbd.key_box("Ctrl", Kbd.hot_key_for("Ctrl", ctrl_l, split, zone_l),
-		base, press, "", hi, false, false, zone_l) == zone_l["Ctrl:Л"],
+	_check(Kbd.key_box("Ctrl", Kbd.hot_key_for("Ctrl", ctrl_l, split, sided),
+		base, press, "", hi, false, false, sided) == sided["Ctrl:Л"],
 		"the left Ctrl is painted with its own side panel")
-	_check(Kbd.hot_key_for("пробел", space_r, split, zone_l) == "пробел",
+	_check(Kbd.hot_key_for("Ctrl", ctrl_l, split, {}) == "Ctrl",
+		"an unsided dictionary falls back to the bare label")
+	_check(Kbd.hot_key_for("пробел", space_r, split, sided) == "пробел",
 		"the space keeps its whole key — the halves are drawn by _draw_half")
 
 	# ЗАЛИВКИ ЛИЦ КЛАВИШ (автор 10.11.2026: «виртуальная клавиатура

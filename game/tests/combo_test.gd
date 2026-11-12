@@ -4186,23 +4186,22 @@ func _case_hint_zone() -> void:
 		"%s: the letter zone of the hint is incomplete" % tag)
 	_check(not two.has("Shift"),
 		"%s: the other hand's shift went hot too" % tag)
-	# СЛУЖЕБНЫЕ КЛАВИШИ НИЗА В ЗОНЕ ЕСТЬ (автор 11.11.2026: «кнопки
-	# контрл, альт вин не добавлены в сектора»). Зона — ВЕСЬ палец своей
-	# руки, а на мизинце живут Tab, Caps, Shift и низ. Путаница «с двух
-	# сторон» лечится не исключением клавиши, а СТОРОНОЙ в ключе панели:
-	# «Ctrl»/«Alt» стоят дважды, и у них своя панель у каждой стороны
-	# («Ctrl:Л»/«Ctrl:П»).
-	for key in ["ShiftR", "Ctrl:П", "Alt:П", "←", "↵"]:
+	# СЛУЖЕБНЫЕ НИЗА В ЗОНУ НЕ ВХОДЯТ (автор 11.11.2026: «давай исключим
+	# альт, контрл и виндоус из выделения вообще. Оставим только шифт,
+	# стрелки и всё, что = или выше шифта по высоте»). Зона — весь палец
+	# своей руки в пределах `Hands.in_zone`: Shift, Tab, Caps, стереть, ввод.
+	for key in ["ShiftR", "←", "↵", "ж"]:
 		_check(two.has(key),
-			"%s: the right pinky zone lost the service key '%s'" % [tag, key])
-	_check(not two.has("Ctrl") and not two.has("Alt"),
-		"%s: a bare Ctrl/Alt panel paints both sides at once" % tag)
-	_check(not two.has("Ctrl:Л") and not two.has("Alt:Л"),
-		"%s: the right pinky zone lit the left side keys" % tag)
-	# ГЛОБУС В ЗОНУ НЕ ВХОДИТ (автор 11.11.2026: «добавлять не надо только
-	# кнопку глобуса, т.к. она выдуманная»).
-	_check(not two.has("глобус") and not _main._hot_zone(["пробел:П"]).has("глобус"),
-		"%s: the invented globe key went hot in the zone" % tag)
+			"%s: the right pinky zone lost the key '%s'" % [tag, key])
+	for key in ["Ctrl", "Win", "Alt", "глобус", "пробел"]:
+		_check(not two.has(key),
+			"%s: the key '%s' must stay out of the hint zone" % [tag, key])
+	# ГЛОБУС И ПРОБЕЛ ПАНЕЛИ НЕ ПОЛУЧАЮТ ВООБЩЕ: глобус выдуман (автор
+	# 11.11.2026: «добавлять не надо только кнопку глобуса»), а половину
+	# пробела красит сама подсказка (`Kbd._draw_half`), зона клала бы
+	# второй цвет поверх её жёлтого.
+	_check(_main._hot_zone(["пробел:П"]).is_empty(),
+		"%s: the space hint lit a zone panel over its own half" % tag)
 	# СТРЕЛКИ — «СТАНДАРТНЫЕ ДЛЯ ГЕЙМЕРОВ» (автор 11.11.2026: «влево -
 	# указательный, вправо - безымянный, вверх-вниз - средний»): по одной
 	# на свой палец, а не весь кластер на мизинце.
@@ -4218,11 +4217,12 @@ func _case_hint_zone() -> void:
 			_check(not az.has(other),
 				"%s: the zone of «%s» swallowed the arrow «%s»" % [tag, letter, other])
 	var left_pinky: Dictionary = _main._hot_zone(["ф"])
-	for key in ["Shift", "Tab", "Caps", "Win", "Ctrl:Л", "Alt:Л"]:
+	for key in ["Shift", "Tab", "Caps", "ф"]:
 		_check(left_pinky.has(key),
-			"%s: the left pinky zone lost the service key '%s'" % [tag, key])
-	_check(not left_pinky.has("ShiftR") and not left_pinky.has("Ctrl:П"),
-		"%s: the left pinky zone lit the other hand" % tag)
+			"%s: the left pinky zone lost the key '%s'" % [tag, key])
+	for key in ["Win", "Ctrl", "Alt", "ShiftR", "←", "↵"]:
+		_check(not left_pinky.has(key),
+			"%s: the left pinky zone swallowed '%s'" % [tag, key])
 	# Подсказка «ShiftR + й»: правый шифт — ЦЕЛЬ, левый — клавиша зоны
 	# левого мизинца (там же «й»). Оба шифта горячие — и это правильно:
 	# у учащегося в секторе ровно те клавиши, которые жмёт эта рука.
@@ -4283,11 +4283,12 @@ func _case_hint_zone() -> void:
 		"%s: night hint ink %.2f:1 < 4.5" % [
 			tag, _cr(hdn.bg_color, Ui.UI_TEXT_NIGHT)
 		])
-	# Пробел: горит ровно половина большого, которым жать.
+	# ПРОБЕЛ ЗОНЫ НЕ ЗАЖИГАЕТ: он и так одна клавиша, а половину красит
+	# сама подсказка (`Kbd._draw_half`). Зона положила бы второй цвет
+	# поверх жёлтой половины, и цель перестала бы читаться.
 	var sp: Dictionary = _main._hot_zone(["пробел:Л"])
-	_check(sp.has("пробел:Л"), "%s: the hinted left thumb is not hot" % tag)
-	_check(not sp.has("пробел:П"),
-		"%s: the left thumb lit the right half too" % tag)
+	_check(sp.is_empty(),
+		"%s: the space hint lit a zone panel over its own half" % tag)
 	# Мигание зоны — тем же тактом, что у подсказанной клавиши (автор
 	# 08.11.2026: «подсветка всех кнопок стоит делать мигающей, как
 	# конкретную нажимаемую кнопку»). Фаза двигает прозрачность ВСЕЙ
@@ -4309,11 +4310,21 @@ func _case_hint_zone() -> void:
 	_check(bsb.bg_color == Ui.HINT_ZONE_DAY,
 		"%s: the lit zone is not the hint-zone colour" % tag)
 	# Живой цикл: подсказка по простою зажигает зону, ввод — гасит.
+	# Подсказка может прийтись на пробел (большой палец) — тогда зоны нет
+	# по правилу: обе стороны правила проверяются здесь же.
 	_main.idle_t = _main._hint_delay() + 0.5
 	var hi: Array = _main._hint_keys()
 	_check(not hi.is_empty(), "%s: no hint after the delay" % tag)
 	var live: Dictionary = _main._hot_zone(hi)
-	_check(not live.is_empty(), "%s: the hint did not light its zone" % tag)
+	var zoned := 0
+	for s in hi:
+		if Hands.in_zone(Hands.key_label(String(s))):
+			zoned += 1
+	if zoned > 0:
+		_check(not live.is_empty(), "%s: the hint did not light its zone" % tag)
+	else:
+		_check(live.is_empty(),
+			"%s: a hint outside the zone still lit one" % tag)
 	# ЗАЛИВКИ ЛИЦ КЛАВИШ: «Зоны» включены — доска закрашена ПОСТОЯННО, а
 	# подсказка гасит ВСЕ заливки в БУМАГУ (автор 10.11.2026: «при
 	# подсказке сектора гаснут в нейтраль, как при выключенных Зонах»),
@@ -4345,8 +4356,12 @@ func _case_hint_zone() -> void:
 		var key := Hands.key_label(String(s))
 		if Hands.tint_index(key) < 0:
 			continue
-		_check(live.has(key),
-			"%s: the hinted «%s» is not in its own zone" % [tag, key])
+		if Hands.in_zone(key):
+			_check(live.has(key),
+				"%s: the hinted «%s» is not in its own zone" % [tag, key])
+		else:
+			_check(not live.has(key),
+				"%s: the hinted «%s» must stay out of the zone" % [tag, key])
 	_tick(tag)
 	# Ввод гасит подсказку (и её зону) — простой в ноль, состояние цело.
 	_main._poke_idle()

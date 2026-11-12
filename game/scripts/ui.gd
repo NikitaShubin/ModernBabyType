@@ -74,30 +74,6 @@ static func finger_sb(night: bool, radius: float,
 		bw, false)
 
 
-## Половина пробела: скруглены только ВНЕШНИЕ углы, внутренняя кромка
-## без рамки. Две половинки стыкуются в одну клавишу — шов не проступает
-## второй вертикальной чертой. Цвет один на оба больших: горит всегда
-## одна половина, и различать их цветом нечего.
-static func finger_half_sb(side: String, night: bool, radius: float,
-		bw: float) -> StyleBoxFlat:
-	var sb := finger_sb(night, 0.0, bw)
-	var r := int(radius)
-	var w := int(bw)
-	# panel_sb ставит рамку на ВСЕ четыре стороны — внутреннюю снимаем
-	# явно, иначе на стыке половинок проступает вторая вертикальная черта.
-	if side == "Л":
-		sb.border_width_left = w
-		sb.border_width_right = 0
-		sb.corner_radius_top_left = r
-		sb.corner_radius_bottom_left = r
-	else:
-		sb.border_width_right = w
-		sb.border_width_left = 0
-		sb.corner_radius_top_right = r
-		sb.corner_radius_bottom_right = r
-	return sb
-
-
 ## Панель клавиши с заливкой пальца: рамка ТА ЖЕ, что у бумажной клавиши
 ## (`LINE_*`, 2 px), иначе на цвете границы клавиш пропадают — ровно та
 ## жалоба автора 10.11.2026, из-за которой цвет и переехал с дорожек на
